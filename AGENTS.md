@@ -124,6 +124,7 @@
 ## 已知坑点
 
 - 当前项目已初始化为 git 仓库，可用 `git status` / `git diff` 复核变更；仍需避免把 `.env`、`node_modules/`、`apps/app/.expo/`、`apps/app/dist/`、`.playwright-cli/` 和 `.vercel/` 提交进去。
+- `master` 保留当前包含共创模块的工作基线；`pre-creation-module` / `pre-creation-module-base` 指向提交 `f5ae9f6`，是去掉共创模块后的“共创模块之前”基线，可从该提交创建新分支。
 - Codex 创建 worktree 需要一个包含实际项目文件的可回放基线；只有空的 root commit 时，`git worktree add` 仍可能在“apply working tree diff”阶段失败。
 - 不要把情侣数据权限只做在前端 UI；必须通过 RLS 强制限制。
 - RLS policy 之外还必须给 `authenticated` 角色显式表级 `grant`，否则会先报 `permission denied for table ...`，policy 不会生效。
