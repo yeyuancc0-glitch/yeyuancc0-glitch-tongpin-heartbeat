@@ -1,0 +1,40 @@
+export const colors = {
+  bg: "#fffaf7",
+  panel: "#ffffff",
+  panelSoft: "#fff7f5",
+  ink: "#33282c",
+  muted: "#8e7a84",
+  faint: "#c9bbc2",
+  border: "#eadde2",
+  accent: "#d77b96",
+  accentDark: "#b85f7b",
+  accentSoft: "#f7e2e8",
+  peach: "#f4cfc7",
+  cream: "#fff5df",
+  milkTea: "#d9bea6",
+  lavender: "#eee8f6",
+  blueGray: "#eef4f6",
+  warmYellow: "#fff0c9",
+  green: "#79947f",
+  blue: "#7d94aa",
+  warning: "#a7835a",
+  moodHappy: "#d77b96",
+  moodSweet: "#e5bd72",
+  moodMiss: "#b7a7dc",
+  moodCalm: "#a7bfcd",
+  moodLow: "#c8bbbb",
+  typeDaily: "#e7d6cc",
+  typeMessage: "#d9d0e8",
+  typeAnniversary: "#dda2b1",
+};
+
+export const shadows = {
+  panel: {
+    boxShadow: "0 16px 36px rgba(99, 74, 83, 0.08)",
+    elevation: 4,
+  },
+  soft: {
+    boxShadow: "0 10px 24px rgba(99, 74, 83, 0.07)",
+    elevation: 2,
+  },
+};
