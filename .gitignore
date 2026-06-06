@@ -1,0 +1,15 @@
+node_modules/
+apps/app/.expo/
+apps/app/dist/
+.playwright-cli/
+.env
+*.log
+AGENTS.md
+PLAN.md
+PLAN 2.md
+
+.vercel
+.codex/
+output/
+supabase/.temp/
+*.DS_Store

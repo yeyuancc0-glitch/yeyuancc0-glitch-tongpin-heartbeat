@@ -1,0 +1,20 @@
+{
+  "name": "tongpin-heartbeat",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "web": "npm run web -w apps/app",
+    "typecheck": "npm run typecheck -w apps/app",
+    "build:web": "npm run build:web -w apps/app",
+    "check:env": "node scripts/check-env.mjs",
+    "db:apply": "node scripts/apply-supabase-migration.mjs",
+    "verify": "npm run check:env && npm run typecheck && npm run build:web"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
