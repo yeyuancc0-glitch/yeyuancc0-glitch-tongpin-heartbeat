@@ -49,6 +49,10 @@ export async function createSignedUrl(bucket: string, path?: string | null) {
     .createSignedUrl(path, signedUrlTtlSeconds)
     .then(({ data, error }) => {
       const url = error ? null : data.signedUrl;
+      if (!url) {
+        signedUrlCache.delete(cacheKey);
+        return null;
+      }
       signedUrlCache.set(cacheKey, {
         url,
         expiresAt: Date.now() + signedUrlTtlSeconds * 1000,

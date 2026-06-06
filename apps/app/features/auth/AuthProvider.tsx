@@ -39,17 +39,42 @@ export function AuthProvider({ children }: PropsWithChildren) {
   useEffect(() => {
     let mounted = true;
     const pendingHashError = readAuthHashError();
-
-    supabase.auth.getSession().then(({ data }) => {
+    const restoreTimeoutId = setTimeout(() => {
       if (!mounted) {
         return;
       }
-      setSession(data.session);
+      console.warn("Auth session restore timed out.");
       setLoading(false);
       if (pendingHashError) {
         showToast({ ...pendingHashError, tone: "error" });
       }
-    });
+    }, 8000);
+
+    supabase.auth
+      .getSession()
+      .then(({ data }) => {
+        if (!mounted) {
+          return;
+        }
+        clearTimeout(restoreTimeoutId);
+        setSession(data.session);
+        setLoading(false);
+        if (pendingHashError) {
+          showToast({ ...pendingHashError, tone: "error" });
+        }
+      })
+      .catch((error) => {
+        if (!mounted) {
+          return;
+        }
+        clearTimeout(restoreTimeoutId);
+        console.warn("Auth session restore failed:", error);
+        setSession(null);
+        setLoading(false);
+        if (pendingHashError) {
+          showToast({ ...pendingHashError, tone: "error" });
+        }
+      });
 
     const { data } = supabase.auth.onAuthStateChange((_event, nextSession) => {
       const hashError = readAuthHashError();
@@ -62,9 +87,30 @@ export function AuthProvider({ children }: PropsWithChildren) {
 
     return () => {
       mounted = false;
+      clearTimeout(restoreTimeoutId);
       data.subscription.unsubscribe();
     };
   }, [showToast]);
+
+  useEffect(() => {
+    if (!session?.user || Platform.OS === "web") {
+      return undefined;
+    }
+
+    let subscription: { remove: () => void } | null = null;
+    void import("@/lib/notifications/push").then(({ registerForPushNotifications, subscribePushTokenRefresh }) => {
+      subscription = subscribePushTokenRefresh();
+      void registerForPushNotifications().then((result) => {
+        if (result.status === "error") {
+          console.warn("Push registration failed:", result.message);
+        }
+      });
+    });
+
+    return () => {
+      subscription?.remove();
+    };
+  }, [session?.user]);
 
   const value = useMemo<AuthContextValue>(
     () => ({
@@ -72,6 +118,13 @@ export function AuthProvider({ children }: PropsWithChildren) {
       user: session?.user ?? null,
       loading,
       signOut: async () => {
+        if (Platform.OS === "web") {
+          const { disableCurrentWebPushSubscription } = await import("@/lib/notifications/webPush");
+          await disableCurrentWebPushSubscription();
+        } else {
+          const { disableCurrentPushToken } = await import("@/lib/notifications/push");
+          await disableCurrentPushToken();
+        }
         await supabase.auth.signOut();
       },
     }),

@@ -1,22 +1,36 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { Alert, Animated, Image, Keyboard, Platform, Pressable, StyleSheet, Text, View, type ImageSourcePropType } from "react-native";
+import { Gesture, GestureDetector } from "react-native-gesture-handler";
+import { Alert, Animated, Image, Keyboard, Platform, Pressable, StyleSheet, Text, View, type ImageSourcePropType, type LayoutChangeEvent } from "react-native";
+import Reanimated, {
+  Easing,
+  interpolate,
+  runOnJS,
+  useAnimatedStyle,
+  useSharedValue,
+  withDelay,
+  withSequence,
+  withSpring,
+  withTiming,
+} from "react-native-reanimated";
+import Svg, { Defs, LinearGradient, Path, Stop } from "react-native-svg";
 import {
   Bell,
-  Bone,
   Brain,
   CalendarPlus,
-  Check,
   ChevronLeft,
+  Compass,
   Gamepad2,
+  Gift,
   ImagePlus,
   Heart,
   Info,
   Mail,
-  PawPrint,
+  MapPin,
   Send,
   ShoppingBag,
   Sparkles,
+  Star,
   Utensils,
   Lock,
   LogOut,
@@ -27,15 +41,42 @@ import {
   UsersRound,
 } from "lucide-react-native";
 
+import { PetStage, type CreationLivePetAction, type CreationPetStageReaction } from "@/features/pet/components/PetStage";
+import { usePetRealtime } from "@/features/pet/hooks/usePetRealtime";
+import { invokePetAiBrain, petRigCueFromJson, type PetRigCue, type PetWorldDecision } from "@/features/pet/services/petAiBrain";
+import { GlobalPetLayer } from "@/features/pet-world/components/GlobalPetLayer";
+import { PetWorldCanvas } from "@/features/pet-world/components/PetWorldCanvas";
+import { flushPushNotifications } from "@/lib/notifications/pushDelivery";
+
 const glassDockStyle = {
   backdropFilter: "blur(14px) saturate(1.2) contrast(1.02)",
   WebkitBackdropFilter: "blur(14px) saturate(1.2) contrast(1.02)",
 } as never;
 
+function petAnchorProps(name: string, role = name) {
+  if (Platform.OS !== "web") {
+    return {};
+  }
+  return { dataSet: { petAnchor: name, petAnchorRole: role } } as Record<string, unknown>;
+}
+
+function petSafeContentProps() {
+  if (Platform.OS !== "web") {
+    return {};
+  }
+  return { dataSet: { petSafeZone: "content" } } as Record<string, unknown>;
+}
+
+function petSafeActionProps() {
+  if (Platform.OS !== "web") {
+    return {};
+  }
+  return { dataSet: { petSafeZone: "action" } } as Record<string, unknown>;
+}
+
 import {
   AppTextInput,
   BottomTabBar,
-  FloatingEntryButton,
   type BottomTabKey,
   Card,
   CheckinCard,
@@ -49,14 +90,14 @@ import {
   SecondaryButton,
   SettingRow,
   TopBar,
-  LoadingState,
 } from "@/components/app-ui/AppUI";
-import { DateField, InlineNotice, useAppScrollY, useToast } from "@/components/ui";
+import { DateField, InlineNotice, useAppPullToRefresh, useAppScrollY, useToast } from "@/components/ui";
 import { useAuth } from "@/features/auth/AuthProvider";
 import { useCoupleData } from "@/features/home/useCoupleData";
 import { PairingScreen } from "@/features/pairing/PairingScreen";
 import { ProfileScreen } from "@/features/profile/ProfileScreen";
 import { daysBetween, formatShortDate, todayIsoDate } from "@/lib/dates/date";
+import { getWebPushPermission, isWebPushSupported, registerForWebPushNotifications } from "@/lib/notifications/webPush";
 import {
   mockEmptyCopy,
   mockInteractions,
@@ -64,8 +105,28 @@ import {
   mockMoods,
 } from "@/lib/mock/appMock";
 import { supabase } from "@/lib/supabase/client";
-import type { CalendarEvent, Checkin, CoupleFootprint, CreationAction, CreationSpace, LetterPreview, MediaFile, Message, MoodStatus, Notification } from "@/lib/supabase/database.types";
+import type {
+  CalendarEvent,
+  Checkin,
+  CoupleFootprint,
+  CreationAction,
+  CreationSpace,
+  LetterPreview,
+  MediaFile,
+  Message,
+  MoodStatus,
+  Notification,
+  NotificationPreference,
+  PetMemory,
+} from "@/lib/supabase/database.types";
 import { buildStoragePath, isSupportedImage, storageBuckets, uploadImage } from "@/lib/supabase/storage";
+import { BouncyPressable } from "@/motion/BouncyPressable";
+import { BreathingSkeleton } from "@/motion/BreathingSkeleton";
+import { CrossFadeImage } from "@/motion/CrossFadeImage";
+import { haptics } from "@/motion/haptics";
+import { useMotion, type MotionRect } from "@/motion/MotionProvider";
+import { motionTokens } from "@/motion/tokens";
+import { useErrorShake } from "@/motion/useErrorShake";
 import { colors } from "@/styles/theme";
 
 const cartoonIcons = {
@@ -104,18 +165,37 @@ const capsuleIcons = {
   work: require("@/assets/capsule-icons/work.png") as ImageSourcePropType,
 };
 
-const creationPetAssets = {
-  silver_tabby: require("@/assets/creation-pets/silver-tabby-cat.png") as ImageSourcePropType,
-  golden_retriever: require("@/assets/creation-pets/golden-retriever-puppy.png") as ImageSourcePropType,
-  cream_shorthair: require("@/assets/creation-pets/cream-british-shorthair.png") as ImageSourcePropType,
-  corgi: require("@/assets/creation-pets/corgi-dog.png") as ImageSourcePropType,
+const creationTownAssets = {
+  cloudCabin: require("@/assets/creation-town/cloud-cabin.png") as ImageSourcePropType,
+  footprints: require("@/assets/creation-town/footprints.png") as ImageSourcePropType,
+  playground: require("@/assets/creation-town/playground.png") as ImageSourcePropType,
+  cabinInterior: require("@/assets/creation-town/cabin-interior.png") as ImageSourcePropType,
+  hubConcept: require("@/assets/creation-town/hub-concept.png") as ImageSourcePropType,
+  footprintsConcept: require("@/assets/creation-town/footprints-concept.png") as ImageSourcePropType,
+  playgroundConcept: require("@/assets/creation-town/playground-concept.png") as ImageSourcePropType,
 };
 
 type SettingPage = "profile" | "couple" | "notifications" | "privacy" | "relationship" | "feedback" | "about";
 type SubPage = "main" | "messages" | "addEvent" | "writeLetter" | "letterInbox" | "creation" | SettingPage;
 type QuickInteractionItem = { id: string; label: string; tone: string; icon?: ImageSourcePropType };
+type NotificationPreferenceToggleKey =
+  | "push_enabled"
+  | "message_enabled"
+  | "interaction_enabled"
+  | "checkin_enabled"
+  | "letter_enabled"
+  | "calendar_enabled"
+  | "quiet_hours_enabled";
 type CreationPetKey = CreationSpace["pet_key"];
 type CreationFoodType = "basic" | "premium";
+type CreationTownView = "hub" | "pet" | "footprints" | "playground";
+type CreationRewardKind = "footprint" | "puzzle" | "feed" | "food";
+type CreationRewardFlash = {
+  id: number;
+  kind: CreationRewardKind;
+  title: string;
+  message: string;
+};
 type CreationPuzzle = {
   id: string;
   type: "解谜" | "脑筋急转弯";
@@ -129,14 +209,47 @@ type PhotoUploadOptions = {
   currentCount?: number;
   maxFiles?: number;
   successTitle?: string;
+  successMessage?: string;
 };
+type PhotoFileList = File[] | FileList;
 type PhotoPreviewState = {
   id: string;
   index: number;
+  sourceRect?: MotionRect | null;
 };
 
 const maxQuickInteractionCards = 8;
 const maxMemoryPhotos = 10;
+const todayCapsulePhotoLimit = 3;
+const dilingCompatPetKey: CreationPetKey = "silver_tabby";
+type PetSpeciesCompat = CreationSpace["pet_species"];
+const dilingPetOption = {
+  key: dilingCompatPetKey,
+  name: "迪灵",
+  title: "心愿精灵",
+  description: "奶油白 Q 版心愿精灵，会陪你们在首页、小窝和记忆里慢慢活动。",
+  trait: "唯一共享精灵",
+} satisfies {
+  key: CreationPetKey;
+  name: string;
+  title: string;
+  description: string;
+  trait: string;
+};
+const hubDilingSceneCycle = [
+  { animation: "return_home", sceneAction: "return_home", cadence: "walk", intensity: 0.26, speed: 42, stepPhase: 0.8, travelDistance: 22 },
+  { animation: "inspect", sceneAction: "settle_home", cadence: "pause", intensity: 0.18, speed: 24, stepPhase: 2.4, travelDistance: 34 },
+  { animation: "sleep", sceneAction: "rest_home", cadence: "rest", intensity: 0.12, speed: 10, stepPhase: 4.1, travelDistance: 40 },
+] satisfies Array<{
+  animation: PetWorldDecision["animation"];
+  sceneAction: string;
+  cadence: "walk" | "pause" | "rest";
+  intensity: number;
+  speed: number;
+  stepPhase: number;
+  travelDistance: number;
+}>;
+
 const quickInteractionNotificationTitle = "TA 投递了一点心情";
 const quickInteractionMessagePattern = /^投递了「.+」$/;
 const quickInteractionPresetItems = mockInteractions.filter((item) => item.id !== "message");
@@ -147,53 +260,6 @@ const quickInteractionAddItem = mockInteractions.find((item) => item.id === "mes
   icon: quickInteractionIcons.custom,
 };
 const maxCustomQuickInteractions = Math.max(0, maxQuickInteractionCards - quickInteractionPresetItems.length - 1);
-
-const creationPetOptions: Array<{
-  key: CreationPetKey;
-  species: "cat" | "dog";
-  name: string;
-  title: string;
-  description: string;
-  trait: string;
-  image: ImageSourcePropType;
-}> = [
-  {
-    key: "silver_tabby",
-    species: "cat",
-    name: "银纹",
-    title: "银纹云猫",
-    description: "安静、黏人，喜欢在柔软窝垫上观察你们。",
-    trait: "陪伴型猫咪",
-    image: creationPetAssets.silver_tabby,
-  },
-  {
-    key: "cream_shorthair",
-    species: "cat",
-    name: "奶霜",
-    title: "奶霜短毛猫",
-    description: "圆脸慢热，被照顾好后会贴近你们的日常。",
-    trait: "治愈型猫咪",
-    image: creationPetAssets.cream_shorthair,
-  },
-  {
-    key: "golden_retriever",
-    species: "dog",
-    name: "小金",
-    title: "金毛云狗",
-    description: "热情、明亮，看到你们回来就会兴奋迎接。",
-    trait: "陪玩型狗狗",
-    image: creationPetAssets.golden_retriever,
-  },
-  {
-    key: "corgi",
-    species: "dog",
-    name: "柚柚",
-    title: "柯基云狗",
-    description: "短腿、爱笑，最喜欢把小屋踩得热热闹闹。",
-    trait: "活力型狗狗",
-    image: creationPetAssets.corgi,
-  },
-];
 
 const creationPuzzles: CreationPuzzle[] = [
   {
@@ -215,7 +281,7 @@ const creationPuzzles: CreationPuzzle[] = [
   {
     id: "pet-bowl",
     type: "解谜",
-    question: "云宠饭碗里有 2 份粮，又买了 1 份，喂掉 1 份，还剩几份？",
+    question: "迪灵饭碗里有 2 份粮，又买了 1 份，喂掉 1 份，还剩几份？",
     options: ["1 份", "2 份", "3 份"],
     answer: "2 份",
     hint: "先加，再减。",
@@ -262,18 +328,18 @@ export function HomeScreenShell() {
     <View style={styles.stack}>
       <Card soft style={styles.heroCard}>
         <View style={styles.shellAvatarRow}>
-          <View style={styles.shellAvatar} />
-          <View style={[styles.shellAvatar, styles.shellAvatarSecond]} />
+          <BreathingSkeleton style={styles.shellAvatar} />
+          <BreathingSkeleton style={[styles.shellAvatar, styles.shellAvatarSecond]} />
         </View>
-        <View style={styles.shellHeroTitle} />
-        <View style={styles.shellHeroNumber} />
-        <View style={styles.shellHeroDate} />
+        <BreathingSkeleton style={styles.shellHeroTitle} />
+        <BreathingSkeleton style={styles.shellHeroNumber} />
+        <BreathingSkeleton style={styles.shellHeroDate} />
       </Card>
 
       <Card style={styles.moodStatusCard}>
         <View style={styles.sectionHeader}>
-          <View style={styles.shellSectionTitle} />
-          <View style={styles.shellPill} />
+          <BreathingSkeleton style={styles.shellSectionTitle} />
+          <BreathingSkeleton style={styles.shellPill} />
         </View>
         <View style={styles.statusGrid}>
           <ShellStatusPill />
@@ -282,35 +348,35 @@ export function HomeScreenShell() {
         <View style={styles.interactionGrid}>
           {Array.from({ length: 4 }).map((_, index) => (
             <View key={index} style={styles.shellInteractionButton}>
-              <View style={styles.shellInteractionIcon} />
-              <View style={styles.shellInteractionText} />
+              <BreathingSkeleton style={styles.shellInteractionIcon} />
+              <BreathingSkeleton style={styles.shellInteractionText} />
             </View>
-          ))}
-        </View>
-      </Card>
-
-      <Card style={styles.photoAlbumCard}>
-        <View style={styles.photoAlbumHeader}>
-          <View style={styles.photoAlbumTitleGroup}>
-            <View style={styles.shellSectionTitle} />
-            <View style={styles.shellSmallText} />
-          </View>
-          <View style={styles.shellRoundButton} />
-        </View>
-        <View style={styles.photoAlbumGrid}>
-          {Array.from({ length: 9 }).map((_, index) => (
-            <View key={index} style={[styles.photoAlbumThumb, styles.shellPhotoThumb]} />
           ))}
         </View>
       </Card>
 
       <Card>
         <View style={styles.sectionHeader}>
-          <View style={styles.shellSectionTitle} />
-          <View style={styles.shellRoundButton} />
+          <BreathingSkeleton style={styles.shellSectionTitle} />
+          <BreathingSkeleton style={styles.shellRoundButton} />
         </View>
-        <View style={styles.shellMessageInput} />
-        <View style={styles.shellPrimaryButton} />
+        <BreathingSkeleton style={styles.shellMessageInput} />
+        <BreathingSkeleton style={styles.shellPrimaryButton} />
+      </Card>
+
+      <Card style={styles.photoAlbumCard}>
+        <View style={styles.photoAlbumHeader}>
+          <View style={styles.photoAlbumTitleGroup}>
+            <BreathingSkeleton style={styles.shellSectionTitle} />
+            <BreathingSkeleton style={styles.shellSmallText} />
+          </View>
+          <BreathingSkeleton style={styles.shellRoundButton} />
+        </View>
+        <View style={styles.photoAlbumGrid}>
+          {Array.from({ length: 9 }).map((_, index) => (
+            <BreathingSkeleton key={index} style={[styles.photoAlbumThumb, styles.shellPhotoThumb]} />
+          ))}
+        </View>
       </Card>
     </View>
   );
@@ -319,8 +385,8 @@ export function HomeScreenShell() {
 function ShellStatusPill() {
   return (
     <View style={styles.statusPill}>
-      <View style={styles.shellSmallText} />
-      <View style={styles.shellStatusValue} />
+      <BreathingSkeleton style={styles.shellSmallText} />
+      <BreathingSkeleton style={styles.shellStatusValue} />
     </View>
   );
 }
@@ -329,6 +395,7 @@ export function HomeScreen() {
   const { user, signOut } = useAuth();
   const { showToast } = useToast();
   const { data, loading, reload } = useCoupleData(user?.id);
+  useAppPullToRefresh(reload);
   const [activeTab, setActiveTab] = useState<BottomTabKey>("home");
   const [subPage, setSubPage] = useState<SubPage>("main");
   const [endingCouple, setEndingCouple] = useState(false);
@@ -341,7 +408,16 @@ export function HomeScreen() {
   const [customQuickDraft, setCustomQuickDraft] = useState("");
   const [customQuickLoadedCoupleId, setCustomQuickLoadedCoupleId] = useState<string | null>(null);
   const [activePhotoPreview, setActivePhotoPreview] = useState<PhotoPreviewState | null>(null);
+  const [creationTownView, setCreationTownView] = useState<CreationTownView>("hub");
   const [localTodayInteractionCount, setLocalTodayInteractionCount] = useState(0);
+  const [realtimePetReaction, setRealtimePetReaction] = useState<CreationPetStageReaction | null>(null);
+  const petEventHandlerRef = useRef<(event: { action: CreationLivePetAction; message: string }) => void>(() => {});
+  const { partnerOnline: petRoomPartnerOnline, broadcastPetEvent } = usePetRealtime({
+    coupleId: data.couple?.id,
+    userId: user?.id,
+    onSpaceChanged: reload,
+    onPetEvent: (event) => petEventHandlerRef.current(event),
+  });
 
   useEffect(() => {
     if (Platform.OS !== "web" || typeof window === "undefined") {
@@ -399,6 +475,33 @@ export function HomeScreen() {
     }
   }, [activePhotoPreview, data.mediaFiles]);
 
+  petEventHandlerRef.current = (event) => {
+    setRealtimePetReaction({
+      id: Date.now(),
+      action: event.action,
+      message: event.message,
+    });
+  };
+
+  const prePendingMoodPopup =
+    subPage === "main" && activeTab === "home"
+      ? data.notifications.find(
+          (notification) =>
+            !notification.read_at &&
+            isQuickInteractionNotification(notification) &&
+            !dismissedPopupIds.includes(notification.id)
+        )
+      : undefined;
+  const prePendingLetterPopup =
+    subPage === "main" && activeTab === "home" && !prePendingMoodPopup
+      ? data.notifications.find(
+          (notification) =>
+            !notification.read_at &&
+            notification.type === "letter" &&
+            !dismissedLetterPopupIds.includes(notification.id)
+        )
+      : undefined;
+
   const hasUsableContent = Boolean(data.profile);
 
   if (loading && !hasUsableContent) {
@@ -440,24 +543,8 @@ export function HomeScreen() {
   const quickInteractionItems = [...quickInteractionPresetItems, ...customQuickInteractions, quickInteractionAddItem].slice(0, maxQuickInteractionCards);
   const todayInteractionCount =
     data.notifications.filter((notification) => isQuickInteractionNotification(notification) && isTodayTimestamp(notification.created_at)).length + localTodayInteractionCount;
-  const pendingMoodPopup =
-    subPage === "main" && activeTab === "home"
-      ? data.notifications.find(
-          (notification) =>
-            !notification.read_at &&
-            isQuickInteractionNotification(notification) &&
-            !dismissedPopupIds.includes(notification.id)
-        )
-      : undefined;
-  const pendingLetterPopup =
-    subPage === "main" && activeTab === "home" && !pendingMoodPopup
-      ? data.notifications.find(
-          (notification) =>
-            !notification.read_at &&
-            notification.type === "letter" &&
-            !dismissedLetterPopupIds.includes(notification.id)
-        )
-      : undefined;
+  const pendingMoodPopup = prePendingMoodPopup;
+  const pendingLetterPopup = prePendingLetterPopup;
 
   async function endCouple() {
     if (Platform.OS !== "web") {
@@ -564,6 +651,59 @@ export function HomeScreen() {
     showToast({ title: "已添加互动", message: "新的快捷互动已经放进此刻同频。", tone: "success" });
   }
 
+  async function handlePhotoFiles(files: PhotoFileList, options: PhotoUploadOptions = {}) {
+    if (!user) {
+      return;
+    }
+    const currentCount = options.currentCount ?? data.mediaFiles.length;
+    const maxFiles = options.maxFiles ?? 99;
+    const remaining = Math.max(0, maxFiles - currentCount);
+    if (remaining <= 0) {
+      showToast({ title: "图片已满", message: `最多上传 ${maxFiles} 张。`, tone: "info" });
+      return;
+    }
+
+    const selectedFiles = Array.from(files).slice(0, remaining);
+    if (!selectedFiles.length) {
+      return;
+    }
+
+    let uploadedCount = 0;
+    for (const file of selectedFiles) {
+      if (!isSupportedImage(file, 8 * 1024 * 1024)) {
+        showToast({ title: "图片格式不支持", message: "请上传 8MB 以内的 JPG、PNG、WebP 或 GIF 图片。", tone: "error" });
+        continue;
+      }
+      const path = buildStoragePath([coupleId, user.id], file.type);
+      const { error: uploadError } = await uploadImage(storageBuckets.coupleMedia, path, file);
+      if (uploadError) {
+        showToast({ title: "上传失败", message: uploadError.message, tone: "error" });
+        continue;
+      }
+      const { error: insertError } = await supabase.from("media_files").insert({
+        couple_id: coupleId,
+        uploader_id: user.id,
+        storage_path: path,
+        mime_type: file.type,
+        size_bytes: file.size,
+        caption: options.caption || file.name.replace(/\.[^.]+$/, ""),
+      });
+      if (insertError) {
+        showToast({ title: "相册保存失败", message: insertError.message, tone: "error" });
+        continue;
+      }
+      uploadedCount += 1;
+    }
+    if (uploadedCount > 0) {
+      showToast({
+        title: options.successTitle ?? `已上传 ${uploadedCount} 张照片`,
+        message: options.successMessage ?? "它会和日常胶囊一起沉淀在时间线里。",
+        tone: "success",
+      });
+      reload();
+    }
+  }
+
   async function uploadPhoto(options: PhotoUploadOptions = {}) {
     if (!user) {
       return;
@@ -584,53 +724,24 @@ export function HomeScreen() {
     input.type = "file";
     input.accept = "image/jpeg,image/png,image/webp,image/gif";
     input.multiple = remaining > 1;
+    input.style.position = "fixed";
+    input.style.left = "-9999px";
+    input.style.top = "0";
     input.onchange = async () => {
-      const selectedFiles = Array.from(input.files ?? []).slice(0, remaining);
-      if (!selectedFiles.length) {
-        return;
-      }
-      let uploadedCount = 0;
-      for (const file of selectedFiles) {
-        if (!isSupportedImage(file, 8 * 1024 * 1024)) {
-          showToast({ title: "图片格式不支持", message: "请上传 8MB 以内的 JPG、PNG、WebP 或 GIF 图片。", tone: "error" });
-          continue;
-        }
-        const path = buildStoragePath([coupleId, user.id], file.type);
-        const { error: uploadError } = await uploadImage(storageBuckets.coupleMedia, path, file);
-        if (uploadError) {
-          showToast({ title: "上传失败", message: uploadError.message, tone: "error" });
-          continue;
-        }
-        const { error: insertError } = await supabase.from("media_files").insert({
-          couple_id: coupleId,
-          uploader_id: user.id,
-          storage_path: path,
-          mime_type: file.type,
-          size_bytes: file.size,
-          caption: options.caption || file.name.replace(/\.[^.]+$/, ""),
-        });
-        if (insertError) {
-          showToast({ title: "相册保存失败", message: insertError.message, tone: "error" });
-          continue;
-        }
-        uploadedCount += 1;
-      }
-      if (uploadedCount > 0) {
-        showToast({
-          title: options.successTitle ?? `已上传 ${uploadedCount} 张照片`,
-          message: "它会和日常胶囊一起沉淀在时间线里。",
-          tone: "success",
-        });
-        reload();
+      try {
+        await handlePhotoFiles(input.files ?? [], options);
+      } finally {
+        input.remove();
       }
     };
+    document.body.appendChild(input);
     input.click();
   }
 
   async function deletePhoto(file: MediaFile) {
     const confirmed =
       Platform.OS === "web" && typeof window !== "undefined"
-        ? window.confirm(`确定删除这张照片吗？\n\n${file.caption || "相册里的瞬间"}`)
+        ? window.confirm(`确定删除这张照片吗？\n\n${mediaCaptionLabel(file, "相册里的瞬间")}`)
         : true;
     if (!confirmed) {
       return;
@@ -676,7 +787,13 @@ export function HomeScreen() {
         partner={partnerProfile}
         creationSpace={data.creationSpace}
         creationActions={data.creationActions}
+        petMemories={data.petMemories}
         footprints={data.footprints}
+        partnerOnline={petRoomPartnerOnline}
+        realtimeReaction={realtimePetReaction}
+        onBroadcastPetEvent={broadcastPetEvent}
+        townView={creationTownView}
+        onTownViewChange={setCreationTownView}
         onBack={() => setSubPage("main")}
         onChanged={reload}
       />
@@ -728,7 +845,8 @@ export function HomeScreen() {
         }}
         onWriteLetter={() => setSubPage("writeLetter")}
         onUploadPhoto={(options) => uploadPhoto({ maxFiles: maxMemoryPhotos, currentCount: data.mediaFiles.length, ...options })}
-        onPreviewPhoto={(file, index) => setActivePhotoPreview({ id: file.id, index: index ?? 0 })}
+        onPhotoFiles={(files, options) => handlePhotoFiles(files, { maxFiles: maxMemoryPhotos, currentCount: data.mediaFiles.length, ...options })}
+        onPreviewPhoto={(file, index, sourceRect) => setActivePhotoPreview({ id: file.id, index: index ?? 0, sourceRect })}
         onDeletePhoto={deletePhoto}
         onChanged={reload}
         onQuickInteraction={async (label) => {
@@ -757,6 +875,7 @@ export function HomeScreen() {
             return false;
           }
           setDismissedPopupIds((ids) => (ids.includes(notification.notification_id) ? ids : [...ids, notification.notification_id]));
+          void flushPushNotifications();
           setLocalTodayInteractionCount((count) => count + 1);
           setInteractionText(`“${label}”已经投递给对方。`);
           showToast({ title: `已投递 ${label}`, message: "对方会在首页收到一个小提醒。", tone: "success" });
@@ -770,10 +889,23 @@ export function HomeScreen() {
         mediaFiles={data.mediaFiles}
         moodStatuses={data.moodStatuses}
         letters={data.letters}
+        creationSpace={data.creationSpace}
+        creationActions={data.creationActions}
+        partnerOnline={petRoomPartnerOnline}
+        realtimeReaction={realtimePetReaction}
+        onOpenCreation={() => setSubPage("creation")}
       />
     );
   } else if (activeTab === "checkins") {
-    content = <TodayStoryPage coupleId={coupleId} checkins={data.checkins} onChanged={reload} />;
+    content = (
+      <TodayStoryPage
+        coupleId={coupleId}
+        checkins={data.checkins}
+        mediaFiles={data.mediaFiles}
+        onChanged={reload}
+        onPhotoFiles={(files, options) => handlePhotoFiles(files, options)}
+      />
+    );
   } else if (activeTab === "calendar") {
     content = (
       <CalendarPage
@@ -788,6 +920,7 @@ export function HomeScreen() {
         onOpenLetter={() => setSubPage("letterInbox")}
         onChanged={reload}
         onUploadMemoryPhoto={(memory, currentCount) => uploadPhoto({ caption: memory.title, currentCount, maxFiles: maxMemoryPhotos, successTitle: "图片已加入这段记忆" })}
+        onPreviewMemoryPhoto={(file) => setActivePhotoPreview({ id: file.id, index: Math.max(0, data.mediaFiles.findIndex((item) => item.id === file.id)) })}
         onCreateCapsule={() => {
           setSubPage("main");
           setActiveTab("checkins");
@@ -815,6 +948,7 @@ export function HomeScreen() {
     <PageContainer>
       {content}
       {subPage === "main" ? <BottomTabBar activeTab={activeTab} onChange={goTab} /> : null}
+      <GlobalPetLayer />
       {pendingMoodPopup ? (
         <MoodNotificationPopup
           notification={pendingMoodPopup}
@@ -836,6 +970,7 @@ export function HomeScreen() {
           files={data.mediaFiles}
           activeId={activePhotoPreview.id}
           activeIndex={activePhotoPreview.index}
+          sourceRect={activePhotoPreview.sourceRect}
           onClose={() => setActivePhotoPreview(null)}
           onDelete={deletePhoto}
           onSelect={(file, index) => setActivePhotoPreview({ id: file.id, index })}
@@ -848,7 +983,18 @@ export function HomeScreen() {
 function FloatingCreationEntry({ onOpen }: { onOpen: () => void }) {
   const button = (
     <View pointerEvents="box-none" style={styles.creationFloatingDock}>
-      <FloatingEntryButton label="共创" accessibilityLabel="打开共创空间" onPress={onOpen} icon={<Sparkles size={18} color={colors.accentDark} />} />
+      <BouncyPressable {...petSafeActionProps()} accessibilityRole="button" accessibilityLabel="打开共创空间" onPress={onOpen} haptic="selection" style={[styles.creationCrystalButton, Platform.OS === "web" ? glassDockStyle : null]}>
+        <View pointerEvents="none" style={styles.creationCrystalAura} />
+        <View pointerEvents="none" style={styles.creationCrystalSheen} />
+        <View pointerEvents="none" style={styles.creationCrystalPets}>
+          <Sparkles color="rgba(255,255,255,0.88)" size={25} strokeWidth={2.4} />
+          <Heart color="rgba(255,255,255,0.74)" fill="rgba(255,255,255,0.5)" size={12} strokeWidth={2.5} style={styles.creationCrystalHeart} />
+        </View>
+        <View pointerEvents="none" style={styles.creationCrystalStar}>
+          <Star color="#fff8df" fill="#ffe097" size={17} strokeWidth={2.2} />
+        </View>
+        <Text style={styles.creationCrystalLabel}>共创</Text>
+      </BouncyPressable>
     </View>
   );
 
@@ -880,6 +1026,7 @@ function CoupleHomePage({
   onCreateCapsule,
   onWriteLetter,
   onUploadPhoto,
+  onPhotoFiles,
   onPreviewPhoto,
   onDeletePhoto,
   onChanged,
@@ -889,6 +1036,11 @@ function CoupleHomePage({
   mediaFiles,
   moodStatuses,
   letters,
+  creationSpace,
+  creationActions,
+  partnerOnline,
+  realtimeReaction,
+  onOpenCreation,
 }: {
   me: { name: string; initial: string; avatarUrl?: string | null };
   partner: { name: string; initial: string; avatarUrl?: string | null };
@@ -910,7 +1062,8 @@ function CoupleHomePage({
   onCreateCapsule: () => void;
   onWriteLetter: () => void;
   onUploadPhoto: (options?: PhotoUploadOptions) => void;
-  onPreviewPhoto: (file: MediaFile, index?: number) => void;
+  onPhotoFiles: (files: PhotoFileList, options?: PhotoUploadOptions) => void;
+  onPreviewPhoto: (file: MediaFile, index?: number, sourceRect?: MotionRect | null) => void;
   onDeletePhoto: (file: MediaFile) => void;
   onChanged: () => void;
   interactionText: string;
@@ -919,8 +1072,16 @@ function CoupleHomePage({
   mediaFiles: MediaFile[];
   moodStatuses: MoodStatus[];
   letters: LetterPreview[];
+  creationSpace: CreationSpace | null;
+  creationActions: CreationAction[];
+  partnerOnline: boolean;
+  realtimeReaction: CreationPetStageReaction | null;
+  onOpenCreation: () => void;
 }) {
+  const { playQuickInteractionFlight } = useMotion();
   const [reaction, setReaction] = useState<{ id: number; label: string; icon: string; image?: ImageSourcePropType } | null>(null);
+  const quickTargetRef = useRef<View | null>(null);
+  const quickTargetRectRef = useRef<MotionRect | null>(null);
   const today = todayIsoDate();
   const todayStories = checkins.filter((item) => item.checkin_date === today);
   const latestStory = todayStories[0] ? splitStory(todayStories[0].content) : null;
@@ -929,74 +1090,125 @@ function CoupleHomePage({
   const myMood = moodStatuses.find((item) => item.user_id === currentUserId);
   const partnerMood = moodStatuses.find((item) => item.user_id !== currentUserId);
 
-  async function sendQuickInteraction(label: string, icon: string, image?: ImageSourcePropType) {
-    setReaction({ id: Date.now(), label, icon, image });
+  function measureQuickTarget() {
+    quickTargetRef.current?.measureInWindow((x, y, width, height) => {
+      const rect = { x, y, width, height };
+      quickTargetRectRef.current = rect;
+    });
+  }
+
+  async function sendQuickInteraction(label: string, icon: string, image?: ImageSourcePropType, origin?: MotionRect | null) {
     const delivered = await onQuickInteraction(label);
     if (!delivered) {
+      haptics.error();
       setReaction(null);
+      return;
     }
+    const target = quickTargetRectRef.current;
+    setReaction({ id: Date.now(), label, icon, image });
+    playQuickInteractionFlight({ label, icon, image, origin, target });
   }
 
   return (
     <View style={styles.stack}>
       <Card soft style={styles.heroCard}>
-        <CoupleAvatarGroup me={me} partner={partner} size={52} />
-        <Text style={styles.heroRelationText}>我们已经在一起</Text>
-        <View style={styles.loveNumberRow}>
-          <Text style={styles.loveNumber}>{loveDays}</Text>
-          <Text style={styles.loveUnit}>天</Text>
-        </View>
-        <Text style={styles.startedText}>开始于 {formatShortDate(startedAt)}</Text>
-        <LoveLetterEntryCard partnerName={partner.name} onPress={onWriteLetter} />
-      </Card>
-
-      <Card style={styles.moodStatusCard}>
-        <View style={styles.sectionHeader}>
-          <Text style={styles.sectionTitle}>此刻同频</Text>
-          <View style={styles.interactionCountPill}>
-            <Heart color={colors.accentDark} size={13} fill={todayInteractionCount ? colors.accentDark : "transparent"} />
-            <Text style={styles.interactionCountText}>今日 {todayInteractionCount} 次</Text>
-          </View>
-        </View>
-        <View style={styles.statusGrid}>
-          <StatusPill label="我的心情" value={myMood?.mood || todayCapsuleStatus} />
-          <StatusPill label="TA 的心情" value={partnerMood?.mood || "等一封回应"} />
-        </View>
-        <View style={styles.interactionGrid}>
-          {quickInteractions.map((item) => (
-            <InteractionButton
-              key={item.id}
-              label={item.label}
-              color={item.tone}
-              icon={item.icon ?? interactionIconFor(item.id)}
-              onPress={
-                item.id === "message"
-                  ? onAddCustomQuickInteraction
-                  : quickSending
-                    ? undefined
-                    : () => void sendQuickInteraction(item.label, floatingIconForInteraction(item.id), item.icon ?? interactionIconFor(item.id))
-              }
-            />
-          ))}
-        </View>
-        {customQuickComposerOpen ? (
-          <View style={styles.customQuickComposer}>
-            <AppTextInput
-              value={customQuickDraft}
-              onChangeText={onChangeCustomQuickDraft}
-              placeholder="写一个快捷互动"
-              maxLength={8}
-              style={styles.customQuickInput}
-            />
-            <View style={styles.customQuickActions}>
-              <SecondaryButton label="取消" onPress={onCancelCustomQuickInteraction} />
-              <PrimaryButton label="保存" onPress={onSaveCustomQuickInteraction} disabled={!customQuickDraft.trim()} />
+        <View style={styles.heroTopRow}>
+          <View style={styles.brandRow}>
+            <CapsuleMark size={44} icon={<Sparkles color={colors.accentDark} size={14} />} />
+            <View>
+              <Text style={styles.heroBrand}>同频跳动</Text>
+              <Text style={styles.heroBrandSub}>一段只属于两个人的日常</Text>
             </View>
           </View>
-        ) : null}
-        {reaction ? <FloatingReaction key={reaction.id} icon={reaction.icon} label={reaction.label} image={reaction.image} /> : null}
-        {interactionText ? <InlineNotice tone="success">{interactionText}</InlineNotice> : null}
+        </View>
+        <View
+          ref={quickTargetRef}
+          collapsable={false}
+          onLayout={measureQuickTarget}
+          {...petAnchorProps("home-love-days", "love-days")}
+          style={styles.heroLovePanel}
+        >
+          <View style={styles.heroAvatarPair}>
+            <CoupleAvatarGroup me={me} partner={partner} size={54} />
+          </View>
+          <View style={styles.heroLoveBody}>
+            <Text style={styles.heroLoveTitle}>恋爱第</Text>
+            <View style={styles.heroNumberRow}>
+              <Text style={styles.heroLoveNumber}>{loveDays}</Text>
+              <Text style={styles.heroLoveUnit}>天</Text>
+            </View>
+            <Text style={styles.startedText}>从 {formatShortDate(startedAt)} 开始</Text>
+          </View>
+          <Svg pointerEvents="none" width="100%" height="66" viewBox="0 0 280 66" style={styles.heroWave}>
+            <Defs>
+              <LinearGradient id="heartbeatStroke" x1="0%" y1="0%" x2="100%" y2="0%">
+                <Stop offset="0%" stopColor="#f6bfd0" />
+                <Stop offset="46%" stopColor="#d9a5e6" />
+                <Stop offset="100%" stopColor="#f7c6d7" />
+              </LinearGradient>
+            </Defs>
+            <Path
+              d="M16 33 L50 33 L66 18 L81 48 L96 33 L122 33 L140 23 L156 42 L170 33 L194 33 L206 26 L218 40 L230 33 L264 33"
+              stroke="url(#heartbeatStroke)"
+              strokeWidth="3.5"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              fill="none"
+            />
+          </Svg>
+          <LoveLetterEntryCard partnerName={partner.name} onPress={onWriteLetter} />
+        </View>
       </Card>
+
+      <View {...petAnchorProps("home-quick-sync", "quick-sync")}>
+        <Card style={styles.moodStatusCard}>
+          <View style={styles.sectionHeader}>
+            <Text style={styles.sectionTitle}>此刻同频</Text>
+            <View style={styles.interactionCountPill}>
+              <Heart color={colors.accentDark} size={13} fill={todayInteractionCount ? colors.accentDark : "transparent"} />
+              <Text style={styles.interactionCountText}>今日 {todayInteractionCount} 次</Text>
+            </View>
+          </View>
+          <View style={styles.statusGrid}>
+            <BubbleMoodSlot label="我的心情" value={myMood?.mood || todayCapsuleStatus} active tone="warm" />
+            <BubbleMoodSlot label="TA 的心情" value={partnerMood?.mood || "等一封回应"} tone="cool" />
+          </View>
+          <View style={styles.interactionGrid}>
+            {quickInteractions.map((item) => (
+              <InteractionButton
+                key={item.id}
+                label={item.label}
+                color={item.tone}
+                icon={item.icon ?? interactionIconFor(item.id)}
+                onPress={
+                  item.id === "message"
+                    ? onAddCustomQuickInteraction
+                    : quickSending
+                      ? undefined
+                      : (origin) => void sendQuickInteraction(item.label, floatingIconForInteraction(item.id), item.icon ?? interactionIconFor(item.id), origin)
+                }
+              />
+            ))}
+          </View>
+          {customQuickComposerOpen ? (
+            <View style={styles.customQuickComposer}>
+              <AppTextInput
+                value={customQuickDraft}
+                onChangeText={onChangeCustomQuickDraft}
+                placeholder="写一个快捷互动"
+                maxLength={8}
+                style={styles.customQuickInput}
+              />
+              <View style={styles.customQuickActions}>
+                <SecondaryButton label="取消" onPress={onCancelCustomQuickInteraction} />
+                <PrimaryButton label="保存" onPress={onSaveCustomQuickInteraction} disabled={!customQuickDraft.trim()} />
+              </View>
+            </View>
+          ) : null}
+          {reaction ? <FloatingReaction key={reaction.id} icon={reaction.icon} label={reaction.label} image={reaction.image} /> : null}
+          {interactionText ? <InlineNotice tone="success">{interactionText}</InlineNotice> : null}
+        </Card>
+      </View>
 
       <HomeMessageBoard
         coupleId={coupleId}
@@ -1006,27 +1218,108 @@ function CoupleHomePage({
         onChanged={onChanged}
       />
 
-      <PhotoAlbumCard mediaFiles={mediaFiles} onUploadPhoto={onUploadPhoto} onPreviewPhoto={onPreviewPhoto} onDeletePhoto={onDeletePhoto} />
+      <PhotoAlbumCard mediaFiles={mediaFiles} onUploadPhoto={onUploadPhoto} onPhotoFiles={onPhotoFiles} onPreviewPhoto={onPreviewPhoto} onDeletePhoto={onDeletePhoto} />
+
+      {creationSpace ? (
+        <HomePetCard
+          creationSpace={creationSpace}
+          creationActions={creationActions}
+          partnerOnline={partnerOnline}
+          realtimeReaction={realtimeReaction}
+          onOpenCreation={onOpenCreation}
+        />
+      ) : null}
+    </View>
+  );
+}
+
+function HomePetCard({
+  creationSpace,
+  creationActions,
+  partnerOnline,
+  realtimeReaction,
+  onOpenCreation,
+}: {
+  creationSpace: CreationSpace;
+  creationActions: CreationAction[];
+  partnerOnline: boolean;
+  realtimeReaction: CreationPetStageReaction | null;
+  onOpenCreation: () => void;
+}) {
+  const petDisplayName = displayPetName(creationSpace.pet_name);
+  const reaction = realtimeReaction ?? reactionFromSpace(creationSpace);
+  const rigCue = petRigCueFromJson(creationSpace.last_rig_cue);
+  const recentCareCount = creationActions.filter((action) => ["feed", "pet", "clean", "ai_brain"].includes(action.action_type)).length;
+  return (
+    <View {...petAnchorProps("home-pet-stage", "home-pet")}>
+    <Card style={styles.homePetCard}>
+      <View style={styles.sectionHeader}>
+        <View>
+          <Text style={styles.sectionTitle}>迪灵的小窝</Text>
+          <Text style={styles.homePetSubtitle}>{partnerOnline ? "你们都在，小家伙更兴奋" : `最近照顾 ${recentCareCount} 次`}</Text>
+        </View>
+        <SecondaryButton label="进入精灵暖阁" onPress={onOpenCreation} icon={<Sparkles color={colors.accentDark} size={15} />} />
+      </View>
+      <PetStage
+        petKey={dilingPetOption.key}
+        petName={petDisplayName}
+        petTitle={dilingPetOption.title}
+        petTrait={dilingPetOption.trait}
+        fullness={creationSpace.fullness}
+        cleanliness={creationSpace.cleanliness}
+        affection={creationSpace.affection}
+        energy={creationSpace.energy}
+        reaction={reaction}
+        rigCue={rigCue}
+        mode="home"
+        onTapPet={onOpenCreation}
+        onStrokePet={onOpenCreation}
+        onOpenRoom={onOpenCreation}
+      />
+    </Card>
     </View>
   );
 }
 
 function LoveLetterEntryCard({ partnerName, onPress }: { partnerName: string; onPress: () => void }) {
   return (
-    <Pressable accessibilityRole="button" accessibilityLabel={`给 ${partnerName} 写一封情书`} onPress={onPress} style={({ pressed }) => [styles.loveLetterEntryCard, pressed ? styles.loveLetterEntryCardPressed : null, Platform.OS === "web" ? glassDockStyle : null]}>
-      <View style={styles.loveLetterEntryIcon}>
-        <Mail color={colors.accentDark} size={24} strokeWidth={2.35} />
-        <View style={styles.loveLetterEntryHeart}>
+    <BouncyPressable {...petAnchorProps("home-love-letter", "love-letter")} accessibilityRole="button" accessibilityLabel={`给 ${partnerName} 写一封情书`} haptic="selection" onPress={onPress} style={styles.loveLetterEntryCard}>
+      <View pointerEvents="none" style={styles.envelopeFlap} />
+      <View pointerEvents="none" style={styles.envelopeLeftFold} />
+      <View pointerEvents="none" style={styles.envelopeRightFold} />
+      <View style={styles.envelopeSeal}>
+        <View style={styles.envelopeSealInner}>
           <Heart color="#fff" size={11} fill="#fff" strokeWidth={2.5} />
         </View>
       </View>
-      <View style={styles.loveLetterEntryCopy}>
-        <Text style={styles.loveLetterEntryTitle}>给 {partnerName} 写一封情书</Text>
+      <Text style={styles.loveLetterEntryTitle}>写一封信</Text>
+      <Text style={styles.loveLetterEntryText}>给 {partnerName} 留一张慢慢展开的信纸</Text>
+    </BouncyPressable>
+  );
+}
+
+function BubbleMoodSlot({
+  label,
+  value,
+  active,
+  tone,
+}: {
+  label: string;
+  value: string;
+  active?: boolean;
+  tone: "warm" | "cool";
+}) {
+  return (
+    <View style={[styles.bubbleMoodSlot, tone === "warm" ? styles.bubbleMoodSlotWarm : styles.bubbleMoodSlotCool, active ? styles.bubbleMoodSlotActive : null]}>
+      <View pointerEvents="none" style={styles.bubbleMoodLobeOne} />
+      <View pointerEvents="none" style={styles.bubbleMoodLobeTwo} />
+      <View pointerEvents="none" style={styles.bubbleMoodLobeThree} />
+      <View style={styles.bubbleMoodIcon}>
+        <Sparkles color={tone === "warm" ? "#d47c9b" : "#8a7fc2"} size={14} strokeWidth={2.4} />
       </View>
-      <View style={styles.loveLetterEntryAction}>
-        <Text style={styles.loveLetterEntryActionText}>打开信纸</Text>
-      </View>
-    </Pressable>
+      <Text style={styles.statusLabel}>{label}</Text>
+      <Text style={styles.statusValue}>{value}</Text>
+    </View>
   );
 }
 
@@ -1041,10 +1334,25 @@ function MoodNotificationPopup({
 }) {
   const mood = notification.body || "一点心情";
   const moodIcon = interactionIconForLabel(mood) || storyIconImageFromText(mood);
+  const progress = useSharedValue(0);
+
+  useEffect(() => {
+    progress.value = withSpring(1, motionTokens.spring.gentle);
+  }, [progress]);
+
+  const layerStyle = useAnimatedStyle(() => ({
+    opacity: progress.value,
+  }));
+  const cardStyle = useAnimatedStyle(() => ({
+    transform: [
+      { translateY: (1 - progress.value) * 18 },
+      { scale: 0.96 + progress.value * 0.04 },
+    ],
+  }));
 
   return (
-    <View pointerEvents="box-none" style={styles.moodPopupLayer}>
-      <View style={styles.moodPopupCard}>
+    <Reanimated.View role="dialog" aria-modal={true} pointerEvents="box-none" style={[styles.moodPopupLayer, layerStyle]}>
+      <Reanimated.View style={[styles.moodPopupCard, cardStyle]}>
         <View style={styles.moodPopupIconWrap}>
           <Image source={moodIcon} style={styles.moodPopupIcon} resizeMode="contain" />
         </View>
@@ -1052,11 +1360,11 @@ function MoodNotificationPopup({
           <Text style={styles.moodPopupEyebrow}>{partnerName} 投递了一点心情</Text>
           <Text style={styles.moodPopupTitle}>{mood}</Text>
         </View>
-        <Pressable accessibilityRole="button" onPress={onClose} style={styles.moodPopupPrimaryButtonWide}>
+        <BouncyPressable accessibilityRole="button" onPress={onClose} haptic="selection" style={styles.moodPopupPrimaryButtonWide}>
           <Text style={styles.moodPopupPrimaryText}>知道了</Text>
-        </Pressable>
-      </View>
-    </View>
+        </BouncyPressable>
+      </Reanimated.View>
+    </Reanimated.View>
   );
 }
 
@@ -1071,35 +1379,57 @@ function LetterArrivalPopup({
   onOpen: () => void;
   onClose: () => void;
 }) {
+  const progress = useSharedValue(0);
+
+  useEffect(() => {
+    progress.value = withSpring(1, motionTokens.spring.gentle);
+  }, [progress]);
+
+  const layerStyle = useAnimatedStyle(() => ({
+    opacity: progress.value,
+  }));
+  const cardStyle = useAnimatedStyle(() => ({
+    transform: [
+      { translateY: (1 - progress.value) * 24 },
+      { scale: 0.94 + progress.value * 0.06 },
+    ],
+  }));
+  const envelopeStyle = useAnimatedStyle(() => ({
+    transform: [
+      { rotate: "-2deg" },
+      { scale: 0.94 + progress.value * 0.06 },
+    ],
+  }));
+
   const popup = (
-    <View pointerEvents="box-none" style={styles.letterPopupLayer}>
-      <View style={styles.letterPopupCard}>
+    <Reanimated.View role="dialog" aria-modal={true} pointerEvents="box-none" style={[styles.letterPopupLayer, layerStyle]}>
+      <Reanimated.View style={[styles.letterPopupCard, cardStyle]}>
         <View pointerEvents="none" style={styles.letterPopupHalo} />
         <View pointerEvents="none" style={styles.letterPopupSparkOne} />
         <View pointerEvents="none" style={styles.letterPopupSparkTwo} />
         <View style={styles.letterPopupStamp}>
           <Heart color="#fff" size={15} fill="#fff" strokeWidth={2.4} />
         </View>
-        <View style={styles.letterPopupEnvelope}>
+        <Reanimated.View style={[styles.letterPopupEnvelope, envelopeStyle]}>
           <View style={styles.letterPopupFlap} />
           <View style={styles.letterPopupPaper}>
             <Text style={styles.letterPopupPaperText}>For you</Text>
           </View>
           <Mail color={colors.accentDark} size={36} strokeWidth={2.25} />
-        </View>
+        </Reanimated.View>
         <Text style={styles.letterPopupEyebrow}>{partnerName} 给你寄来一封信</Text>
         <Text style={styles.letterPopupTitle}>{notification.title || "你收到了一封信"}</Text>
         <Text style={styles.letterPopupBody}>{notification.body || "有一句认真写下的话，正在等你打开。"}</Text>
         <View style={styles.letterPopupActions}>
-          <Pressable accessibilityRole="button" onPress={onClose} style={styles.letterPopupSecondary}>
+          <BouncyPressable accessibilityRole="button" onPress={onClose} haptic="selection" style={styles.letterPopupSecondary}>
             <Text style={styles.letterPopupSecondaryText}>稍后再看</Text>
-          </Pressable>
-          <Pressable accessibilityRole="button" onPress={onOpen} style={styles.letterPopupPrimary}>
+          </BouncyPressable>
+          <BouncyPressable accessibilityRole="button" onPress={onOpen} haptic="success" style={styles.letterPopupPrimary}>
             <Text style={styles.letterPopupPrimaryText}>打开来信</Text>
-          </Pressable>
+          </BouncyPressable>
         </View>
-      </View>
-    </View>
+      </Reanimated.View>
+    </Reanimated.View>
   );
 
   if (Platform.OS === "web" && typeof document !== "undefined") {
@@ -1112,11 +1442,15 @@ function LetterArrivalPopup({
 function TodayStoryPage({
   coupleId,
   checkins,
+  mediaFiles,
   onChanged,
+  onPhotoFiles,
 }: {
   coupleId: string;
-  checkins: Array<{ id: string; user_id: string; checkin_date: string; content: string | null }>;
+  checkins: Checkin[];
+  mediaFiles: MediaFile[];
   onChanged: () => void;
+  onPhotoFiles: (files: PhotoFileList, options?: PhotoUploadOptions) => Promise<void> | void;
 }) {
   const { user } = useAuth();
   const { showToast } = useToast();
@@ -1125,11 +1459,15 @@ function TodayStoryPage({
   const [content, setContent] = useState("");
   const [noteFocused, setNoteFocused] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [pendingPhotoFiles, setPendingPhotoFiles] = useState<File[]>([]);
+  const [pendingPhotoPreviewUrls, setPendingPhotoPreviewUrls] = useState<string[]>([]);
+  const [photoBusy, setPhotoBusy] = useState(false);
   const [saveBurst, setSaveBurst] = useState(0);
   const saveCardScale = useRef(new Animated.Value(1)).current;
   const washOpacity = useRef(new Animated.Value(0.72)).current;
   const washBreath = useRef(new Animated.Value(0)).current;
   const shakeAnim = useRef(new Animated.Value(0)).current;
+  const { triggerShake: triggerSaveErrorShake, shakeStyle: saveErrorShakeStyle } = useErrorShake();
 
   useEffect(() => {
     Animated.loop(
@@ -1149,6 +1487,17 @@ function TodayStoryPage({
     ).start();
   }, [washBreath]);
 
+  useEffect(() => {
+    if (Platform.OS !== "web" || typeof URL === "undefined") {
+      return;
+    }
+    const urls = pendingPhotoFiles.map((file) => URL.createObjectURL(file));
+    setPendingPhotoPreviewUrls(urls);
+    return () => {
+      urls.forEach((url) => URL.revokeObjectURL(url));
+    };
+  }, [pendingPhotoFiles]);
+
   const triggerShake = () => {
     Animated.sequence([
       Animated.timing(shakeAnim, { toValue: -1.5, duration: 40, useNativeDriver: false }),
@@ -1163,14 +1512,70 @@ function TodayStoryPage({
   const todayStories = checkins.filter((item) => item.checkin_date === today);
   const mineToday = todayStories.find((item) => item.user_id === user?.id);
   const partnerToday = todayStories.find((item) => item.user_id !== user?.id);
+  const mineTodayPhotos = mineToday ? mediaFiles.filter((file) => file.caption === checkinPhotoCaption(mineToday)) : [];
   const trimmedContent = content.trim();
   const activeMood = customMood.trim() || mood;
   const capsuleComplete = Boolean(trimmedContent);
   const selectedStoryImage = storyIconImageFromText(trimmedContent);
   const selectedMoodTone = emotionCandyTone(activeMood);
   const washScale = washBreath.interpolate({ inputRange: [0, 1], outputRange: [1, 1.22] });
+  const capsulePhotoPreviews = [
+    ...mineTodayPhotos.map((file) => ({
+      id: file.id,
+      label: mediaCaptionLabel(file, "今日胶囊图片"),
+      uri: file.signedUrl ?? "",
+      status: "已存",
+    })),
+    ...pendingPhotoFiles.map((file, index) => ({
+      id: `pending-${file.name}-${file.lastModified}-${index}`,
+      label: file.name,
+      uri: pendingPhotoPreviewUrls[index] ?? "",
+      status: "待封存",
+    })),
+  ].slice(0, todayCapsulePhotoLimit);
+
+  async function handleCapsulePhotoFiles(files: PhotoFileList) {
+    const selected = Array.from(files)
+      .filter((file) => {
+        const supported = isSupportedImage(file, 8 * 1024 * 1024);
+        if (!supported) {
+          showToast({ title: "图片格式不支持", message: "请上传 8MB 以内的 JPG、PNG、WebP 或 GIF 图片。", tone: "error" });
+        }
+        return supported;
+      })
+      .slice(0, Math.max(0, todayCapsulePhotoLimit - mineTodayPhotos.length - pendingPhotoFiles.length));
+    if (!selected.length) {
+      showToast({ title: "图片已满", message: `今日胶囊最多添加 ${todayCapsulePhotoLimit} 张图片。`, tone: "info" });
+      return;
+    }
+
+    if (!mineToday) {
+      setPendingPhotoFiles((current) => [...current, ...selected].slice(0, todayCapsulePhotoLimit));
+      showToast({ title: "图片已选好", message: "封存今天后会一起加入拍立得时光墙。", tone: "success" });
+      return;
+    }
+
+    setPhotoBusy(true);
+    try {
+      await onPhotoFiles(selected, {
+        caption: checkinPhotoCaption(mineToday),
+        currentCount: mineTodayPhotos.length,
+        maxFiles: todayCapsulePhotoLimit,
+        successTitle: "图片已加入今日胶囊",
+        successMessage: "它也会自动出现在拍立得时光墙里。",
+      });
+    } finally {
+      setPhotoBusy(false);
+    }
+  }
+
   async function save() {
     if (!user || busy) {
+      return;
+    }
+    if (!trimmedContent) {
+      triggerSaveErrorShake();
+      showToast({ title: "还没有内容", message: "先写一句今天想封存的话。", tone: "info" });
       return;
     }
 
@@ -1180,12 +1585,24 @@ function TodayStoryPage({
     try {
       const text = trimmedContent ? `${activeMood}｜${trimmedContent}` : activeMood;
       const result = mineToday
-        ? await supabase.from("checkins").update({ content: text, updated_at: new Date().toISOString() }).eq("id", mineToday.id)
-        : await supabase.from("checkins").insert({ couple_id: coupleId, user_id: user.id, checkin_date: today, content: text });
+        ? await supabase.from("checkins").update({ content: text, updated_at: new Date().toISOString() }).eq("id", mineToday.id).select("*").maybeSingle()
+        : await supabase.from("checkins").insert({ couple_id: coupleId, user_id: user.id, checkin_date: today, content: text }).select("*").maybeSingle();
 
       if (result.error) {
+        triggerSaveErrorShake();
         showToast({ title: "保存失败", message: result.error.message, tone: "error" });
         return;
+      }
+      const savedCheckin = (result.data as Checkin | null) ?? mineToday;
+      if (savedCheckin && pendingPhotoFiles.length > 0) {
+        await onPhotoFiles(pendingPhotoFiles, {
+          caption: checkinPhotoCaption(savedCheckin),
+          currentCount: mineTodayPhotos.length,
+          maxFiles: todayCapsulePhotoLimit,
+          successTitle: "图片已加入今日胶囊",
+          successMessage: "它也会自动出现在拍立得时光墙里。",
+        });
+        setPendingPhotoFiles([]);
       }
 
       const { error: moodError } = await supabase.from("mood_status").upsert({
@@ -1228,6 +1645,7 @@ function TodayStoryPage({
       showToast({ title: mineToday ? "今天的胶囊已更新" : "今天的胶囊已存好", message: "这句话已经放进你们的记忆里。", tone: "success" });
       onChanged();
     } catch (error) {
+      triggerSaveErrorShake();
       const message = error instanceof Error ? error.message : "请稍后重试。";
       showToast({ title: "保存失败", message, tone: "error" });
     } finally {
@@ -1236,30 +1654,54 @@ function TodayStoryPage({
   }
 
   return (
-    <View style={styles.stack}>
+    <View style={styles.todayStoryScreen}>
       <Card soft style={styles.capsulePreviewCard}>
         <View style={[styles.capsulePreviewGlow, { backgroundColor: selectedMoodTone.glow }]} />
         <Animated.View style={[styles.capsulePreviewMoodWash, { backgroundColor: selectedMoodTone.wash, opacity: washOpacity, transform: [{ scale: washScale }] }]} />
-        <Animated.View style={{ transform: [{ translateX: shakeAnim }, { rotate: shakeAnim.interpolate({ inputRange: [-2, 2], outputRange: ["-3deg", "3deg"] }) }] }}>
-          <CapsuleMark
-            size={64}
-            complete={capsuleComplete}
-            icon={<Image source={selectedStoryImage} style={styles.capsulePreviewImage} resizeMode="contain" />}
-          />
-        </Animated.View>
+        <View pointerEvents="none" style={styles.capsulePreviewStageRing} />
+        <View pointerEvents="none" style={styles.capsulePreviewSparkOne} />
+        <View pointerEvents="none" style={styles.capsulePreviewSparkTwo} />
+        <View style={styles.capsulePreviewStage}>
+          <View pointerEvents="none" style={styles.capsulePreviewPedestal} />
+          <Animated.View style={{ transform: [{ translateX: shakeAnim }, { rotate: shakeAnim.interpolate({ inputRange: [-2, 2], outputRange: ["-3deg", "3deg"] }) }] }}>
+            <CapsuleMark
+              size={70}
+              complete={capsuleComplete}
+              icon={<Image source={selectedStoryImage} style={styles.capsulePreviewImage} resizeMode="contain" />}
+            />
+          </Animated.View>
+        </View>
+        <View style={styles.capsulePreviewMetaPill}>
+          <Sparkles color={selectedMoodTone.deep} size={13} strokeWidth={2.6} />
+          <Text style={[styles.capsulePreviewMetaText, { color: selectedMoodTone.ink }]}>情绪封存台</Text>
+        </View>
         <Text style={styles.capsulePreviewTitle}>{capsuleComplete ? "这颗胶囊准备好了" : "把今天慢慢装进去"}</Text>
         {capsuleComplete ? (
           <Text style={styles.capsulePreviewText}>这句话会被安静封存到今天。</Text>
         ) : null}
       </Card>
+      <Reanimated.View style={saveErrorShakeStyle}>
       <Animated.View style={{ transform: [{ scale: saveCardScale }] }}>
         <Card style={styles.createCapsuleCard}>
-        <View style={styles.capsuleComposerHeader}>
-          <Text style={styles.centerTitle}>今日胶囊</Text>
+        <View pointerEvents="none" style={styles.createCapsuleCardWash} />
+        <View pointerEvents="none" style={styles.createCapsulePaperFold} />
+        <View {...petAnchorProps("share-capsule-composer", "capsule-composer")} style={styles.capsuleComposerHeader}>
+          <View style={styles.capsuleComposerTitleRow}>
+            <Text style={styles.centerTitle}>今日胶囊</Text>
+            <View style={styles.capsuleComposerSeal}>
+              <Heart color="#fff" fill="#fff" size={12} strokeWidth={2.6} />
+            </View>
+          </View>
+          <Text style={styles.capsuleComposerHint}>挑一颗情绪糖，写下今天想封存的一句话。</Text>
         </View>
         <View style={styles.moodOptionalBlock}>
-          <Text style={styles.moodOptionalTitle}>今天的心情</Text>
-          <EmotionCandySelector moods={mockMoods} value={mood} onChange={setMood} />
+          <View style={styles.moodTrayHeader}>
+            <Text style={styles.moodOptionalTitle}>今天的心情</Text>
+            <Text style={styles.moodTrayLabel}>糖果盒</Text>
+          </View>
+          <View {...petSafeActionProps()}>
+            <EmotionCandySelector moods={mockMoods} value={mood} onChange={setMood} />
+          </View>
           <AppTextInput
             value={customMood}
             onChangeText={setCustomMood}
@@ -1281,26 +1723,72 @@ function TodayStoryPage({
             style={styles.storyInput}
           />
         </FoldedMoodNote>
-        <PrimaryButton label={busy ? "封存中" : mineToday ? "更新这颗胶囊" : "封存今天"} onPress={save} loading={busy} />
+        <View style={styles.capsulePhotoUploadRow}>
+          <BouncyPressable
+            {...petSafeActionProps()}
+            accessibilityRole="button"
+            accessibilityLabel="给今日胶囊上传图片"
+            disabled={busy || photoBusy || mineTodayPhotos.length + pendingPhotoFiles.length >= todayCapsulePhotoLimit}
+            haptic="selection"
+            style={[
+              styles.capsulePhotoUploadButton,
+              busy || photoBusy || mineTodayPhotos.length + pendingPhotoFiles.length >= todayCapsulePhotoLimit ? styles.capsulePhotoUploadButtonDisabled : null,
+            ]}
+          >
+            <ImagePlus color={colors.accentDark} size={16} strokeWidth={2.5} />
+            <Text style={styles.capsulePhotoUploadText}>{photoBusy ? "上传中" : "添加图片"}</Text>
+            <PhotoUploadInput
+              accessibilityLabel="给今日胶囊上传图片"
+              disabled={busy || photoBusy || mineTodayPhotos.length + pendingPhotoFiles.length >= todayCapsulePhotoLimit}
+              multiple
+              onFiles={handleCapsulePhotoFiles}
+            />
+          </BouncyPressable>
+          <Text style={styles.capsulePhotoUploadMeta}>
+            {mineTodayPhotos.length + pendingPhotoFiles.length}/{todayCapsulePhotoLimit} 张，会同步到拍立得时光墙
+          </Text>
+        </View>
+        {capsulePhotoPreviews.length ? (
+          <View style={styles.capsulePhotoPreviewRow}>
+            {capsulePhotoPreviews.map((item, index) => (
+              <View key={item.id} style={styles.capsulePhotoPreviewItem}>
+                {item.uri ? (
+                  <CrossFadeImage source={{ uri: item.uri }} style={styles.capsulePhotoPreviewImage} resizeMode="cover" />
+                ) : (
+                  <BreathingSkeleton style={styles.capsulePhotoPreviewImage} />
+                )}
+                <View pointerEvents="none" style={styles.capsulePhotoPreviewBadge}>
+                  <Text style={styles.capsulePhotoPreviewBadgeText}>{item.status}</Text>
+                </View>
+                <Text numberOfLines={1} style={styles.capsulePhotoPreviewLabel}>{item.label || `图片 ${index + 1}`}</Text>
+              </View>
+            ))}
+          </View>
+        ) : null}
+        <View {...petSafeActionProps()}>
+          <PrimaryButton label={busy ? "封存中" : mineToday ? "更新这颗胶囊" : "封存今天"} onPress={save} loading={busy} />
+        </View>
         </Card>
       </Animated.View>
+      </Reanimated.View>
       {saveBurst ? <CapsuleSaveFlight key={saveBurst} image={selectedStoryImage} /> : null}
 
+      <View {...petAnchorProps("share-today-capsule", "today-capsule")}>
       <TodayCapsuleSummaryCard
         latestStory={mineToday ? splitStory(mineToday.content) : partnerToday ? splitStory(partnerToday.content) : null}
         onCreateCapsule={() => setContent("")}
       >
         {todayStories.length === 0 ? (
-          <Pressable accessibilityRole="button" accessibilityLabel="创建第一颗今日胶囊" onPress={() => setContent("")} style={styles.emptyStatePressable}>
+          <Pressable {...petSafeActionProps()} accessibilityRole="button" accessibilityLabel="创建第一颗今日胶囊" onPress={() => setContent("")} style={styles.emptyStatePressable}>
             <EmptyState title={mockEmptyCopy.stories.title} description="点一下这里，记录你今天想留下的话。" />
           </Pressable>
         ) : (
           <View style={styles.doubleCapsulesRow}>
             <View style={[styles.sideCapsuleContainer, { transform: [{ rotate: "-0.8deg" }] }]}>
               {mineToday ? (
-                <CheckinCard author="我" mood={splitStory(mineToday.content).mood} body={splitStory(mineToday.content).body} date="今天" />
+                <CheckinCard author="我" mood={splitStory(mineToday.content).mood} body={splitStory(mineToday.content).body} date="今天" compact />
               ) : (
-                <Pressable onPress={() => setContent("")} style={styles.sideCapsuleEmpty}>
+                <Pressable {...petSafeActionProps()} accessibilityRole="button" accessibilityLabel="我今天还空着" onPress={() => setContent("")} style={styles.sideCapsuleEmpty}>
                   <Heart color={colors.accent} size={15} style={{ marginBottom: 4 }} />
                   <Text style={styles.sideCapsuleEmptyText}>+ 我今天还空着</Text>
                 </Pressable>
@@ -1311,7 +1799,7 @@ function TodayStoryPage({
             </View>
             <View style={[styles.sideCapsuleContainer, { transform: [{ rotate: "0.8deg" }] }]}>
               {partnerToday ? (
-                <CheckinCard author="TA" mood={splitStory(partnerToday.content).mood} body={splitStory(partnerToday.content).body} date="今天" />
+                <CheckinCard author="TA" mood={splitStory(partnerToday.content).mood} body={splitStory(partnerToday.content).body} date="今天" compact />
               ) : (
                 <View style={styles.sideCapsuleWaiting}>
                   <Sparkles color={colors.faint} size={15} style={{ marginBottom: 4 }} />
@@ -1322,8 +1810,9 @@ function TodayStoryPage({
           </View>
         )}
       </TodayCapsuleSummaryCard>
+      </View>
 
-      <Card>
+      <Card style={styles.historyCapsuleCard}>
         <View style={styles.sectionHeader}>
           <Text style={styles.sectionTitle}>历史胶囊</Text>
           <Text style={styles.linkText}>查看全部</Text>
@@ -1404,6 +1893,8 @@ function FoldedMoodNote({
 }) {
   return (
     <View style={[styles.foldedMoodNote, focused ? styles.foldedMoodNoteFocused : null]}>
+      <View pointerEvents="none" style={styles.foldedMoodNoteLines} />
+      <View pointerEvents="none" style={styles.foldedMoodNoteMarginLine} />
       <View pointerEvents="none" style={styles.foldedMoodNoteFold} />
       <View pointerEvents="none" style={styles.foldedMoodNoteFoldShadow} />
       {children}
@@ -1477,21 +1968,23 @@ function MessagesPage({
         <PrimaryButton label={busy ? "发送中" : "发送留言"} onPress={send} disabled={!body.trim()} loading={busy} />
       </Card>
       <Card>
-        <Text style={styles.sectionTitle}>留言列表</Text>
-        {messages.length === 0 ? (
-          <EmptyState title={mockEmptyCopy.messages.title} description={mockEmptyCopy.messages.description} />
-        ) : (
-          messages.map((message) => (
-            <MessageCard
-              key={message.id}
-              author={message.sender?.display_name || "匿名用户"}
-              body={message.body}
-              time={new Date(message.created_at).toLocaleString("zh-CN")}
-              canDelete={message.sender_id === user?.id && deletingId !== message.id}
-              onDelete={() => remove(message)}
-            />
-          ))
-        )}
+        <View {...petAnchorProps("messages-board", "message-board")} style={styles.messageBoardAnchorWrap}>
+          <Text style={styles.sectionTitle}>留言列表</Text>
+          {messages.length === 0 ? (
+            <EmptyState title={mockEmptyCopy.messages.title} description={mockEmptyCopy.messages.description} />
+          ) : (
+            messages.map((message) => (
+              <MessageCard
+                key={message.id}
+                author={message.sender?.display_name || "匿名用户"}
+                body={message.body}
+                time={new Date(message.created_at).toLocaleString("zh-CN")}
+                canDelete={message.sender_id === user?.id && deletingId !== message.id}
+                onDelete={() => remove(message)}
+              />
+            ))
+          )}
+        </View>
       </Card>
     </View>
   );
@@ -1557,27 +2050,73 @@ function HomeMessageBoard({
   }
 
   return (
-    <Card style={{ paddingVertical: 14, gap: 10 }}>
+    <Card style={styles.homeMessageBoardCard}>
+      <View {...petAnchorProps("home-message-board", "message-board")} style={styles.messageBoardAnchorWrap}>
+      <View pointerEvents="none" style={styles.messagePaperFold} />
       <View style={styles.sectionHeader}>
         <Text style={styles.sectionTitle}>留言板</Text>
-        <MessageCircle color={colors.accentDark} size={18} />
+        <MessageCircle color={colors.accentDark} size={18} strokeWidth={2.4} />
       </View>
       {messages.length === 0 ? <Text style={styles.bodyText}>{latestMessage}</Text> : null}
-      <AppTextInput value={body} onChangeText={setBody} placeholder="写给对方的一句话" multiline style={styles.homeMessageInput} />
-      <PrimaryButton label={busy ? "发送中" : "发送留言"} onPress={send} disabled={!body.trim()} loading={busy} icon={<Send color="#fff" size={16} />} />
-      <View style={styles.homeMessageList}>
-        {messages.slice(0, 4).map((message) => (
-          <MessageCard
-            key={message.id}
-            author={message.sender?.display_name || "匿名用户"}
-            body={message.body}
-            time={new Date(message.created_at).toLocaleString("zh-CN")}
-            canDelete={message.sender_id === currentUserId && deletingId !== message.id}
-            onDelete={() => remove(message)}
-          />
-        ))}
+      <View style={styles.homeMessageComposer}>
+        <View style={styles.homeMessagePaperInput}>
+          <View pointerEvents="none" style={styles.messagePaperLines} />
+          <AppTextInput value={body} onChangeText={setBody} placeholder="把今天想说的话写在这里" multiline maxLength={200} style={styles.homeMessageInput} />
+        </View>
+        <View style={styles.homeMessageActionRow}>
+          <BouncyPressable accessibilityRole="button" accessibilityLabel="发送留言" onPress={send} disabled={!body.trim() || busy} haptic="success" style={[styles.homeMessageSendButton, !body.trim() || busy ? styles.homeMessageSendButtonDisabled : null]}>
+            <Send color="#fff" size={15} strokeWidth={2.4} />
+            <Text style={styles.homeMessageSendText}>{busy ? "发送中" : "发送"}</Text>
+          </BouncyPressable>
+        </View>
+      </View>
+      {messages.length > 0 ? (
+        <View style={styles.homeMessageList}>
+          {messages.slice(0, 4).map((message) => (
+            <StickyMemoCard
+              key={message.id}
+              author={message.sender?.display_name || "匿名用户"}
+              body={message.body}
+              time={new Date(message.created_at).toLocaleString("zh-CN")}
+              canDelete={message.sender_id === currentUserId && deletingId !== message.id}
+              onDelete={() => remove(message)}
+            />
+          ))}
+        </View>
+      ) : null}
       </View>
     </Card>
+  );
+}
+
+function StickyMemoCard({
+  author,
+  body,
+  time,
+  canDelete,
+  onDelete,
+}: {
+  author: string;
+  body: string;
+  time: string;
+  canDelete?: boolean;
+  onDelete?: () => void;
+}) {
+  return (
+    <View style={styles.stickyMemoCard}>
+      <View pointerEvents="none" style={styles.stickyMemoTape} />
+      <View style={styles.stickyMemoTop}>
+        <Text style={styles.stickyMemoAuthor}>{author}</Text>
+        <Text style={styles.stickyMemoMeta}>{time}</Text>
+      </View>
+      <Text style={styles.stickyMemoBody}>{body}</Text>
+      {canDelete ? (
+        <BouncyPressable accessibilityRole="button" onPress={onDelete} haptic="selection" style={styles.stickyMemoDelete}>
+          <Trash2 color={colors.accentDark} size={12} strokeWidth={2.8} />
+          <Text style={styles.stickyMemoDeleteText}>删除</Text>
+        </BouncyPressable>
+      ) : null}
+    </View>
   );
 }
 
@@ -1591,7 +2130,8 @@ function TodayCapsuleSummaryCard({
   children?: ReactNode;
 }) {
   return (
-    <Card>
+    <Card style={styles.todayCapsuleSummaryCard}>
+      <View pointerEvents="none" style={styles.todayCapsuleSummaryGlow} />
       <Pressable
         accessibilityRole="button"
         accessibilityLabel="创建今日胶囊"
@@ -1837,7 +2377,13 @@ function CreationSpacePage({
   partner,
   creationSpace,
   creationActions,
+  petMemories,
   footprints,
+  partnerOnline,
+  realtimeReaction,
+  onBroadcastPetEvent,
+  townView,
+  onTownViewChange,
   onBack,
   onChanged,
 }: {
@@ -1846,7 +2392,13 @@ function CreationSpacePage({
   partner: { name: string; initial: string; avatarUrl?: string | null };
   creationSpace: CreationSpace | null;
   creationActions: CreationAction[];
+  petMemories: PetMemory[];
   footprints: CoupleFootprint[];
+  partnerOnline: boolean;
+  realtimeReaction: CreationPetStageReaction | null;
+  onBroadcastPetEvent: (event: { action: CreationLivePetAction; message: string }) => Promise<void>;
+  townView: CreationTownView;
+  onTownViewChange: (view: CreationTownView) => void;
   onBack: () => void;
   onChanged: () => void;
 }) {
@@ -1854,15 +2406,18 @@ function CreationSpacePage({
   const { showToast } = useToast();
   const [space, setSpace] = useState<CreationSpace | null>(creationSpace);
   const activeSpace = space ?? creationSpace;
-  const [selectedPetKey, setSelectedPetKey] = useState<CreationPetKey>(creationPetOptionFor(activeSpace?.pet_key).key);
-  const [petName, setPetName] = useState(activeSpace?.pet_name ?? creationPetOptionFor(activeSpace?.pet_key).name);
+  const [petName, setPetName] = useState("迪灵");
+  const petDisplayName = displayPetName(activeSpace?.pet_name ?? petName);
   const [homeTheme, setHomeTheme] = useState(activeSpace?.home_theme ?? "cream");
   const [decorOne, setDecorOne] = useState(activeSpace?.decor_slot_1 ?? "软软窝垫");
   const [decorTwo, setDecorTwo] = useState(activeSpace?.decor_slot_2 ?? "暖光小灯");
   const [decorThree, setDecorThree] = useState(activeSpace?.decor_slot_3 ?? "胶囊花窗");
   const [homeBusy, setHomeBusy] = useState(false);
-  const [choosePetBusy, setChoosePetBusy] = useState<CreationPetKey | null>(null);
+  const [dilingSyncing, setDilingSyncing] = useState(false);
   const [petBusy, setPetBusy] = useState<CreationFoodType | "pet" | "clean" | null>(null);
+  const [petBrainBusy, setPetBrainBusy] = useState(false);
+  const [petReaction, setPetReaction] = useState<CreationPetStageReaction | null>(null);
+  const [rigCue, setRigCue] = useState<PetRigCue | null>(petRigCueFromJson(activeSpace?.last_rig_cue));
   const [storeBusy, setStoreBusy] = useState<CreationFoodType | null>(null);
   const [selectedPuzzleId, setSelectedPuzzleId] = useState(creationPuzzles[0].id);
   const [selectedPuzzleAnswer, setSelectedPuzzleAnswer] = useState("");
@@ -1876,6 +2431,13 @@ function CreationSpacePage({
   const [editingFootprintId, setEditingFootprintId] = useState<string | null>(null);
   const [footprintBusy, setFootprintBusy] = useState(false);
   const [locating, setLocating] = useState(false);
+  const [footprintFormOpen, setFootprintFormOpen] = useState(false);
+  const [granaryOpen, setGranaryOpen] = useState(false);
+  const [rewardFlash, setRewardFlash] = useState<CreationRewardFlash | null>(null);
+  const [assetPulse, setAssetPulse] = useState<CreationRewardKind | null>(null);
+  const [hubDilingSceneIndex, setHubDilingSceneIndex] = useState(0);
+  const islandFloat = useRef(new Animated.Value(0)).current;
+  const rewardFloat = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
     if (!creationSpace) {
@@ -1891,13 +2453,12 @@ function CreationSpacePage({
 
   useEffect(() => {
     const nextSpace = space ?? creationSpace;
-    const nextPet = creationPetOptionFor(nextSpace?.pet_key);
-    setSelectedPetKey(nextPet.key);
-    setPetName(nextSpace?.pet_name ?? nextPet.name);
+    setPetName(displayPetName(nextSpace?.pet_name));
     setHomeTheme(nextSpace?.home_theme ?? "cream");
     setDecorOne(nextSpace?.decor_slot_1 ?? "软软窝垫");
     setDecorTwo(nextSpace?.decor_slot_2 ?? "暖光小灯");
     setDecorThree(nextSpace?.decor_slot_3 ?? "胶囊花窗");
+    setRigCue(petRigCueFromJson(nextSpace?.last_rig_cue));
   }, [creationSpace, space]);
 
   useEffect(() => {
@@ -1906,6 +2467,77 @@ function CreationSpacePage({
     }
     void ensureSpace(false);
   }, [activeSpace, coupleId]);
+
+  useEffect(() => {
+    if (!activeSpace || dilingSyncing || activeSpace.pet_key === dilingCompatPetKey && activeSpace.pet_name === "迪灵") {
+      return;
+    }
+    void syncDilingPet();
+  }, [activeSpace?.id, activeSpace?.pet_key, activeSpace?.pet_name, dilingSyncing]);
+
+  useEffect(() => {
+    if (Platform.OS !== "web" || typeof window === "undefined") {
+      return;
+    }
+    window.requestAnimationFrame(() => {
+      window.scrollTo({ top: 0, behavior: "auto" });
+    });
+  }, [townView]);
+
+  useEffect(() => {
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(islandFloat, {
+          toValue: 1,
+          duration: 3200,
+          easing: Easing.inOut(Easing.sin),
+          useNativeDriver: false,
+        }),
+        Animated.timing(islandFloat, {
+          toValue: 0,
+          duration: 3200,
+          easing: Easing.inOut(Easing.sin),
+          useNativeDriver: false,
+        }),
+      ])
+    ).start();
+  }, [islandFloat]);
+
+  useEffect(() => {
+    if (townView !== "hub") {
+      return undefined;
+    }
+    const interval = window.setInterval(() => {
+      setHubDilingSceneIndex((index) => (index + 1) % hubDilingSceneCycle.length);
+    }, 5200);
+    return () => window.clearInterval(interval);
+  }, [townView]);
+
+  useEffect(() => {
+    if (!rewardFlash) {
+      return;
+    }
+    rewardFloat.setValue(0);
+    Animated.sequence([
+      Animated.timing(rewardFloat, {
+        toValue: 1,
+        duration: 680,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: false,
+      }),
+      Animated.delay(1700),
+      Animated.timing(rewardFloat, {
+        toValue: 0,
+        duration: 260,
+        easing: Easing.in(Easing.cubic),
+        useNativeDriver: false,
+      }),
+    ]).start(({ finished }) => {
+      if (finished) {
+        setRewardFlash(null);
+      }
+    });
+  }, [rewardFlash, rewardFloat]);
 
   async function ensureSpace(showSuccess = true) {
     const { data, error } = await supabase.rpc("ensure_creation_space", { target_couple_id: coupleId }).maybeSingle();
@@ -1921,28 +2553,26 @@ function CreationSpacePage({
     return data ?? null;
   }
 
-  async function choosePet(petKey: CreationPetKey) {
-    if (choosePetBusy) {
+  async function syncDilingPet() {
+    if (dilingSyncing) {
       return;
     }
-    const petOption = creationPetOptionFor(petKey);
-    const enteredName = petName.trim();
-    const nextName = !enteredName || enteredName === "小胶囊" ? petOption.name : enteredName;
-    setChoosePetBusy(petKey);
+    const nextName = dilingPetOption.name;
+    setDilingSyncing(true);
     const { data, error } = await supabase.rpc("choose_creation_pet", {
       target_couple_id: coupleId,
-      chosen_pet_key: petKey,
+      chosen_pet_key: dilingCompatPetKey,
       chosen_pet_name: nextName,
     }).maybeSingle();
-    setChoosePetBusy(null);
+    setDilingSyncing(false);
     if (error) {
-      showToast({ title: "选择失败", message: error.message, tone: "error" });
       return;
     }
-    setSelectedPetKey(petKey);
     setPetName(nextName);
     setSpace(data ?? null);
-    showToast({ title: "云宠已入住", message: `${petOption.title} 会和你们一起住在小屋里。`, tone: "success" });
+    if (data) {
+      triggerLocalPetReaction(data.current_action || "happy", data.last_ai_bubble || "我住进来啦");
+    }
     onChanged();
   }
 
@@ -1958,7 +2588,13 @@ function CreationSpacePage({
       return;
     }
     setSpace(data ?? null);
-    showToast({ title: `已喂${creationFoodLabel(foodType)}`, message: "粮食库存和云宠状态已同步给你们两个人。", tone: "success" });
+    triggerLocalPetReaction("eat", "我吃到啦");
+    showRewardFlash("feed", "投喂仪式完成", `${creationFoodLabel(foodType)}轻轻落进饭碗，${petDisplayName} 吃到啦。`);
+    showToast({ title: `已喂${creationFoodLabel(foodType)}`, message: "等它抬头回应你。", tone: "success" });
+    void runPetBrain(foodType === "premium" ? "feed_premium" : "feed_basic", data ?? activeSpace, {
+      food_type: foodType,
+      food_label: creationFoodLabel(foodType),
+    });
     onChanged();
   }
 
@@ -1974,8 +2610,64 @@ function CreationSpacePage({
       return;
     }
     setSpace(data ?? null);
-    showToast({ title: petActionToastTitle(type), message: "小屋状态已同步给你们两个人。", tone: "success" });
+    triggerLocalPetReaction(type, immediatePetLine(type));
+    showToast({ title: petActionToastTitle(type), message: type === "clean" ? "它会把这理解成打扫小窝。" : "它会抬头回应你。", tone: "success" });
+    void runPetBrain(type, data ?? activeSpace, { interaction_type: type });
     onChanged();
+  }
+
+  async function runPetBrain(triggerType: string, latestSpace: CreationSpace | null, localHint?: Record<string, string | number | boolean | null>) {
+    if (!latestSpace || petBrainBusy) {
+      return;
+    }
+    setPetBrainBusy(true);
+    try {
+      const result = await invokePetAiBrain({
+        coupleId,
+        triggerType,
+        localHint,
+      });
+      if (result.space) {
+        setSpace((current) => chooseNewerSpace(current, result.space));
+      }
+      const nextAction = result.decision?.action ?? result.space?.current_action ?? latestSpace.current_action ?? "idle";
+      const nextMessage = naturalPetMessage(result.decision?.bubble || result.space?.last_ai_bubble || result.space?.pet_mood || latestSpace.pet_mood, latestSpace.pet_species, triggerType, nextAction);
+      const nextRigCue = result.decision?.rig_cue ?? petRigCueFromJson(result.space?.last_rig_cue);
+      if (nextRigCue) {
+        setRigCue(nextRigCue);
+      }
+      triggerLocalPetReaction(nextAction, nextMessage);
+      await onBroadcastPetEvent({ action: nextAction, message: nextMessage });
+      if (result.fallback) {
+        showToast({ title: "迪灵先用动作回应了", message: "AI 稍慢或达到限额时会自动兜底。", tone: "info" });
+      }
+      onChanged();
+    } catch (error) {
+      const fallbackAction = triggerToAction(triggerType);
+      const fallbackMessage = immediatePetLine(fallbackAction);
+      triggerLocalPetReaction(fallbackAction, fallbackMessage);
+      showToast({ title: "它先用动作回应你", message: "这次 AI 回复没有成功，但小窝状态已保存。", tone: "info" });
+    } finally {
+      setPetBrainBusy(false);
+    }
+  }
+
+  function triggerLocalPetReaction(action: CreationLivePetAction, message: string) {
+    const reaction = {
+      id: Date.now(),
+      action,
+      message,
+    };
+    setPetReaction(reaction);
+    void onBroadcastPetEvent(reaction);
+  }
+
+  function showRewardFlash(kind: CreationRewardKind, title: string, message: string) {
+    setRewardFlash({ id: Date.now(), kind, title, message });
+    setAssetPulse(kind);
+    setTimeout(() => {
+      setAssetPulse((current) => (current === kind ? null : current));
+    }, 900);
   }
 
   async function buyFood(foodType: CreationFoodType) {
@@ -1994,6 +2686,7 @@ function CreationSpacePage({
       return;
     }
     setSpace(data ?? null);
+    showRewardFlash("food", "粮仓已补充", `已用心愿星糖换入 1 份${creationFoodLabel(foodType)}。`);
     showToast({ title: "粮仓已补充", message: `已买入 1 份${creationFoodLabel(foodType)}。`, tone: "success" });
     onChanged();
   }
@@ -2031,7 +2724,9 @@ function CreationSpacePage({
       return;
     }
     setSpace(data ?? null);
-    showToast({ title: "获得 10 点奖励", message: "可以去粮仓给云宠买粮。", tone: "success" });
+    showRewardFlash("puzzle", "解谜通关，赏金入仓", `获得鲜食粮 +1 份、心愿星糖 +15 点，快去投喂 ${petDisplayName}。`);
+    triggerLocalPetReaction("happy", "赚到加餐啦");
+    showToast({ title: "赏金入仓", message: "鲜食粮和心愿星糖已放进共享粮仓。", tone: "success" });
     onChanged();
   }
 
@@ -2042,7 +2737,7 @@ function CreationSpacePage({
     setHomeBusy(true);
     const { data, error } = await supabase.rpc("update_creation_home", {
       target_couple_id: coupleId,
-      pet_name: petName,
+      pet_name: "迪灵",
       home_theme: homeTheme,
       decor_slot_1: decorOne,
       decor_slot_2: decorTwo,
@@ -2125,7 +2820,7 @@ function CreationSpacePage({
       }
       showToast({ title: "足迹已更新", tone: "success" });
     } else {
-      const { error } = await supabase.from("couple_footprints").insert({
+      const { data: insertedFootprints, error } = await supabase.from("couple_footprints").insert({
         couple_id: coupleId,
         created_by: user.id,
         title: footprintTitle.trim(),
@@ -2133,18 +2828,33 @@ function CreationSpacePage({
         visited_at: footprintDate,
         latitude: coords.latitude,
         longitude: coords.longitude,
-      });
-      if (!error) {
-        await writeCreationAction("footprint_add", `记录了足迹「${footprintTitle.trim()}」`);
-      }
+      }).select("*");
       setFootprintBusy(false);
       if (error) {
         showToast({ title: "保存失败", message: error.message, tone: "error" });
         return;
       }
-      showToast({ title: "足迹已记录", message: "它也会沉淀到记忆页的日常里。", tone: "success" });
+      const insertedFootprint = insertedFootprints?.[0] as CoupleFootprint | undefined;
+      if (insertedFootprint) {
+        const { data: rewardSpace, error: rewardError } = await supabase.rpc("claim_creation_footprint_reward", {
+          target_couple_id: coupleId,
+          target_footprint_id: insertedFootprint.id,
+        }).maybeSingle();
+        if (rewardSpace) {
+          setSpace((current) => chooseNewerSpace(current, rewardSpace));
+        }
+        if (rewardError) {
+          await writeCreationAction("footprint_add", `记录了足迹「${footprintTitle.trim()}」`);
+        }
+      } else {
+        await writeCreationAction("footprint_add", `记录了足迹「${footprintTitle.trim()}」`);
+      }
+      showRewardFlash("footprint", "爱的养分已入仓", "日常粮 +1 份、心愿星糖 +10 点，已经飞进共享小粮仓。");
+      triggerLocalPetReaction("happy", "我记住这个地方啦");
+      showToast({ title: "足迹已点亮", message: "它也会沉淀到记忆页，并化作小家的养分。", tone: "success" });
     }
     resetFootprintForm();
+    setFootprintFormOpen(false);
     onChanged();
   }
 
@@ -2197,245 +2907,440 @@ function CreationSpacePage({
     );
   }
 
-  const recentActions = creationActions.slice(0, 5);
   const displayedFootprints = footprints.slice(0, 6);
   const canSaveFootprint = Boolean(footprintTitle.trim() && footprintDate);
-  const selectedPet = creationPetOptionFor(selectedPetKey);
-  const currentPet = creationPetOptionFor(activeSpace?.pet_key ?? selectedPetKey);
   const currentPuzzle = creationPuzzles.find((puzzle) => puzzle.id === selectedPuzzleId) ?? creationPuzzles[0];
   const basicFoodCount = activeSpace?.basic_food_count ?? 2;
   const premiumFoodCount = activeSpace?.premium_food_count ?? 0;
   const treatBalance = activeSpace?.treat_balance ?? 0;
+  const latestPetReaction = petReaction ?? realtimeReaction ?? reactionFromSpace(activeSpace);
+  const visiblePetMemories = petMemories
+    .filter((memory) => !memory.archived_at)
+    .filter((memory) => memory.memory_scope === "core" || !memory.expires_at || new Date(memory.expires_at).getTime() > Date.now())
+    .slice(0, 5);
+  const cleanButtonLabel = petBrainBusy && petBusy === "clean" ? "回应中" : "清洁小屋";
+  const totalFoodCount = basicFoodCount + premiumFoodCount;
+  const rewardLift = rewardFloat.interpolate({ inputRange: [0, 1], outputRange: [18, 0] });
+  const rewardOpacity = rewardFloat.interpolate({ inputRange: [0, 0.12, 0.85, 1], outputRange: [0, 1, 1, 0] });
+  const petIslandLift = islandFloat.interpolate({ inputRange: [0, 1], outputRange: [0, -4] });
+  const footprintIslandLift = islandFloat.interpolate({ inputRange: [0, 1], outputRange: [-2, 3] });
+  const playgroundIslandLift = islandFloat.interpolate({ inputRange: [0, 1], outputRange: [3, -1] });
+  const footprintTilt = islandFloat.interpolate({ inputRange: [0, 1], outputRange: ["-1.2deg", "1.2deg"] });
+  const playgroundTilt = islandFloat.interpolate({ inputRange: [0, 1], outputRange: ["1deg", "-1deg"] });
+  const hubDilingScene = hubDilingSceneCycle[hubDilingSceneIndex % hubDilingSceneCycle.length] ?? hubDilingSceneCycle[0];
+
+  const titleByView: Record<CreationTownView, string> = {
+    hub: "迪灵小镇",
+    pet: "精灵暖阁",
+    footprints: "足迹之旅",
+    playground: "心情乐园",
+  };
+
+  const backAction = townView === "hub" ? onBack : () => onTownViewChange("hub");
 
   return (
-    <View style={styles.stack}>
-      <TopBar title="共创空间" subtitle="一起养一只真实感云宠，靠解谜赚口粮，慢慢布置小屋和足迹。" left={<BackButton onPress={onBack} />} />
+    <View style={styles.creationTownPage}>
+      {townView === "hub" ? null : <TopBar title={titleByView[townView]} subtitle="你们的小世界，温柔共建中" left={<BackButton onPress={backAction} />} />}
 
-      <Card soft style={styles.creationHeroCard}>
-        <View style={styles.creationHeroTop}>
-          <CoupleAvatarGroup me={me} partner={partner} size={46} />
-          <View style={styles.creationHeroBadge}>
-            <PawPrint color={colors.accentDark} size={14} strokeWidth={2.6} />
-            <Text style={styles.creationHeroBadgeText}>{currentPet.species === "cat" ? "云猫小屋" : "云狗小屋"}</Text>
+      {rewardFlash ? (
+        <Animated.View
+          pointerEvents="none"
+          style={[
+            styles.creationRewardToast,
+            {
+              opacity: rewardOpacity,
+              transform: [{ translateY: rewardLift }],
+            },
+          ]}
+        >
+          <View style={styles.creationRewardIcon}>
+            {rewardFlash.kind === "puzzle" ? <Gamepad2 color={colors.accentDark} size={18} /> : rewardFlash.kind === "footprint" ? <Gift color={colors.accentDark} size={18} /> : <Utensils color={colors.accentDark} size={18} />}
           </View>
-        </View>
-        <View style={styles.creationPetStage}>
-          <Image source={currentPet.image} style={styles.creationPetHeroImage} resizeMode="cover" />
-          <View style={styles.creationPetStageShade} />
-          <View style={styles.creationPetInfoPill}>
-            <Text style={styles.creationPetInfoTitle}>{activeSpace?.pet_name ?? petName}</Text>
-            <Text style={styles.creationPetInfoMeta}>{currentPet.title} · {currentPet.trait}</Text>
+          <View style={styles.creationRewardCopy}>
+            <Text style={styles.creationRewardTitle}>{rewardFlash.title}</Text>
+            <Text style={styles.creationRewardText}>{rewardFlash.message}</Text>
           </View>
-        </View>
-        <Text style={styles.creationHeroTitle}>{activeSpace?.pet_name ?? petName} 的云端小屋</Text>
-        <Text style={styles.creationHeroText}>{activeSpace?.pet_mood ?? "小屋刚刚打开，等你们一起把它养得更亲近。"}</Text>
-        <View style={styles.creationMeters}>
-          <CreationMeter label="饱腹" value={activeSpace?.fullness ?? 62} color="#d9a766" />
-          <CreationMeter label="洁净" value={activeSpace?.cleanliness ?? 64} color="#7da9bd" />
-          <CreationMeter label="亲密" value={activeSpace?.affection ?? 68} color={colors.accentDark} />
-        </View>
-        <View style={styles.creationResourceRow}>
-          <CreationResourcePill label="奖励" value={`${treatBalance} 点`} icon={<Bone color={colors.accentDark} size={14} strokeWidth={2.5} />} />
-          <CreationResourcePill label="日常粮" value={`${basicFoodCount} 份`} icon={<Utensils color={colors.accentDark} size={14} strokeWidth={2.5} />} />
-          <CreationResourcePill label="鲜食粮" value={`${premiumFoodCount} 份`} icon={<Sparkles color={colors.accentDark} size={14} strokeWidth={2.5} />} />
-        </View>
-      </Card>
+        </Animated.View>
+      ) : null}
 
-      <Card>
-        <View style={styles.sectionHeader}>
-          <Text style={styles.sectionTitle}>选择云宠</Text>
-          <Text style={styles.creationLevelText}>Lv.{activeSpace?.pet_level ?? 1} · {activeSpace?.growth_points ?? 0} 成长</Text>
+      {townView === "hub" ? (
+        <View style={styles.creationHub}>
+          <Image source={creationTownAssets.hubConcept} style={styles.creationHubConceptImage} resizeMode="cover" />
+          <View pointerEvents="none" style={styles.creationHubVeil} />
+          <Pressable accessibilityRole="button" accessibilityLabel="返回首页" onPress={onBack} style={styles.creationHubBackButton}>
+            <ChevronLeft color={colors.ink} size={23} strokeWidth={2.4} />
+          </Pressable>
+          <View pointerEvents="none" {...petSafeContentProps()} style={styles.creationHubTitleBlock}>
+            <Text style={styles.creationHubKicker}>共创空间</Text>
+            <Text style={styles.creationHubScreenTitle}>迪灵小镇</Text>
+            <Text style={styles.creationHubScreenSubtitle}>我们的小世界，温柔共建中</Text>
+          </View>
+          <View pointerEvents="none" style={styles.creationHubDilingCover}>
+            <View style={styles.creationHubDilingMask} />
+            <View style={styles.creationHubDilingGlow}>
+              <PetWorldCanvas
+                space={activeSpace}
+                decision={{ animation: hubDilingScene.animation, mood: hubDilingScene.sceneAction === "rest_home" ? "sleepy" : "happy" }}
+                hidden={false}
+                sceneAction={hubDilingScene.sceneAction}
+                locomotion={{
+                  moving: true,
+                  directionX: hubDilingScene.sceneAction === "return_home" ? 0.36 : 0,
+                  directionY: hubDilingScene.sceneAction === "rest_home" ? 0.04 : 0.12,
+                  speed: hubDilingScene.speed,
+                  intensity: hubDilingScene.intensity,
+                  stepPhase: hubDilingScene.stepPhase + hubDilingSceneIndex * 0.42,
+                  travelDistance: hubDilingScene.travelDistance + hubDilingSceneIndex * 6,
+                  cadence: hubDilingScene.cadence,
+                }}
+                framing="room"
+              />
+            </View>
+          </View>
+          <Animated.View {...petAnchorProps("creation-pet-home", "creation-pet-home")} style={[styles.creationHubPetHotspot, { transform: [{ translateY: petIslandLift }] }]}>
+            <Pressable accessibilityRole="button" accessibilityLabel="进入精灵暖阁" onPress={() => onTownViewChange("pet")} style={({ pressed }) => [styles.creationHubHotspotButton, pressed ? styles.creationIslandPressed : null]}>
+              <View {...petSafeActionProps()} style={styles.creationHubPetLabel}>
+                <Text style={styles.creationHubLabelTitle}>迪灵小窝</Text>
+                <Text style={styles.creationHubLabelBadge}>进入精灵暖阁</Text>
+                <Text style={styles.creationHubLabelText}>只有一个入口，点这里去看迪灵</Text>
+              </View>
+            </Pressable>
+          </Animated.View>
+          <Animated.View {...petAnchorProps("creation-footprints", "creation-footprints")} style={[styles.creationHubFootprintHotspot, { transform: [{ translateY: footprintIslandLift }, { rotate: footprintTilt }] }]}>
+            <Pressable accessibilityRole="button" accessibilityLabel="进入浪漫足迹" onPress={() => onTownViewChange("footprints")} style={({ pressed }) => [styles.creationHubHotspotButton, pressed ? styles.creationIslandPressed : null]}>
+              <View {...petSafeActionProps()} style={styles.creationHubSmallLabel}>
+                <Text style={styles.creationHubLabelTitle}>足迹之旅</Text>
+                <Text style={styles.creationHubLabelText}>进入足迹记录</Text>
+              </View>
+            </Pressable>
+          </Animated.View>
+          <Animated.View {...petAnchorProps("creation-playground", "creation-playground")} style={[styles.creationHubGameHotspot, { transform: [{ translateY: playgroundIslandLift }, { rotate: playgroundTilt }] }]}>
+            <Pressable accessibilityRole="button" accessibilityLabel="进入心情乐园" onPress={() => onTownViewChange("playground")} style={({ pressed }) => [styles.creationHubHotspotButton, pressed ? styles.creationIslandPressed : null]}>
+              <View {...petSafeActionProps()} style={styles.creationHubSmallLabel}>
+                <Text style={styles.creationHubLabelTitle}>心情乐园</Text>
+                <Text style={styles.creationHubLabelText}>进入今日挑战</Text>
+              </View>
+            </Pressable>
+          </Animated.View>
         </View>
-        <View style={styles.creationPetGrid}>
-          {creationPetOptions.map((petOption) => {
-            const active = selectedPetKey === petOption.key;
-            return (
-              <Pressable
-                key={petOption.key}
-                accessibilityRole="button"
-                accessibilityLabel={`选择${petOption.title}`}
-                onPress={() => void choosePet(petOption.key)}
-                style={({ pressed }) => [
-                  styles.creationPetOption,
-                  active ? styles.creationPetOptionActive : null,
-                  pressed ? styles.creationPetOptionPressed : null,
-                ]}
-              >
-                <Image source={petOption.image} style={styles.creationPetOptionImage} resizeMode="cover" />
-                <View style={styles.creationPetOptionText}>
-                  <Text style={styles.creationPetOptionTitle}>{petOption.title}</Text>
-                  <Text style={styles.creationPetOptionMeta}>{petOption.trait}</Text>
+      ) : null}
+
+      {townView === "pet" ? (
+        <View style={styles.creationCabin}>
+          <Card soft style={styles.creationCabinStageCard}>
+            <View style={styles.creationHeroTop}>
+              <CoupleAvatarGroup me={me} partner={partner} size={42} />
+              <View style={styles.creationHeroBadge}>
+                <Sparkles color={colors.accentDark} size={14} strokeWidth={2.6} />
+                <Text style={styles.creationHeroBadgeText}>精灵暖阁</Text>
+              </View>
+            </View>
+            <View style={styles.creationMeters}>
+              <CreationMeter label="饱腹" value={activeSpace?.fullness ?? 62} color="#F4C870" />
+              <CreationMeter label="洁净" value={activeSpace?.cleanliness ?? 64} color="#8CB7C8" />
+              <CreationMeter label="亲密" value={activeSpace?.affection ?? 68} color="#E69CB2" />
+            </View>
+            <View {...petAnchorProps("pet-room-stage", "pet-stage")} style={styles.creationCabinStageWrap}>
+              <Image source={creationTownAssets.cabinInterior} style={styles.creationCabinInteriorImage} resizeMode="cover" />
+              <View style={styles.creationCabinPetStage}>
+                <PetStage
+                  petKey={dilingPetOption.key}
+                  petName={petDisplayName}
+                  petTitle={dilingPetOption.title}
+                  petTrait={dilingPetOption.trait}
+                  fullness={activeSpace?.fullness ?? 62}
+                  cleanliness={activeSpace?.cleanliness ?? 64}
+                  affection={activeSpace?.affection ?? 68}
+                  energy={activeSpace?.energy ?? 72}
+                  reaction={latestPetReaction}
+                  rigCue={rigCue}
+                  scene="overlay"
+                  onTapPet={() => void interactPet("pet")}
+                  onStrokePet={() => void interactPet("pet")}
+                />
+              </View>
+              <Pressable accessibilityRole="button" accessibilityLabel="打开共享粮仓" onPress={() => setGranaryOpen((open) => !open)} style={styles.creationGranaryButton}>
+                <ShoppingBag color={colors.accentDark} size={20} strokeWidth={2.5} />
+              <Text style={styles.creationGranaryButtonText}>{totalFoodCount}</Text>
+              </Pressable>
+            </View>
+            {granaryOpen ? (
+              <View style={styles.creationGranaryDrawer}>
+                <View style={styles.creationGranaryHeader}>
+                  <Text style={styles.creationGranaryTitle}>共享小粮仓</Text>
+                  <Text style={styles.creationLevelText}>{treatBalance} 心愿星糖</Text>
                 </View>
-                {active ? (
-                  <View style={styles.creationPetCheck}>
-                    {choosePetBusy === petOption.key ? <Text style={styles.creationPetCheckText}>...</Text> : <Check color="#fff" size={13} strokeWidth={3} />}
+                <View style={styles.creationShopGrid}>
+                  <CreationFoodCard
+                    title="日常粮"
+                    description="足迹打卡产出的温饱养分。"
+                    price={6}
+                    count={basicFoodCount}
+                    icon={<Utensils color={colors.accentDark} size={18} strokeWidth={2.5} />}
+                    loading={storeBusy === "basic"}
+                    disabled={treatBalance < 6}
+                    onBuy={() => void buyFood("basic")}
+                  />
+                  <CreationFoodCard
+                    title="鲜食粮"
+                    description="解谜通关带来的豪华加餐。"
+                    price={14}
+                    count={premiumFoodCount}
+                    icon={<Sparkles color={colors.accentDark} size={18} strokeWidth={2.5} />}
+                    loading={storeBusy === "premium"}
+                    disabled={treatBalance < 14}
+                    onBuy={() => void buyFood("premium")}
+                  />
+                </View>
+                <View style={styles.creationActionRow}>
+                  <SecondaryButton label={`投喂日常粮 · ${basicFoodCount}`} active={petBusy === "basic"} loading={petBusy === "basic"} disabled={basicFoodCount <= 0 || petBrainBusy} onPress={() => void feedPet("basic")} icon={<Utensils color={colors.accentDark} size={16} />} />
+                  <SecondaryButton label={`投喂鲜食粮 · ${premiumFoodCount}`} active={petBusy === "premium"} loading={petBusy === "premium"} disabled={premiumFoodCount <= 0 || petBrainBusy} onPress={() => void feedPet("premium")} icon={<Sparkles color={colors.accentDark} size={16} />} />
+                </View>
+              </View>
+            ) : null}
+            <View style={styles.creationActionRow}>
+              <SecondaryButton label={petBrainBusy && petBusy === "pet" ? "回应中" : "抚摸"} active={petBusy === "pet"} loading={petBusy === "pet"} disabled={petBrainBusy} onPress={() => void interactPet("pet")} icon={<Heart color={colors.accentDark} size={16} />} />
+              <SecondaryButton label={cleanButtonLabel} active={petBusy === "clean"} loading={petBusy === "clean"} disabled={petBrainBusy} onPress={() => void interactPet("clean")} icon={<ImagePlus color={colors.accentDark} size={16} />} />
+            </View>
+          </Card>
+
+          <Card>
+            <View style={styles.sectionHeader}>
+              <Text style={styles.sectionTitle}>小屋日志</Text>
+              <Text style={styles.creationLevelText}>7 天 + 重要记忆</Text>
+            </View>
+            {visiblePetMemories.length ? (
+              <View style={styles.petMemoryList}>
+                {visiblePetMemories.map((memory) => (
+                  <PetMemoryRow key={memory.id} memory={memory} onChanged={onChanged} />
+                ))}
+              </View>
+            ) : (
+              <EmptyState title="还没有形成记忆" description="多照顾几次，或者记录足迹后，它会慢慢记住重要的小事。" />
+            )}
+          </Card>
+
+          <Card>
+            <View style={styles.sectionHeader}>
+              <Text style={styles.sectionTitle}>迪灵档案</Text>
+              <Text style={styles.creationLevelText}>Lv.{activeSpace?.pet_level ?? 1} · {activeSpace?.growth_points ?? 0} 成长</Text>
+            </View>
+            <View style={styles.creationDilingProfile}>
+              <View style={[styles.creationDilingPortrait, Platform.OS === "web" ? styles.creationDilingPortrait3D : null]}>
+                {Platform.OS === "web" ? (
+                  <View testID="creation-diling-profile-3d" style={styles.creationDilingProfile3DStage}>
+                    <PetWorldCanvas
+                      space={activeSpace}
+                      decision={{ animation: "idle", mood: "calm" }}
+                      hidden={false}
+                      sceneAction="settle_home"
+                      locomotion={{
+                        moving: true,
+                        directionX: 0.12,
+                        directionY: 0.04,
+                        speed: 18,
+                        intensity: 0.14,
+                        stepPhase: 1.6,
+                        travelDistance: 18,
+                        cadence: "pause",
+                      }}
+                      framing="room"
+                    />
                   </View>
                 ) : null}
-              </Pressable>
-            );
-          })}
-        </View>
-        <Text style={styles.creationPetDescription}>{selectedPet.description}</Text>
-      </Card>
-
-      <Card>
-        <View style={styles.sectionHeader}>
-          <Text style={styles.sectionTitle}>喂养和互动</Text>
-          <Text style={styles.creationLevelText}>粮仓 {basicFoodCount + premiumFoodCount} 份</Text>
-        </View>
-        <View style={styles.creationActionRow}>
-          <SecondaryButton label={`喂日常粮 · ${basicFoodCount}`} active={petBusy === "basic"} loading={petBusy === "basic"} disabled={basicFoodCount <= 0} onPress={() => void feedPet("basic")} icon={<Utensils color={colors.accentDark} size={16} />} />
-          <SecondaryButton label={`喂鲜食粮 · ${premiumFoodCount}`} active={petBusy === "premium"} loading={petBusy === "premium"} disabled={premiumFoodCount <= 0} onPress={() => void feedPet("premium")} icon={<Sparkles color={colors.accentDark} size={16} />} />
-          <SecondaryButton label="抚摸" active={petBusy === "pet"} loading={petBusy === "pet"} onPress={() => void interactPet("pet")} icon={<Heart color={colors.accentDark} size={16} />} />
-          <SecondaryButton label="清洁小屋" active={petBusy === "clean"} loading={petBusy === "clean"} onPress={() => void interactPet("clean")} icon={<ImagePlus color={colors.accentDark} size={16} />} />
-        </View>
-        <InlineNotice tone="info">日常粮来自初始库存或奖励购买；鲜食粮更贵，但成长和亲密提升更明显。</InlineNotice>
-      </Card>
-
-      <Card>
-        <View style={styles.sectionHeader}>
-          <Text style={styles.sectionTitle}>小屋设置</Text>
-          <ShoppingBag color={colors.accentDark} size={18} strokeWidth={2.4} />
-        </View>
-        <AppTextInput value={petName} onChangeText={setPetName} placeholder="给共享宠物取个名字" maxLength={16} />
-        <AppTextInput value={homeTheme} onChangeText={setHomeTheme} placeholder="小屋主题，例如 cream / sea / night" maxLength={24} />
-        <View style={styles.creationDecorRow}>
-          <AppTextInput value={decorOne} onChangeText={setDecorOne} placeholder="装饰位 1" maxLength={18} style={styles.creationDecorInput} />
-          <AppTextInput value={decorTwo} onChangeText={setDecorTwo} placeholder="装饰位 2" maxLength={18} style={styles.creationDecorInput} />
-          <AppTextInput value={decorThree} onChangeText={setDecorThree} placeholder="装饰位 3" maxLength={18} style={styles.creationDecorInput} />
-        </View>
-        <PrimaryButton label={homeBusy ? "保存中" : "保存小屋"} onPress={saveHome} loading={homeBusy} />
-      </Card>
-
-      <Card>
-        <View style={styles.sectionHeader}>
-          <Text style={styles.sectionTitle}>粮仓商店</Text>
-          <Text style={styles.creationLevelText}>{treatBalance} 点奖励</Text>
-        </View>
-        <View style={styles.creationShopGrid}>
-          <CreationFoodCard
-            title="日常粮"
-            description="基础饱腹，适合每天照顾。"
-            price={6}
-            count={basicFoodCount}
-            icon={<Utensils color={colors.accentDark} size={18} strokeWidth={2.5} />}
-            loading={storeBusy === "basic"}
-            disabled={treatBalance < 6}
-            onBuy={() => void buyFood("basic")}
-          />
-          <CreationFoodCard
-            title="鲜食粮"
-            description="更高成长和亲密，奖励足够时再买。"
-            price={14}
-            count={premiumFoodCount}
-            icon={<Sparkles color={colors.accentDark} size={18} strokeWidth={2.5} />}
-            loading={storeBusy === "premium"}
-            disabled={treatBalance < 14}
-            onBuy={() => void buyFood("premium")}
-          />
-        </View>
-      </Card>
-
-      <Card style={styles.creationGameCard}>
-        <View style={styles.sectionHeader}>
-          <Text style={styles.sectionTitle}>解谜奖励</Text>
-          <Gamepad2 color={colors.accentDark} size={18} strokeWidth={2.5} />
-        </View>
-        <View style={styles.creationPuzzleHeader}>
-          <View style={styles.creationPuzzleBadge}>
-            <Brain color={colors.accentDark} size={15} strokeWidth={2.5} />
-            <Text style={styles.creationPuzzleBadgeText}>{currentPuzzle.type}</Text>
-          </View>
-          <SecondaryButton label="换一题" onPress={switchPuzzle} />
-        </View>
-        <Text style={styles.creationPuzzleQuestion}>{currentPuzzle.question}</Text>
-        <View style={styles.creationPuzzleOptions}>
-          {currentPuzzle.options.map((option) => {
-            const active = selectedPuzzleAnswer === option;
-            return (
-              <Pressable
-                key={option}
-                accessibilityRole="button"
-                accessibilityLabel={`选择答案 ${option}`}
-                onPress={() => {
-                  setSelectedPuzzleAnswer(option);
-                  setPuzzleFeedback(null);
-                }}
-                style={[styles.creationPuzzleOption, active ? styles.creationPuzzleOptionActive : null]}
-              >
-                <Text style={[styles.creationPuzzleOptionText, active ? styles.creationPuzzleOptionTextActive : null]}>{option}</Text>
-              </Pressable>
-            );
-          })}
-        </View>
-        {puzzleFeedback === "wrong" ? <InlineNotice tone="info">{currentPuzzle.hint}</InlineNotice> : null}
-        {puzzleFeedback === "correct" ? <InlineNotice tone="success">答对了。奖励会进入你们共享粮仓账户。</InlineNotice> : null}
-        <PrimaryButton label={gameBusy ? "领取中" : "答对领取 10 点奖励"} onPress={() => void claimPuzzleReward()} loading={gameBusy} icon={<Bone color="#fff" size={16} strokeWidth={2.5} />} />
-      </Card>
-
-      <Card>
-        <View style={styles.sectionHeader}>
-          <Text style={styles.sectionTitle}>足迹地图</Text>
-          <SecondaryButton label={locating ? "定位中" : "辅助定位"} onPress={useCurrentLocation} loading={locating} />
-        </View>
-        <View style={styles.footprintForm}>
-          <AppTextInput value={footprintTitle} onChangeText={setFootprintTitle} placeholder="地点名，例如 晚风桥边" maxLength={28} />
-          <DateField value={footprintDate} onChangeText={setFootprintDate} placeholder="选择日期" />
-          <AppTextInput value={footprintNote} onChangeText={setFootprintNote} placeholder="备注（可选）" multiline style={styles.footprintNoteInput} />
-          <View style={styles.footprintCoordRow}>
-            <AppTextInput value={latitude} onChangeText={setLatitude} placeholder="纬度（可空）" keyboardType="decimal-pad" style={styles.footprintCoordInput} />
-            <AppTextInput value={longitude} onChangeText={setLongitude} placeholder="经度（可空）" keyboardType="decimal-pad" style={styles.footprintCoordInput} />
-          </View>
-          <InlineNotice tone="info">拒绝定位也可以继续记录；坐标可留空，只保存地点名和备注。</InlineNotice>
-          <View style={styles.creationActionRow}>
-            {editingFootprintId ? <SecondaryButton label="取消编辑" onPress={resetFootprintForm} /> : null}
-            <PrimaryButton label={footprintBusy ? "保存中" : editingFootprintId ? "更新足迹" : "记录足迹"} onPress={saveFootprint} disabled={!canSaveFootprint} loading={footprintBusy} />
-          </View>
-        </View>
-        <View style={styles.creationFootprintList}>
-          {displayedFootprints.length ? (
-            displayedFootprints.map((footprint) => {
-              const mine = footprint.created_by === user?.id;
-              return (
-                <View key={footprint.id} style={styles.creationFootprintItem}>
-                  <View style={styles.creationFootprintText}>
-                    <Text style={styles.creationFootprintTitle}>{footprint.title}</Text>
-                    <Text style={styles.creationFootprintMeta}>{formatMemoryDate(footprint.visited_at)}{footprint.note ? ` · ${footprint.note}` : ""}</Text>
-                    {footprint.latitude !== null && footprint.longitude !== null ? (
-                      <Text style={styles.creationFootprintCoords}>{formatCoordinate(footprint.latitude)}, {formatCoordinate(footprint.longitude)}</Text>
-                    ) : null}
-                  </View>
-                  {mine ? (
-                    <View style={styles.creationFootprintActions}>
-                      <SecondaryButton label="编辑" onPress={() => beginEditFootprint(footprint)} />
-                      <SecondaryButton label="删除" danger onPress={() => void deleteFootprint(footprint)} icon={<Trash2 color={colors.accentDark} size={15} />} />
-                    </View>
-                  ) : null}
-                </View>
-              );
-            })
-          ) : (
-            <EmptyState title="还没有足迹" description="先手动记录一个地点，之后会出现在记忆页的日常里。" />
-          )}
-        </View>
-      </Card>
-
-      <Card>
-        <View style={styles.sectionHeader}>
-          <Text style={styles.sectionTitle}>共创动态</Text>
-          <Text style={styles.creationLevelText}>最近 {recentActions.length} 条</Text>
-        </View>
-        {recentActions.length ? (
-          recentActions.map((action) => (
-            <View key={action.id} style={styles.creationActionItem}>
-              <Text style={styles.creationActionTitle}>{action.action_label}</Text>
-              <Text style={styles.creationActionMeta}>{formatMemoryDate(action.created_at)}</Text>
+              </View>
+              <View style={styles.creationDilingCopy}>
+                <Text style={styles.creationDilingTitle}>{dilingPetOption.title}</Text>
+                <Text style={styles.creationDilingMeta}>{dilingPetOption.trait}</Text>
+                <Text style={styles.creationPetDescription}>{dilingPetOption.description}</Text>
+              </View>
             </View>
-          ))
-        ) : (
-          <EmptyState title="还没有动态" description="喂养、整理小屋或记录足迹后，会在这里留下轻量记录。" />
-        )}
-      </Card>
+          </Card>
+
+          <Card>
+            <View style={styles.sectionHeader}>
+              <Text style={styles.sectionTitle}>小屋设置</Text>
+              <ShoppingBag color={colors.accentDark} size={18} strokeWidth={2.4} />
+            </View>
+            <View style={styles.creationIdentityPill}>
+              <Text style={styles.creationIdentityLabel}>共享精灵</Text>
+              <Text style={styles.creationIdentityValue}>{petName}</Text>
+            </View>
+            <AppTextInput value={homeTheme} onChangeText={setHomeTheme} placeholder="小屋主题，例如 cream / sea / night" maxLength={24} />
+            <View style={styles.creationDecorRow}>
+              <AppTextInput value={decorOne} onChangeText={setDecorOne} placeholder="装饰位 1" maxLength={18} style={styles.creationDecorInput} />
+              <AppTextInput value={decorTwo} onChangeText={setDecorTwo} placeholder="装饰位 2" maxLength={18} style={styles.creationDecorInput} />
+              <AppTextInput value={decorThree} onChangeText={setDecorThree} placeholder="装饰位 3" maxLength={18} style={styles.creationDecorInput} />
+            </View>
+            <PrimaryButton label={homeBusy ? "保存中" : "保存小屋"} onPress={saveHome} loading={homeBusy} />
+          </Card>
+        </View>
+      ) : null}
+
+      {townView === "footprints" ? (
+        <View style={styles.creationFootprintPage}>
+          <CreationRewardRibbon
+            primaryLabel="日常粮"
+            primaryValue={`${basicFoodCount}`}
+            primaryDelta="+1"
+            primaryIcon={<Utensils color={colors.accentDark} size={17} strokeWidth={2.5} />}
+            secondaryLabel="心愿星糖"
+            secondaryValue={`${treatBalance}`}
+            secondaryDelta="+10"
+            secondaryIcon={<Star color={colors.accentDark} fill="#f8d783" size={17} strokeWidth={2.5} />}
+            pulseKind={assetPulse}
+            activeKinds={["footprint"]}
+          />
+          <View {...petAnchorProps("footprints-journey", "footprint-journey")}>
+          <Card soft style={styles.creationJourneyCard}>
+            <Image source={creationTownAssets.footprintsConcept} style={styles.creationJourneySceneImage} resizeMode="cover" />
+            <View pointerEvents="none" style={styles.creationJourneySceneVeil} />
+            <View style={styles.creationJourneyHeader}>
+              <View style={styles.creationCompass}>
+                <Compass color={colors.accentDark} size={30} strokeWidth={2.4} />
+              </View>
+              <View style={styles.creationJourneyCopy}>
+                <Text style={styles.creationHeroTitle}>足迹之旅</Text>
+                <Text style={styles.creationHeroText}>每点亮一个地方，都会变成迪灵小家的日常粮和心愿星糖。</Text>
+              </View>
+            </View>
+            <View style={styles.creationPolaroidRail}>
+              {displayedFootprints.length ? (
+                displayedFootprints.map((footprint) => {
+                  const mine = footprint.created_by === user?.id;
+                  return (
+                    <View key={footprint.id} {...petAnchorProps(`footprint-card-${footprint.id}`, "footprint-card")} style={styles.creationPolaroid}>
+                      <View style={styles.creationTimelineHeart}>
+                        <Heart color={colors.accentDark} fill={colors.accentDark} size={11} />
+                      </View>
+                      <View style={styles.creationPolaroidPin}>
+                        <MapPin color={colors.accentDark} size={15} strokeWidth={2.5} />
+                      </View>
+                      <View style={styles.creationPolaroidPhoto}>
+                        <MapPin color="#fff" size={17} strokeWidth={2.5} />
+                      </View>
+                      <Text style={styles.creationFootprintTitle}>{footprint.title}</Text>
+                      <Text style={styles.creationFootprintMeta}>{formatMemoryDate(footprint.visited_at)}{footprint.note ? ` · ${footprint.note}` : ""}</Text>
+                      {footprint.latitude !== null && footprint.longitude !== null ? (
+                        <Text style={styles.creationFootprintCoords}>{formatCoordinate(footprint.latitude)}, {formatCoordinate(footprint.longitude)}</Text>
+                      ) : null}
+                      {mine ? (
+                        <View {...petSafeActionProps()} style={styles.creationFootprintActions}>
+                          <SecondaryButton label="编辑" onPress={() => {
+                            beginEditFootprint(footprint);
+                            setFootprintFormOpen(true);
+                          }} />
+                          <SecondaryButton label="删除" danger onPress={() => void deleteFootprint(footprint)} icon={<Trash2 color={colors.accentDark} size={15} />} />
+                        </View>
+                      ) : null}
+                    </View>
+                  );
+                })
+              ) : (
+                <EmptyState title="还没有足迹" description="先手动记录一个地点，之后会出现在记忆页的日常里。" />
+              )}
+            </View>
+            <View {...petSafeActionProps()}>
+            <SecondaryButton label={footprintFormOpen ? "收起记录" : "+ 记录新的足迹"} active={footprintFormOpen} onPress={() => setFootprintFormOpen((open) => !open)} icon={<MapPin color={colors.accentDark} size={16} />} />
+            </View>
+          </Card>
+          </View>
+
+          {footprintFormOpen ? (
+            <Card style={styles.creationFootprintFormCard}>
+              <View style={styles.sectionHeader}>
+                <Text style={styles.sectionTitle}>{editingFootprintId ? "编辑足迹" : "点亮新足迹"}</Text>
+                <View {...petSafeActionProps()}>
+                  <SecondaryButton label={locating ? "定位中" : "辅助定位"} onPress={useCurrentLocation} loading={locating} />
+                </View>
+              </View>
+              <View style={styles.footprintForm}>
+                <AppTextInput value={footprintTitle} onChangeText={setFootprintTitle} placeholder="地点名，例如 晚风桥边" maxLength={28} />
+                <DateField value={footprintDate} onChangeText={setFootprintDate} placeholder="选择日期" />
+                <AppTextInput value={footprintNote} onChangeText={setFootprintNote} placeholder="备注（可选）" multiline style={styles.footprintNoteInput} />
+                <View style={styles.footprintCoordRow}>
+                  <AppTextInput value={latitude} onChangeText={setLatitude} placeholder="纬度（可空）" keyboardType="decimal-pad" style={styles.footprintCoordInput} />
+                <AppTextInput value={longitude} onChangeText={setLongitude} placeholder="经度（可空）" keyboardType="decimal-pad" style={styles.footprintCoordInput} />
+                </View>
+                <InlineNotice tone="info">坐标可留空；新增成功会获得日常粮 +1 和心愿星糖 +10。</InlineNotice>
+                <View {...petSafeActionProps()} style={styles.creationActionRow}>
+                  {editingFootprintId ? <SecondaryButton label="取消编辑" onPress={resetFootprintForm} /> : null}
+                  <PrimaryButton label={footprintBusy ? "保存中" : editingFootprintId ? "更新足迹" : "点亮并领取养分"} onPress={saveFootprint} disabled={!canSaveFootprint} loading={footprintBusy} icon={<Gift color="#fff" size={16} />} />
+                </View>
+              </View>
+            </Card>
+          ) : null}
+        </View>
+      ) : null}
+
+      {townView === "playground" ? (
+        <View style={styles.creationPlayground}>
+          <CreationRewardRibbon
+            primaryLabel="鲜食粮"
+            primaryValue={`${premiumFoodCount}`}
+            primaryDelta="+1"
+            primaryIcon={<Sparkles color={colors.accentDark} size={17} strokeWidth={2.5} />}
+            secondaryLabel="心愿星糖"
+            secondaryValue={`${treatBalance}`}
+            secondaryDelta="+15"
+            secondaryIcon={<Star color={colors.accentDark} fill="#f8d783" size={17} strokeWidth={2.5} />}
+            pulseKind={assetPulse}
+            activeKinds={["puzzle"]}
+          />
+          <View {...petAnchorProps("playground-card", "playground-card")}>
+          <Card soft style={styles.creationPuzzleEnvelope}>
+            <Image source={creationTownAssets.playgroundConcept} style={styles.creationPuzzleSceneImage} resizeMode="cover" />
+            <View pointerEvents="none" style={styles.creationPuzzleSceneVeil} />
+            <View style={styles.creationPuzzleTopLine}>
+              <View style={styles.creationPuzzleBadge}>
+                <Brain color={colors.accentDark} size={15} strokeWidth={2.5} />
+                <Text style={styles.creationPuzzleBadgeText}>今日挑战 · {currentPuzzle.type}</Text>
+              </View>
+              <View style={styles.creationPuzzleStars}>
+                {[0, 1, 2].map((star) => (
+                  <Star key={star} color="#d7a24e" fill="#f8d783" size={14} />
+                ))}
+              </View>
+            </View>
+            <Text style={styles.creationPuzzleQuestion}>{currentPuzzle.question}</Text>
+            <View style={styles.creationPuzzleOptions}>
+              {currentPuzzle.options.map((option) => {
+                const active = selectedPuzzleAnswer === option;
+                return (
+                  <Pressable
+                    {...petSafeActionProps()}
+                    key={option}
+                    accessibilityRole="button"
+                    accessibilityLabel={`选择答案 ${option}`}
+                    onPress={() => {
+                      haptics.selection();
+                      setSelectedPuzzleAnswer(option);
+                      setPuzzleFeedback(null);
+                    }}
+                    style={[styles.creationPuzzleOption, active ? styles.creationPuzzleOptionActive : null]}
+                  >
+                    <Text style={[styles.creationPuzzleOptionText, active ? styles.creationPuzzleOptionTextActive : null]}>{option}</Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+            {puzzleFeedback === "wrong" ? <InlineNotice tone="info">{currentPuzzle.hint}</InlineNotice> : null}
+            {puzzleFeedback === "correct" ? <InlineNotice tone="success">答对啦，鲜食粮和心愿星糖会飞进共享小粮仓。</InlineNotice> : null}
+            <View {...petSafeActionProps()} style={styles.creationActionRow}>
+              <SecondaryButton label="换一题" onPress={switchPuzzle} icon={<Gamepad2 color={colors.accentDark} size={16} />} />
+              <PrimaryButton label={gameBusy ? "入仓中" : "答对领取加餐"} onPress={() => void claimPuzzleReward()} loading={gameBusy} icon={<Sparkles color="#fff" size={16} strokeWidth={2.5} />} />
+            </View>
+          </Card>
+          </View>
+          <Card style={styles.creationPlaygroundRewardCard}>
+            <View style={styles.sectionHeader}>
+              <Text style={styles.sectionTitle}>口粮捕获</Text>
+              <Text style={styles.creationLevelText}>照顾迪灵</Text>
+            </View>
+            <Text style={styles.creationHeroText}>答对谜题后会获得鲜食粮 +1 和心愿星糖 +15。回到精灵暖阁打开粮仓，就能把这份加餐喂给 {petDisplayName}。</Text>
+          </Card>
+        </View>
+      ) : null}
     </View>
   );
 }
@@ -2473,6 +3378,164 @@ function CreationResourcePill({
       </View>
     </View>
   );
+}
+
+function CreationAssetBar({
+  treatBalance,
+  basicFoodCount,
+  premiumFoodCount,
+  pulseKind,
+}: {
+  treatBalance: number;
+  basicFoodCount: number;
+  premiumFoodCount: number;
+  pulseKind: CreationRewardKind | null;
+}) {
+  return (
+    <View style={styles.creationAssetBar}>
+      <CreationAssetChip
+        label="心愿星糖"
+        value={`${treatBalance}`}
+        pulsing={pulseKind === "footprint" || pulseKind === "puzzle" || pulseKind === "food"}
+        icon={<Star color={colors.accentDark} fill="#f8d783" size={15} strokeWidth={2.5} />}
+      />
+      <CreationAssetChip
+        label="日常粮"
+        value={`${basicFoodCount}`}
+        pulsing={pulseKind === "footprint" || pulseKind === "feed"}
+        icon={<Utensils color={colors.accentDark} size={15} strokeWidth={2.5} />}
+      />
+      <CreationAssetChip
+        label="鲜食粮"
+        value={`${premiumFoodCount}`}
+        pulsing={pulseKind === "puzzle" || pulseKind === "feed"}
+        icon={<Sparkles color={colors.accentDark} size={15} strokeWidth={2.5} />}
+      />
+    </View>
+  );
+}
+
+function CreationRewardRibbon({
+  primaryLabel,
+  primaryValue,
+  primaryDelta,
+  primaryIcon,
+  secondaryLabel,
+  secondaryValue,
+  secondaryDelta,
+  secondaryIcon,
+  pulseKind,
+  activeKinds,
+}: {
+  primaryLabel: string;
+  primaryValue: string;
+  primaryDelta: string;
+  primaryIcon: ReactNode;
+  secondaryLabel: string;
+  secondaryValue: string;
+  secondaryDelta: string;
+  secondaryIcon: ReactNode;
+  pulseKind: CreationRewardKind | null;
+  activeKinds: CreationRewardKind[];
+}) {
+  const pulsing = Boolean(pulseKind && activeKinds.includes(pulseKind));
+  return (
+    <View style={styles.creationRewardRibbon}>
+      <CreationRewardPill label={primaryLabel} value={primaryValue} delta={primaryDelta} icon={primaryIcon} pulsing={pulsing} />
+      <CreationRewardPill label={secondaryLabel} value={secondaryValue} delta={secondaryDelta} icon={secondaryIcon} pulsing={pulsing} />
+    </View>
+  );
+}
+
+function CreationRewardPill({
+  label,
+  value,
+  delta,
+  icon,
+  pulsing,
+}: {
+  label: string;
+  value: string;
+  delta: string;
+  icon: ReactNode;
+  pulsing: boolean;
+}) {
+  return (
+    <View style={[styles.creationRewardPill, pulsing ? styles.creationRewardPillPulse : null]}>
+      <View style={styles.creationRewardPillIcon}>{icon}</View>
+      <View style={styles.creationRewardPillCopy}>
+        <Text style={styles.creationRewardPillLabel}>{label}</Text>
+        <Text style={styles.creationRewardPillValue}>{value}</Text>
+      </View>
+      <Text style={styles.creationRewardPillDelta}>{delta}</Text>
+    </View>
+  );
+}
+
+function CreationAssetChip({
+  label,
+  value,
+  icon,
+  pulsing,
+  compact,
+}: {
+  label: string;
+  value: string;
+  icon: ReactNode;
+  pulsing?: boolean;
+  compact?: boolean;
+}) {
+  return (
+    <View style={[styles.creationAssetChip, compact ? styles.creationAssetChipCompact : null, pulsing ? styles.creationAssetChipPulse : null]}>
+      <View style={[styles.creationAssetChipIcon, compact ? styles.creationAssetChipIconCompact : null]}>{icon}</View>
+      <View style={styles.creationAssetChipCopy}>
+        <Text style={[styles.creationAssetChipLabel, compact ? styles.creationAssetChipLabelCompact : null]}>{label}</Text>
+        <Text style={[styles.creationAssetChipValue, compact ? styles.creationAssetChipValueCompact : null]}>{value}</Text>
+      </View>
+    </View>
+  );
+}
+
+function PetMemoryRow({ memory, onChanged }: { memory: PetMemory; onChanged: () => void }) {
+  const { showToast } = useToast();
+  const [busy, setBusy] = useState(false);
+  const core = memory.memory_scope === "core";
+  const summary = petMemorySummaryText(memory.summary);
+
+  async function toggleRemember() {
+    if (busy) {
+      return;
+    }
+    setBusy(true);
+    const { error } = await supabase.rpc("toggle_pet_memory_core", {
+      memory_id: memory.id,
+      remember: !core,
+    });
+    setBusy(false);
+    if (error) {
+      showToast({ title: "记忆更新失败", message: error.message, tone: "error" });
+      return;
+    }
+    showToast({ title: core ? "已取消长期记住" : "它会长期记住这件事", tone: "success" });
+    onChanged();
+  }
+
+  return (
+    <View style={styles.petMemoryItem}>
+      <View style={styles.petMemoryCopy}>
+        <Text style={styles.petMemorySummary}>{summary}</Text>
+        <Text style={styles.petMemoryMeta}>{core ? "长期记忆" : "最近 7 天"} · {formatMemoryDate(memory.created_at)}</Text>
+      </View>
+      <SecondaryButton label={busy ? "处理中" : core ? "取消长期" : "让它记住"} onPress={() => void toggleRemember()} />
+    </View>
+  );
+}
+
+function petMemorySummaryText(summary: string) {
+  if (/被打扫得干干净净|开心地转圈圈|洗澡|擦澡|洗完澡|擦完澡|刚擦完|毛茸茸|棉花糖|小风扇|照镜子|亮晶晶|闪闪发光/.test(summary)) {
+    return "迪灵的小窝干净啦";
+  }
+  return naturalPetMessage(summary, null, "idle", "idle");
 }
 
 function CreationFoodCard({
@@ -2519,6 +3582,7 @@ function CalendarPage({
   onOpenLetter,
   onChanged,
   onUploadMemoryPhoto,
+  onPreviewMemoryPhoto,
   onCreateCapsule,
 }: {
   checkins: Checkin[];
@@ -2532,6 +3596,7 @@ function CalendarPage({
   onOpenLetter: (letter: LetterPreview) => void;
   onChanged: () => void;
   onUploadMemoryPhoto: (memory: MemoryTimelineItem, currentCount: number) => void;
+  onPreviewMemoryPhoto: (file: MediaFile, index: number) => void;
   onCreateCapsule: () => void;
 }) {
   const memories = buildMemoryTimeline(checkins, messages, events, mediaFiles, letters, footprints, currentUserId);
@@ -2540,19 +3605,36 @@ function CalendarPage({
   const filterOptions: MemoryFilter[] = ["全部", "日常", "留言", "纪念日", "信件"];
   return (
     <View style={styles.memoryScreen}>
-      <View style={styles.memoryHero}>
-        <Text style={styles.memorySubtitle}>把那些小小的瞬间，慢慢存起来。</Text>
+      <View {...petAnchorProps("memory-hero", "memory-hero")} style={styles.memoryHero}>
+        <View pointerEvents="none" style={styles.memoryHeroGlow} />
+        <View style={styles.memoryHeroTitleRow}>
+          <View style={styles.memoryHeroMark}>
+            <CapsuleMark size={34} complete />
+          </View>
+          <View style={styles.memoryHeroCopy}>
+            <Text style={styles.memoryHeroTitle}>记忆风铃</Text>
+            <Text style={styles.memorySubtitle}>把那些小小的瞬间，慢慢存起来。</Text>
+          </View>
+        </View>
+        <View style={styles.memoryHeroChimes}>
+          <View style={[styles.memoryHeroChime, styles.memoryHeroChimeRose]} />
+          <View style={[styles.memoryHeroChime, styles.memoryHeroChimeCream]} />
+          <View style={[styles.memoryHeroChime, styles.memoryHeroChimeViolet]} />
+        </View>
       </View>
+      <View {...petAnchorProps("memory-calendar", "memory-calendar")}>
       <Card style={styles.memoryCalendarCard}>
+        <View pointerEvents="none" style={styles.memoryCalendarWash} />
         <View style={styles.sectionHeader}>
           <Text style={styles.sectionTitle}>我们的日历</Text>
           <Image source={cartoonIcons.calendar} style={styles.headerIcon} resizeMode="contain" />
         </View>
         <MiniCalendar checkins={checkins} messages={messages} events={events} letters={letters} />
       </Card>
+      </View>
       <View style={styles.memoryFilterRow}>
         {filterOptions.map((option) => (
-          <Pressable key={option} onPress={() => setFilter(option)} style={[styles.memoryFilterChip, filter === option ? styles.memoryFilterChipActive : null]}>
+          <Pressable {...petSafeActionProps()} key={option} accessibilityRole="button" accessibilityLabel={`筛选${option}记忆`} onPress={() => setFilter(option)} style={[styles.memoryFilterChip, filter === option ? styles.memoryFilterChipActive : null]}>
             <Text style={[styles.memoryFilterText, filter === option ? styles.memoryFilterTextActive : null]}>{option}</Text>
           </Pressable>
         ))}
@@ -2567,11 +3649,12 @@ function CalendarPage({
               isLast={index === visibleMemories.length - 1}
               onPress={memory.letter ? () => onOpenLetter(memory.letter!) : undefined}
               onUploadPhoto={() => onUploadMemoryPhoto(memory, memory.photos.length)}
+              onPreviewPhoto={(file, photoIndex) => onPreviewMemoryPhoto(file, photoIndex)}
               onDeleted={onChanged}
             />
           ))
         ) : (
-          <Pressable accessibilityRole="button" accessibilityLabel="创建今日胶囊" onPress={onCreateCapsule} style={styles.emptyStatePressable}>
+          <Pressable {...petSafeActionProps()} accessibilityRole="button" accessibilityLabel="创建今日胶囊" onPress={onCreateCapsule} style={styles.emptyStatePressable}>
             <EmptyState title="这个分类还没有胶囊" description="点一下先创建今天的胶囊，新的日常会出现在这里。" />
           </Pressable>
         )}
@@ -2588,7 +3671,7 @@ function FloatingMemoryAction({
 }) {
   const button = (
     <View style={styles.memoryActionDock}>
-      <Pressable accessibilityRole="button" accessibilityLabel="添加记忆" onPress={onAddEvent} style={styles.memoryActionMini}>
+      <Pressable {...petSafeActionProps()} accessibilityRole="button" accessibilityLabel="添加记忆" onPress={onAddEvent} style={styles.memoryActionMini}>
         <CalendarPlus color={colors.accentDark} size={20} strokeWidth={2.4} />
       </Pressable>
     </View>
@@ -2604,33 +3687,56 @@ function FloatingMemoryAction({
 function PhotoAlbumCard({
   mediaFiles,
   onUploadPhoto,
+  onPhotoFiles,
   onPreviewPhoto,
   onDeletePhoto,
 }: {
   mediaFiles: MediaFile[];
-  onUploadPhoto: () => void;
-  onPreviewPhoto: (file: MediaFile, index?: number) => void;
+  onUploadPhoto: (options?: PhotoUploadOptions) => void;
+  onPhotoFiles: (files: PhotoFileList, options?: PhotoUploadOptions) => void;
+  onPreviewPhoto: (file: MediaFile, index?: number, sourceRect?: MotionRect | null) => void;
   onDeletePhoto: (file: MediaFile) => void;
 }) {
   const previews = mediaFiles.slice(0, 9);
   const hiddenCount = Math.max(0, mediaFiles.length - previews.length);
+  const thumbRefs = useRef<Record<string, View | null>>({});
+
+  function openPhoto(file: MediaFile, index: number) {
+    const ref = thumbRefs.current[file.id];
+    if (!ref) {
+      onPreviewPhoto(file, index, null);
+      return;
+    }
+    let measured = false;
+    ref.measureInWindow((x, y, width, height) => {
+      measured = true;
+      onPreviewPhoto(file, index, { x, y, width, height });
+    });
+    setTimeout(() => {
+      if (!measured) {
+        onPreviewPhoto(file, index, null);
+      }
+    }, 40);
+  }
 
   return (
+    <View {...petAnchorProps("home-photo-album", "photo-album")}>
     <Card style={styles.photoAlbumCard}>
       <View style={styles.photoAlbumHeader}>
         <View style={styles.photoAlbumTitleGroup}>
-          <Text style={styles.sectionTitle}>相册</Text>
+          <Text style={styles.sectionTitle}>拍立得时光墙</Text>
           <Text style={styles.photoAlbumMeta}>{mediaFiles.length ? `${mediaFiles.length} 张照片` : "还没有照片"}</Text>
         </View>
         <View style={styles.photoAlbumHeaderActions}>
           {mediaFiles.length > 9 ? (
-            <Pressable accessibilityRole="button" accessibilityLabel="查看全部照片" onPress={() => onPreviewPhoto(mediaFiles[0], 0)} style={styles.photoAlbumViewAllButton}>
+            <BouncyPressable accessibilityRole="button" accessibilityLabel="查看全部照片" onPress={() => openPhoto(mediaFiles[0], 0)} haptic="selection" style={styles.photoAlbumViewAllButton}>
               <Text style={styles.photoAlbumViewAllText}>查看全部</Text>
-            </Pressable>
+            </BouncyPressable>
           ) : null}
-          <Pressable accessibilityRole="button" accessibilityLabel="上传照片" onPress={onUploadPhoto} style={styles.photoAlbumUploadButton}>
+          <BouncyPressable accessibilityRole="button" accessibilityLabel="上传照片" onPress={Platform.OS === "web" ? undefined : () => onUploadPhoto()} haptic="selection" style={styles.photoAlbumUploadButton}>
             <ImagePlus color={colors.accentDark} size={17} />
-          </Pressable>
+            <PhotoUploadInput accessibilityLabel="上传照片" multiple onFiles={onPhotoFiles} />
+          </BouncyPressable>
         </View>
       </View>
       {previews.length ? (
@@ -2638,40 +3744,81 @@ function PhotoAlbumCard({
           {previews.map((file, index) => {
             const rotateDeg = `${(index % 3 === 0 ? -2.2 : index % 3 === 1 ? 1.8 : -1.2) * (1 - (index % 2) * 0.4)}deg`;
             return (
-              <View key={file.id} style={[styles.photoAlbumThumb, { transform: [{ rotate: rotateDeg }] }]}>
-              <Pressable
+              <View key={file.id} ref={(node) => { thumbRefs.current[file.id] = node; }} collapsable={false} style={[styles.photoAlbumThumb, { transform: [{ rotate: rotateDeg }] }]}>
+              <BouncyPressable
                 accessibilityRole="button"
-                accessibilityLabel={`查看照片 ${index + 1}${file.caption ? ` ${file.caption}` : ""}`}
-                onPress={() => onPreviewPhoto(file, index)}
+                accessibilityLabel={`查看照片 ${index + 1}${file.caption ? ` ${mediaCaptionLabel(file)}` : ""}`}
+                onPress={() => openPhoto(file, index)}
+                haptic="selection"
                 style={styles.photoAlbumThumbPressable}
               >
-                {file.signedUrl ? <Image source={{ uri: file.signedUrl }} style={styles.photoAlbumImage} resizeMode="cover" /> : null}
+                {file.signedUrl ? <CrossFadeImage source={{ uri: file.signedUrl }} style={styles.photoAlbumImage} resizeMode="cover" /> : <BreathingSkeleton style={styles.photoAlbumImage} />}
                 {hiddenCount > 0 && index === previews.length - 1 ? (
                   <View pointerEvents="none" style={styles.photoAlbumMoreOverlay}>
                     <Text style={styles.photoAlbumMoreText}>+{hiddenCount}</Text>
                   </View>
                 ) : null}
-              </Pressable>
-              <Pressable
+              </BouncyPressable>
+              <Text numberOfLines={1} style={styles.photoAlbumCaption}>{mediaCaptionLabel(file, `${index + 1} 号瞬间`)}</Text>
+              <BouncyPressable
                 accessibilityRole="button"
-                accessibilityLabel={`删除照片 ${index + 1}${file.caption ? ` ${file.caption}` : ""}`}
+                accessibilityLabel={`删除照片 ${index + 1}${file.caption ? ` ${mediaCaptionLabel(file)}` : ""}`}
                 onPress={() => onDeletePhoto(file)}
+                haptic="selection"
                 style={styles.photoAlbumDeleteBadge}
               >
                 <Trash2 color="#fff" size={12} strokeWidth={2.8} />
-              </Pressable>
+              </BouncyPressable>
             </View>
           );
         })}
       </View>
       ) : (
-        <Pressable accessibilityRole="button" accessibilityLabel="上传第一张照片" onPress={onUploadPhoto} style={styles.photoAlbumEmpty}>
-          <ImagePlus color={colors.accentDark} size={24} />
-          <Text style={styles.photoAlbumEmptyTitle}>上传第一张照片</Text>
-          <Text style={styles.photoAlbumEmptyText}>合照、截图、小票和今天的风景，都可以先放进这里。</Text>
-        </Pressable>
+        <BouncyPressable accessibilityRole="button" accessibilityLabel="上传第一张照片" onPress={Platform.OS === "web" ? undefined : () => onUploadPhoto()} haptic="selection" style={styles.photoAlbumEmpty}>
+          <PhotoUploadInput accessibilityLabel="上传第一张照片" multiple onFiles={onPhotoFiles} />
+          <View style={styles.photoAlbumEmptyCamera}>
+            <ImagePlus color="rgba(123,103,108,0.52)" size={28} />
+          </View>
+          <Text style={styles.photoAlbumEmptyTitle}>下一个瞬间</Text>
+          <Text style={styles.photoAlbumEmptyText}>在这里，留存我们的下一个瞬间。</Text>
+        </BouncyPressable>
       )}
     </Card>
+    </View>
+  );
+}
+
+function PhotoUploadInput({
+  accessibilityLabel,
+  disabled,
+  multiple,
+  onFiles,
+}: {
+  accessibilityLabel: string;
+  disabled?: boolean;
+  multiple?: boolean;
+  onFiles: (files: FileList) => void;
+}) {
+  if (Platform.OS !== "web") {
+    return null;
+  }
+
+  return (
+    <input
+      aria-label={accessibilityLabel}
+      accept="image/jpeg,image/png,image/webp,image/gif"
+      disabled={disabled}
+      multiple={multiple}
+      onChange={(event) => {
+        const files = event.currentTarget.files;
+        if (files?.length) {
+          onFiles(files);
+        }
+        event.currentTarget.value = "";
+      }}
+      style={styles.photoNativeFileInput as React.CSSProperties}
+      type="file"
+    />
   );
 }
 
@@ -2679,6 +3826,7 @@ function PhotoPreviewPopup({
   files,
   activeId,
   activeIndex,
+  sourceRect,
   onClose,
   onDelete,
   onSelect,
@@ -2686,10 +3834,15 @@ function PhotoPreviewPopup({
   files: MediaFile[];
   activeId: string;
   activeIndex: number;
+  sourceRect?: MotionRect | null;
   onClose: () => void;
   onDelete: (file: MediaFile) => void;
   onSelect: (file: MediaFile, index: number) => void;
 }) {
+  const { reducedMotion } = useMotion();
+  const intro = useSharedValue(reducedMotion ? 1 : 0);
+  const dragY = useSharedValue(0);
+  const dragX = useSharedValue(0);
   const currentIndex = Math.max(
     0,
     files.findIndex((item) => item.id === activeId),
@@ -2703,72 +3856,144 @@ function PhotoPreviewPopup({
     return null;
   }
 
+  useEffect(() => {
+    intro.value = reducedMotion ? 1 : 0;
+    intro.value = withSpring(1, motionTokens.spring.sheet);
+    dragX.value = 0;
+    dragY.value = 0;
+  }, [activeId, dragX, dragY, intro, reducedMotion]);
+
+  const source = sourceRect ?? null;
+  const viewportWidth = Platform.OS === "web" && typeof window !== "undefined" ? window.innerWidth : 390;
+  const viewportHeight = Platform.OS === "web" && typeof window !== "undefined" ? window.innerHeight : 760;
+  const estimatedCardWidth = Math.min(520, viewportWidth - 32);
+  const estimatedCardHeight = Math.min(viewportHeight - 44, estimatedCardWidth + 170);
+  const targetX = (viewportWidth - estimatedCardWidth) / 2;
+  const targetY = Math.max(18, (viewportHeight - estimatedCardHeight) / 2);
+  const fromScale = source ? Math.max(0.16, Math.min(1, source.width / estimatedCardWidth)) : 0.92;
+  const fromX = source ? source.x - targetX + source.width / 2 - estimatedCardWidth / 2 : 0;
+  const fromY = source ? source.y - targetY + source.height / 2 - estimatedCardHeight / 2 : 18;
+
+  function closeFromGesture() {
+    haptics.selection();
+    onClose();
+  }
+
+  const pan = Gesture.Pan()
+    .runOnJS(false)
+    .onUpdate((event) => {
+      dragX.value = event.translationX * 0.16;
+      dragY.value = Math.max(0, event.translationY);
+    })
+    .onEnd((event) => {
+      if (event.translationY > motionTokens.photoDismissDistance || event.velocityY > motionTokens.photoDismissVelocity) {
+        dragY.value = withTiming(viewportHeight * 0.46, { duration: 180, easing: Easing.out(Easing.quad) }, (finished) => {
+          if (finished) {
+            runOnJS(closeFromGesture)();
+          }
+        });
+        return;
+      }
+      dragX.value = withSpring(0, motionTokens.spring.sheet);
+      dragY.value = withSpring(0, motionTokens.spring.sheet);
+    });
+
+  const backdropStyle = useAnimatedStyle(() => ({
+    opacity: interpolate(dragY.value, [0, motionTokens.photoDismissDistance * 1.5], [intro.value, 0.1]),
+  }));
+
+  const cardStyle = useAnimatedStyle(() => {
+    const dragScale = interpolate(dragY.value, [0, motionTokens.photoDismissDistance * 1.8], [1, 0.78]);
+    return {
+      opacity: interpolate(intro.value, [0, 0.12, 1], [0, 1, 1]),
+      transform: [
+        { translateX: interpolate(intro.value, [0, 1], [fromX, 0]) + dragX.value },
+        { translateY: interpolate(intro.value, [0, 1], [fromY, 0]) + dragY.value },
+        { scale: interpolate(intro.value, [0, 1], [fromScale, 1]) * dragScale },
+      ],
+    };
+  });
+
   const popup = (
-    <View pointerEvents="box-none" style={styles.photoPreviewLayer}>
-      <View style={styles.photoPreviewBackdrop} />
-      <View style={styles.photoPreviewCard}>
+    <View role="dialog" aria-modal={true} pointerEvents="box-none" style={styles.photoPreviewLayer}>
+      <Reanimated.View style={[styles.photoPreviewBackdrop, backdropStyle]} />
+      <GestureDetector gesture={pan}>
+      <Reanimated.View style={[styles.photoPreviewCard, cardStyle]}>
         <View style={styles.photoPreviewHeader}>
           <View style={styles.photoPreviewCounterPill}>
             <Text style={styles.photoPreviewCounterText}>
               {currentIndex + 1} / {files.length}
             </Text>
           </View>
-          <Pressable accessibilityRole="button" accessibilityLabel="关闭预览" onPress={onClose} style={styles.photoPreviewCloseIcon}>
+          <BouncyPressable accessibilityRole="button" accessibilityLabel="关闭预览" onPress={onClose} haptic="selection" style={styles.photoPreviewCloseIcon}>
             <Text style={styles.photoPreviewCloseIconText}>×</Text>
-          </Pressable>
+          </BouncyPressable>
         </View>
         <View style={styles.photoPreviewFrame}>
-          {file.signedUrl ? <Image source={{ uri: file.signedUrl }} style={styles.photoPreviewImage} resizeMode="contain" /> : null}
+          {file.signedUrl ? <CrossFadeImage source={{ uri: file.signedUrl }} style={styles.photoPreviewImage} resizeMode="contain" /> : <BreathingSkeleton style={styles.photoPreviewImage} />}
           {canGoPrev ? (
-            <Pressable
+            <BouncyPressable
               accessibilityRole="button"
               accessibilityLabel="上一张"
-              onPress={() => onSelect(files[currentIndex - 1], currentIndex - 1)}
+              onPress={() => {
+                haptics.selection();
+                onSelect(files[currentIndex - 1], currentIndex - 1);
+              }}
+              haptic="selection"
               style={[styles.photoPreviewNavButton, styles.photoPreviewNavLeft]}
             >
               <ChevronLeft color={colors.accentDark} size={18} strokeWidth={2.8} />
-            </Pressable>
+            </BouncyPressable>
           ) : null}
           {canGoNext ? (
-            <Pressable
+            <BouncyPressable
               accessibilityRole="button"
               accessibilityLabel="下一张"
-              onPress={() => onSelect(files[currentIndex + 1], currentIndex + 1)}
+              onPress={() => {
+                haptics.selection();
+                onSelect(files[currentIndex + 1], currentIndex + 1);
+              }}
+              haptic="selection"
               style={[styles.photoPreviewNavButton, styles.photoPreviewNavRight]}
             >
               <Text style={styles.photoPreviewNavText}>›</Text>
-            </Pressable>
+            </BouncyPressable>
           ) : null}
         </View>
         <View style={styles.photoPreviewMeta}>
-          <Text style={styles.photoPreviewTitle}>{file.caption || "相册里的瞬间"}</Text>
+          <Text style={styles.photoPreviewTitle}>{mediaCaptionLabel(file, "相册里的瞬间")}</Text>
           <Text style={styles.photoPreviewBody}>这是你们相册中的第 {currentIndex + 1} 张照片。</Text>
         </View>
         <View style={styles.photoPreviewActions}>
-          <Pressable accessibilityRole="button" accessibilityLabel="删除这张照片" onPress={() => onDelete(file)} style={styles.photoPreviewDelete}>
+          <BouncyPressable accessibilityRole="button" accessibilityLabel="删除这张照片" onPress={() => onDelete(file)} haptic="selection" style={styles.photoPreviewDelete}>
             <Trash2 color={colors.accentDark} size={16} strokeWidth={2.5} />
             <Text style={styles.photoPreviewDeleteText}>删除</Text>
-          </Pressable>
-          <Pressable accessibilityRole="button" onPress={onClose} style={styles.photoPreviewClose}>
+          </BouncyPressable>
+          <BouncyPressable accessibilityRole="button" onPress={onClose} haptic="selection" style={styles.photoPreviewClose}>
             <Text style={styles.photoPreviewCloseText}>关闭</Text>
-          </Pressable>
+          </BouncyPressable>
         </View>
         {files.length > 1 ? (
           <View style={styles.photoPreviewStrip}>
             {files.map((item, index) => (
-              <Pressable
+              <BouncyPressable
                 key={item.id}
                 accessibilityRole="button"
-                accessibilityLabel={`切换到照片 ${index + 1}${item.caption ? ` ${item.caption}` : ""}`}
-                onPress={() => onSelect(item, index)}
+                accessibilityLabel={`切换到照片 ${index + 1}${item.caption ? ` ${mediaCaptionLabel(item)}` : ""}`}
+                onPress={() => {
+                  haptics.selection();
+                  onSelect(item, index);
+                }}
+                haptic="selection"
                 style={[styles.photoPreviewStripThumb, item.id === file.id ? styles.photoPreviewStripThumbActive : null]}
               >
-                {item.signedUrl ? <Image source={{ uri: item.signedUrl }} style={styles.photoPreviewStripImage} resizeMode="cover" /> : null}
-              </Pressable>
+                {item.signedUrl ? <CrossFadeImage source={{ uri: item.signedUrl }} style={styles.photoPreviewStripImage} resizeMode="cover" /> : <BreathingSkeleton style={styles.photoPreviewStripImage} />}
+              </BouncyPressable>
             ))}
           </View>
         ) : null}
-      </View>
+      </Reanimated.View>
+      </GestureDetector>
     </View>
   );
 
@@ -2962,7 +4187,7 @@ function AddEventPage({ coupleId, onSaved, onBack }: { coupleId: string; onSaved
           <View style={[styles.checkbox, remind ? styles.checkboxActive : null]} />
           <Text style={styles.bodyText}>提醒我这个事件</Text>
         </Pressable>
-        <InlineNotice tone="info">V0.1B 会生成站内提醒；系统推送仍留到 V0.2 移动端接入。</InlineNotice>
+        <InlineNotice tone="info">事件会生成站内提醒；系统推送默认关闭，避免普通记录打扰对方。</InlineNotice>
         <AppTextInput value={note} onChangeText={setNote} placeholder="备注（可选）" multiline style={styles.messageInput} />
         <PrimaryButton label={busy ? "保存中" : "保存"} onPress={save} disabled={!title.trim() || !date} loading={busy} />
       </Card>
@@ -3093,14 +4318,7 @@ function SettingsDetailPage({
         </Card>
       ) : null}
       {page === "notifications" ? (
-        <Card>
-          <Text style={styles.sectionTitle}>站内通知</Text>
-          {notifications.length === 0 ? <EmptyState title="暂时没有提醒" description="来信、留言、胶囊和事件会出现在这里。" /> : null}
-          {notifications.map((notification) => (
-            <NotificationRow key={notification.id} notification={notification} onChanged={onChanged} onOpenLetters={onOpenLetters} />
-          ))}
-          <InlineNotice tone="info">V0.1B 只做站内通知；原生推送会在 V0.2 接入。</InlineNotice>
-        </Card>
+        <NotificationSettingsPanel notifications={notifications} onChanged={onChanged} onOpenLetters={onOpenLetters} />
       ) : null}
       {page === "privacy" ? (
         <Card>
@@ -3228,7 +4446,7 @@ function settingSubtitle(page: SettingPage) {
   const subtitles: Record<SettingPage, string> = {
     profile: "管理你展示给 TA 的资料。",
     couple: "查看你们的情侣空间信息。",
-    notifications: "先预留提醒策略，移动端再接入推送。",
+    notifications: "管理站内通知和系统推送。",
     privacy: "控制关系数据和个人状态边界。",
     relationship: "管理当前情侣关系。",
     feedback: "告诉我们哪里不顺手。",
@@ -3237,13 +4455,180 @@ function settingSubtitle(page: SettingPage) {
   return subtitles[page];
 }
 
-function ToggleRow({ label, enabled = false }: { label: string; enabled?: boolean }) {
+function ToggleRow({
+  label,
+  enabled = false,
+  disabled = false,
+  onPress,
+}: {
+  label: string;
+  enabled?: boolean;
+  disabled?: boolean;
+  onPress?: () => void;
+}) {
   return (
-    <View style={styles.toggleRow}>
+    <Pressable onPress={onPress} disabled={disabled || !onPress} style={[styles.toggleRow, disabled ? styles.disabledRow : null]}>
       <Text style={styles.settingLabel}>{label}</Text>
       <View style={[styles.switchTrack, enabled ? styles.switchTrackActive : null]}>
         <View style={[styles.switchThumb, enabled ? styles.switchThumbActive : null]} />
       </View>
+    </Pressable>
+  );
+}
+
+function NotificationSettingsPanel({
+  notifications,
+  onChanged,
+  onOpenLetters,
+}: {
+  notifications: Notification[];
+  onChanged: () => void;
+  onOpenLetters: () => void;
+}) {
+  const { user } = useAuth();
+  const { showToast } = useToast();
+  const [preferences, setPreferences] = useState<NotificationPreference | null>(null);
+  const [activeTokens, setActiveTokens] = useState(0);
+  const [currentWebPushEnabled, setCurrentWebPushEnabled] = useState(false);
+  const [webPushPermission, setWebPushPermission] = useState<string>(Platform.OS === "web" ? getWebPushPermission() : "native");
+  const [loading, setLoading] = useState(true);
+  const [savingKey, setSavingKey] = useState<NotificationPreferenceToggleKey | null>(null);
+  const [registeringWebPush, setRegisteringWebPush] = useState(false);
+
+  useEffect(() => {
+    let mounted = true;
+    async function loadPreferences() {
+      if (!user) return;
+      setLoading(true);
+      const [{ data: preferenceData, error: preferenceError }, { count }] = await Promise.all([
+        supabase.rpc("current_user_notification_preferences", {}),
+        supabase
+          .from("push_tokens")
+          .select("id", { count: "exact", head: true })
+          .eq("user_id", user.id)
+          .eq("enabled", true)
+          .is("revoked_at", null),
+      ]);
+      if (!mounted) return;
+      if (preferenceError) {
+        showToast({ title: "通知设置加载失败", message: preferenceError.message, tone: "error" });
+      } else {
+        setPreferences(preferenceData);
+      }
+      setActiveTokens(count ?? 0);
+      if (Platform.OS === "web") {
+        setWebPushPermission(getWebPushPermission());
+        const registration = await navigator.serviceWorker.getRegistration("/sw.js");
+        const subscription = await registration?.pushManager.getSubscription();
+        if (!mounted) return;
+        setCurrentWebPushEnabled(Boolean(subscription));
+      }
+      setLoading(false);
+    }
+
+    void loadPreferences();
+    return () => {
+      mounted = false;
+    };
+  }, [showToast, user]);
+
+  async function togglePreference(key: NotificationPreferenceToggleKey) {
+    if (!user || !preferences || savingKey) return;
+    const nextValue = !preferences[key];
+    setSavingKey(key);
+    setPreferences({ ...preferences, [key]: nextValue });
+    const update: Partial<Pick<NotificationPreference, NotificationPreferenceToggleKey>> =
+      key === "push_enabled"
+        ? { push_enabled: nextValue }
+        : key === "message_enabled"
+          ? { message_enabled: nextValue }
+          : key === "interaction_enabled"
+            ? { interaction_enabled: nextValue }
+            : key === "checkin_enabled"
+              ? { checkin_enabled: nextValue }
+              : key === "letter_enabled"
+                ? { letter_enabled: nextValue }
+                : key === "calendar_enabled"
+                  ? { calendar_enabled: nextValue }
+                  : { quiet_hours_enabled: nextValue };
+    const { error } = await supabase.from("notification_preferences").update(update).eq("user_id", user.id);
+    setSavingKey(null);
+    if (error) {
+      setPreferences(preferences);
+      showToast({ title: "通知设置保存失败", message: error.message, tone: "error" });
+      return;
+    }
+    showToast({ title: "通知设置已更新", tone: "success" });
+  }
+
+  async function enableWebPush() {
+    if (registeringWebPush) return;
+    setRegisteringWebPush(true);
+    const result = await registerForWebPushNotifications();
+    setRegisteringWebPush(false);
+    setWebPushPermission(getWebPushPermission());
+    if (result.status !== "registered") {
+      showToast({ title: "网页推送未开启", message: result.message ?? "当前浏览器暂时不能注册网页推送。", tone: "error" });
+      return;
+    }
+    setCurrentWebPushEnabled(true);
+    setActiveTokens((count) => Math.max(1, count));
+    void flushPushNotifications();
+    showToast({ title: "网页推送已开启", message: "之后对方留言、互动和胶囊信会尝试推送到这台设备。", tone: "success" });
+  }
+
+  const webPushReady = Platform.OS !== "web" || isWebPushSupported();
+  const deviceStatus =
+    Platform.OS === "web"
+      ? currentWebPushEnabled
+        ? "当前网页已开启"
+        : webPushPermission === "denied"
+          ? "浏览器已拒绝通知"
+          : webPushReady
+            ? "当前网页可开启"
+            : "当前浏览器不支持"
+      : activeTokens > 0
+        ? "已开启推送"
+        : "等待系统授权";
+
+  return (
+    <View style={styles.stack}>
+      <Card>
+        <Text style={styles.sectionTitle}>系统推送</Text>
+        {loading || !preferences ? (
+          <Text style={styles.bodyText}>正在读取推送设置。</Text>
+        ) : (
+          <>
+            <ToggleRow label="接收系统推送" enabled={preferences.push_enabled} disabled={savingKey === "push_enabled"} onPress={() => togglePreference("push_enabled")} />
+            <ToggleRow label="留言推送" enabled={preferences.message_enabled} disabled={!preferences.push_enabled || savingKey === "message_enabled"} onPress={() => togglePreference("message_enabled")} />
+            <ToggleRow label="此刻同频互动推送" enabled={preferences.interaction_enabled} disabled={!preferences.push_enabled || savingKey === "interaction_enabled"} onPress={() => togglePreference("interaction_enabled")} />
+            <ToggleRow label="今日胶囊推送" enabled={preferences.checkin_enabled} disabled={!preferences.push_enabled || savingKey === "checkin_enabled"} onPress={() => togglePreference("checkin_enabled")} />
+            <ToggleRow label="胶囊信推送" enabled={preferences.letter_enabled} disabled={!preferences.push_enabled || savingKey === "letter_enabled"} onPress={() => togglePreference("letter_enabled")} />
+            <ToggleRow label="事件推送" enabled={preferences.calendar_enabled} disabled={!preferences.push_enabled || savingKey === "calendar_enabled"} onPress={() => togglePreference("calendar_enabled")} />
+            <ToggleRow label="夜间免打扰" enabled={preferences.quiet_hours_enabled} disabled={!preferences.push_enabled || savingKey === "quiet_hours_enabled"} onPress={() => togglePreference("quiet_hours_enabled")} />
+            <InfoRow label="当前设备" value={deviceStatus} />
+            {Platform.OS === "web" ? (
+              <SecondaryButton
+                label={registeringWebPush ? "开启中" : "开启当前网页推送"}
+                onPress={() => void enableWebPush()}
+                disabled={!preferences.push_enabled || !webPushReady || webPushPermission === "denied"}
+                loading={registeringWebPush}
+                icon={<Bell color={colors.accentDark} size={16} />}
+              />
+            ) : null}
+          </>
+        )}
+        <InlineNotice tone="info">
+          会推送：对方新留言、快捷互动、今日胶囊和胶囊信。默认不推送：自己触发的提醒、删除/已读/设置变更、普通日历事件、宠物喂养和相册上传。iPhone 网页推送需要先把网站添加到主屏幕，再从主屏幕图标打开后授权。
+        </InlineNotice>
+      </Card>
+      <Card>
+        <Text style={styles.sectionTitle}>站内通知</Text>
+        {notifications.length === 0 ? <EmptyState title="暂时没有提醒" description="来信、留言、胶囊和事件会出现在这里。" /> : null}
+        {notifications.map((notification) => (
+          <NotificationRow key={notification.id} notification={notification} onChanged={onChanged} onOpenLetters={onOpenLetters} />
+        ))}
+      </Card>
     </View>
   );
 }
@@ -3322,6 +4707,7 @@ function MemoryTimelineCard({
   isLast,
   onPress,
   onUploadPhoto,
+  onPreviewPhoto,
   onDeleted,
 }: {
   memory: MemoryTimelineItem;
@@ -3329,6 +4715,7 @@ function MemoryTimelineCard({
   isLast: boolean;
   onPress?: () => void;
   onUploadPhoto: () => void;
+  onPreviewPhoto: (file: MediaFile, index: number) => void;
   onDeleted: () => void;
 }) {
   const scrollY = useAppScrollY();
@@ -3375,6 +4762,7 @@ function MemoryTimelineCard({
   return (
     <View style={styles.memoryTimelineItem}>
       <View style={styles.memoryRail}>
+        <View style={styles.memoryRailString} />
         <View style={[styles.memoryDotHalo, { opacity: 0.34 + focus * 0.44, transform: [{ scale: 0.92 + focus * 0.34 }] }]} />
         <View style={[styles.memoryDot, { transform: [{ scale: 1 + focus * 0.22 }, { rotate: `${focus * 22}deg` }], boxShadow: `0 0 ${Math.round(6 + focus * 18)}px rgba(184,95,123,${0.14 + focus * 0.22})` } as never]}>
           <View style={styles.memoryDotCream} />
@@ -3383,6 +4771,7 @@ function MemoryTimelineCard({
         {isLast ? null : <View style={styles.memoryLine} />}
       </View>
       <Container
+        {...petAnchorProps(`memory-card-${index}`, "memory-card")}
         accessibilityRole={onPress ? "button" : undefined}
         onPress={onPress}
         style={[
@@ -3391,6 +4780,9 @@ function MemoryTimelineCard({
           focus > 0.28 ? styles.memoryCardFocused : null,
         ]}
       >
+        <View pointerEvents="none" style={styles.memoryCardTopTape} />
+        {memory.filter === "留言" || memory.filter === "日常" ? <View pointerEvents="none" style={styles.memoryCardRuledLines} /> : null}
+        {memory.filter === "信件" ? <View pointerEvents="none" style={styles.memoryLetterFlap} /> : null}
         <MemoryCategoryBadge filter={memory.filter} />
         {memory.filter === "相册" ? <View pointerEvents="none" style={styles.memoryPolaroidFold} /> : null}
         {memory.filter === "纪念日" ? (
@@ -3406,35 +4798,51 @@ function MemoryTimelineCard({
           <Text style={[styles.memoryDate, visual.metaStyle]}>{memory.date} · {memory.tag}</Text>
           <Text style={[styles.memoryCardBody, visual.bodyStyle]}>{memory.body}</Text>
           {memory.deleteAction ? (
-            <Pressable accessibilityRole="button" accessibilityLabel="删除这条记忆" onPress={removeMemory} style={styles.memoryDeleteButton}>
+            <Pressable {...petSafeActionProps()} accessibilityRole="button" accessibilityLabel="删除这条记忆" onPress={removeMemory} style={styles.memoryDeleteButton}>
               <Trash2 color={colors.accentDark} size={15} />
               <Text style={styles.memoryDeleteText}>删除</Text>
             </Pressable>
           ) : null}
         </View>
-        <MemoryPhotoGrid memory={memory} onUploadPhoto={onUploadPhoto} />
+        <MemoryPhotoGrid memory={memory} onUploadPhoto={onUploadPhoto} onPreviewPhoto={onPreviewPhoto} />
       </Container>
     </View>
   );
 }
 
-function MemoryPhotoGrid({ memory, onUploadPhoto }: { memory: MemoryTimelineItem; onUploadPhoto: () => void }) {
+function MemoryPhotoGrid({
+  memory,
+  onUploadPhoto,
+  onPreviewPhoto,
+}: {
+  memory: MemoryTimelineItem;
+  onUploadPhoto: () => void;
+  onPreviewPhoto: (file: MediaFile, index: number) => void;
+}) {
   const previews = memory.photos.slice(0, 9);
   const canUpload = memory.photos.length < maxMemoryPhotos;
   return (
     <View style={styles.memoryMediaColumn}>
       <Pressable
+        {...petSafeActionProps()}
         accessibilityRole="button"
         accessibilityLabel="给这条记忆上传图片"
-        onPress={canUpload ? onUploadPhoto : undefined}
+        onPress={canUpload && previews.length === 0 ? onUploadPhoto : undefined}
         style={[styles.memoryPhotoPanel, !previews.length ? { backgroundColor: memory.imageTone } : null]}
       >
         {previews.length ? (
           <View style={styles.memoryPhotoGrid}>
-            {previews.map((file) => (
-              <View key={file.id} style={styles.memoryPhotoCell}>
-                {file.signedUrl ? <Image source={{ uri: file.signedUrl }} style={styles.memoryPhotoImage} resizeMode="cover" /> : null}
-              </View>
+            {previews.map((file, index) => (
+              <BouncyPressable
+                key={file.id}
+                accessibilityRole="button"
+                accessibilityLabel={`预览记忆图片 ${index + 1}`}
+                haptic="selection"
+                onPress={() => onPreviewPhoto(file, index)}
+                style={styles.memoryPhotoCell}
+              >
+                {file.signedUrl ? <CrossFadeImage source={{ uri: file.signedUrl }} style={styles.memoryPhotoImage} resizeMode="cover" /> : <BreathingSkeleton style={styles.memoryPhotoImage} />}
+              </BouncyPressable>
             ))}
           </View>
         ) : (
@@ -3448,7 +4856,18 @@ function MemoryPhotoGrid({ memory, onUploadPhoto }: { memory: MemoryTimelineItem
           </View>
         )}
         <View style={styles.memoryPhotoCountBadge}>
-          {canUpload ? <ImagePlus color={colors.accentDark} size={12} /> : null}
+          {canUpload ? (
+            <BouncyPressable
+              {...petSafeActionProps()}
+              accessibilityRole="button"
+              accessibilityLabel="给这条记忆继续上传图片"
+              onPress={onUploadPhoto}
+              haptic="selection"
+              style={styles.memoryPhotoAddButton}
+            >
+              <ImagePlus color={colors.accentDark} size={12} />
+            </BouncyPressable>
+          ) : null}
           <Text style={styles.memoryPhotoCountText}>{memory.photos.length}/{maxMemoryPhotos}</Text>
         </View>
       </Pressable>
@@ -3545,6 +4964,12 @@ function buildMemoryTimeline(
   currentUserId: string
 ): MemoryTimelineItem[] {
   const photosForTitle = (title: string) => mediaFiles.filter((file) => file.caption === title).slice(0, maxMemoryPhotos);
+  const photosForCheckin = (checkin: Checkin, title: string) => mediaFiles
+    .filter((file) => {
+      const caption = file.caption ?? "";
+      return caption === checkinPhotoCaption(checkin) || caption === title;
+    })
+    .slice(0, maxMemoryPhotos);
   const eventMemories: MemoryTimelineItem[] = events.map((event) => ({
     id: `event-${event.id}`,
     sortDate: event.event_date,
@@ -3573,7 +4998,7 @@ function buildMemoryTimeline(
       imageTone: story.mood.includes("想") ? colors.moodMiss : "#ead8ce",
       imageLabel: story.mood.includes("想") ? "Miss" : "Daily",
       iconImage: story.iconImage,
-      photos: photosForTitle(title),
+      photos: photosForCheckin(checkin, title),
       deleteAction: checkin.user_id === currentUserId ? { table: "checkins", id: checkin.id } : undefined,
     };
   });
@@ -3620,7 +5045,15 @@ function buildMemoryTimeline(
     deleteAction: footprint.created_by === currentUserId ? { table: "couple_footprints", id: footprint.id } : undefined,
   }));
   const albumMemories: MemoryTimelineItem[] = mediaFiles
-    .filter((file) => !file.caption || ![...eventMemories, ...checkinMemories, ...messageMemories, ...letterMemories, ...footprintMemories].some((memory) => memory.title === file.caption || memory.title === `去过 ${file.caption}`))
+    .filter((file) => {
+      if (!file.caption) {
+        return true;
+      }
+      if (isCheckinPhotoCaption(file.caption)) {
+        return false;
+      }
+      return ![...eventMemories, ...checkinMemories, ...messageMemories, ...letterMemories, ...footprintMemories].some((memory) => memory.title === file.caption || memory.title === `去过 ${file.caption}`);
+    })
     .slice(0, 3)
     .map((file) => ({
       id: `media-${file.id}`,
@@ -3679,8 +5112,95 @@ function memoryIconForEvent(type: CalendarEvent["type"]) {
   return capsuleIcons.daily;
 }
 
-function creationPetOptionFor(petKey?: string | null) {
-  return creationPetOptions.find((option) => option.key === petKey) ?? creationPetOptions[0];
+function displayPetName(name?: string | null) {
+  return name?.trim() ? "迪灵" : "迪灵";
+}
+
+function chooseNewerSpace(current: CreationSpace | null, incoming: CreationSpace | null) {
+  if (!incoming) {
+    return current;
+  }
+  if (!current) {
+    return incoming;
+  }
+  return incoming.updated_at >= current.updated_at ? incoming : current;
+}
+
+function reactionFromSpace(space: CreationSpace | null): CreationPetStageReaction | null {
+  if (!space || space.current_action === "idle" || space.current_action === "walk") {
+    return null;
+  }
+  return {
+    id: new Date(space.updated_at || space.last_ai_response_at || space.last_interaction_at || space.created_at).getTime(),
+    action: space.current_action,
+    message: naturalPetMessage(space.last_ai_bubble || space.pet_mood, space.pet_species, "idle", space.current_action),
+  };
+}
+
+function triggerToAction(triggerType: string): CreationLivePetAction {
+  if (triggerType.startsWith("feed")) return "eat";
+  if (triggerType === "pet" || triggerType === "stroke" || triggerType === "tap") return "pet";
+  if (triggerType === "clean") return "clean";
+  if (triggerType === "play") return "play";
+  if (triggerType === "footprint_add") return "happy";
+  return "idle";
+}
+
+function immediatePetLine(action: CreationLivePetAction) {
+  if (action === "eat") return "我吃到啦";
+  if (action === "pet") return "再摸摸我";
+  if (action === "clean") return "小窝干净啦";
+  if (action === "play") return "还想玩";
+  return "我在这里呀";
+}
+
+function naturalPetMessage(
+  raw: string | null | undefined,
+  legacySpecies: CreationSpace["pet_species"] | null | undefined,
+  triggerType: string,
+  action: CreationLivePetAction,
+) {
+  void legacySpecies;
+  const fallback = immediatePetLine(triggerToAction(triggerType) === "idle" ? action : triggerToAction(triggerType));
+  const normalized = sanitizePetIdentityText(raw ?? "")
+    .replace(/它/g, "我")
+    .replace(/[汪喵]+[,，!！~～]*/g, "")
+    .replace(/正在想怎么回应你们。?/g, "我听见你啦")
+    .replace(/我还在叼这句话。?/g, "我听见你啦")
+    .replace(/[!！~～]+/g, "，")
+    .replace(/[。；;]+/g, "")
+    .replace(/，{2,}/g, "，")
+    .trim();
+  const badText = /AI|json|JSON|系统|模型|助手|生成|思考|处理中|请稍候|汪|喵|小猫|小狗|猫咪|狗狗|云猫|云狗|奶霜|银纹|小金|柚柚|棉花糖|小风扇|照镜子|亮晶晶|闪闪发光|叼这句话/.test(normalized);
+  const cleanWrong = (triggerType === "clean" || action === "clean") && /洗澡|擦澡|洗完澡|擦完澡|刚擦完|毛发|毛茸茸|身上|澡/.test(normalized);
+  const next = !normalized || badText || cleanWrong ? fallback : normalized;
+  return next.slice(0, 24);
+}
+
+function sanitizePetIdentityText(text: string) {
+  return text
+    .trim()
+    .replace(/迪灵被打扫得干干净净，?开心地转圈圈[～~。]?/g, "迪灵的小窝干净啦")
+    .replace(/迪灵被打扫得干干净净/g, "迪灵的小窝干净啦")
+    .replace(/开心地转圈圈[～~。]?/g, "")
+    .replace(/迪灵正在|宠物正在|云宠正在|小狗正在|狗狗正在|小猫正在|猫咪正在/g, "迪灵正在")
+    .replace(/银纹云猫|奶霜短毛猫|金毛云狗|柯基云狗/g, "迪灵")
+    .replace(/云宠|小猫|小狗|猫咪|狗狗|云猫|云狗|奶霜|银纹|小金|柚柚|短毛猫|金毛|柯基/g, "迪灵")
+    .replace(/[汪喵]+[,，!！~～]*/g, "")
+    .replace(/洗澡|擦澡|洗完澡|擦完澡|刚擦完/g, "打扫小窝")
+    .replace(/毛茸茸|棉花糖|小风扇|照镜子|亮晶晶|闪闪发光|叼这句话/g, "")
+    .replace(/迪灵被打扫小窝/g, "迪灵的小窝被打扫")
+    .replace(/迪灵迪灵/g, "迪灵")
+    .replace(/，{2,}/g, "，")
+    .trim();
+}
+
+function sanitizeCreationActionLabel(label: string) {
+  const clean = sanitizePetIdentityText(label);
+  if (/汪|喵|小猫|小狗|猫咪|狗狗|云猫|云狗|云宠|奶霜|银纹|小金|柚柚|洗澡|擦澡|洗完澡|擦完澡|刚擦完|毛茸茸|棉花糖|小风扇|照镜子|亮晶晶|闪闪发光|叼这句话/.test(clean)) {
+    return clean.replace(/(?:云宠|迪灵)回应了「.*」/, "迪灵回应了「小窝干净啦」");
+  }
+  return clean;
 }
 
 function creationFoodLabel(foodType: CreationFoodType) {
@@ -3700,7 +5220,7 @@ function creationGameErrorMessage(message: string) {
 }
 
 function petActionToastTitle(type: "pet" | "clean") {
-  if (type === "pet") return "已摸摸小伙伴";
+  if (type === "pet") return "已摸摸迪灵";
   return "小屋已清洁";
 }
 
@@ -3765,6 +5285,22 @@ function splitStory(content?: string | null) {
     iconLabel: storyIconLabelFromText(body),
     body,
   };
+}
+
+function checkinPhotoCaption(checkin: Pick<Checkin, "id">) {
+  return `今日胶囊图片:${checkin.id}`;
+}
+
+function isCheckinPhotoCaption(caption: string) {
+  return caption.startsWith("今日胶囊图片:");
+}
+
+function mediaCaptionLabel(file: Pick<MediaFile, "caption">, fallback = "相册里的瞬间") {
+  const caption = file.caption?.trim();
+  if (!caption) {
+    return fallback;
+  }
+  return isCheckinPhotoCaption(caption) ? "今日胶囊图片" : caption;
 }
 
 function MiniCalendar({
@@ -3931,7 +5467,7 @@ function storyIconMatchFromText(text: string): CapsuleIconMatch {
     { label: "在家", image: capsuleIcons.home, keywords: ["回家", "在家", "做饭", "家里"] },
     { label: "旅行", image: capsuleIcons.travel, keywords: ["旅行", "旅游", "出发", "高铁", "飞机", "酒店", "海边", "看海"] },
     { label: "身体", image: capsuleIcons.health, keywords: ["生病", "感冒", "发烧", "药", "医院", "不舒服"] },
-    { label: "宠物", image: capsuleIcons.pet, keywords: ["猫", "狗", "宠物"] },
+    { label: "迪灵", image: capsuleIcons.pet, keywords: ["迪灵", "心愿精灵", "精灵", "小窝"] },
   ];
   return groups.find((group) => group.keywords.some((keyword) => normalized.includes(keyword))) ?? { label: "日常", image: capsuleIcons.daily, keywords: [] };
 }
@@ -3993,6 +5529,10 @@ const styles = StyleSheet.create({
   stack: {
     gap: 14,
     paddingBottom: 18,
+  },
+  todayStoryScreen: {
+    gap: 14,
+    paddingBottom: 22,
   },
   shellAvatarRow: {
     flexDirection: "row",
@@ -4103,25 +5643,120 @@ const styles = StyleSheet.create({
   },
   memoryScreen: {
     position: "relative",
-    gap: 14,
-    paddingBottom: 28,
+    gap: 15,
+    paddingBottom: 30,
   },
   memoryHero: {
-    paddingTop: 2,
-    paddingHorizontal: 2,
+    position: "relative",
+    minHeight: 104,
+    borderRadius: 32,
+    overflow: "hidden",
+    paddingHorizontal: 18,
+    paddingVertical: 15,
+    backgroundColor: "rgba(255,255,255,0.6)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.82)",
+    boxShadow: "0 14px 30px rgba(82,61,66,0.045), inset 0 1px 2px rgba(255,255,255,0.86)",
+  },
+  memoryHeroGlow: {
+    position: "absolute",
+    right: -54,
+    top: -42,
+    width: 190,
+    height: 150,
+    borderRadius: 999,
+    backgroundColor: "rgba(255,220,232,0.46)",
+    transform: [{ rotate: "-12deg" }],
+  },
+  memoryHeroTitleRow: {
+    position: "relative",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    zIndex: 1,
+  },
+  memoryHeroMark: {
+    width: 48,
+    height: 48,
+    borderRadius: 20,
+    backgroundColor: "rgba(255,255,255,0.74)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.9)",
+    alignItems: "center",
+    justifyContent: "center",
+    boxShadow: "0 10px 20px rgba(184,95,123,0.08)",
+  },
+  memoryHeroCopy: {
+    flex: 1,
+    gap: 2,
+    minWidth: 0,
+  },
+  memoryHeroTitle: {
+    color: colors.ink,
+    fontSize: 23,
+    lineHeight: 29,
+    fontWeight: "900",
+  },
+  memoryHeroChimes: {
+    position: "absolute",
+    right: 18,
+    bottom: 12,
+    flexDirection: "row",
+    alignItems: "flex-end",
+    gap: 7,
+    opacity: 0.82,
+  },
+  memoryHeroChime: {
+    width: 8,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.84)",
+    boxShadow: "0 8px 12px rgba(82,61,66,0.07)",
+  },
+  memoryHeroChimeRose: {
+    height: 31,
+    backgroundColor: "#ffd5e0",
+  },
+  memoryHeroChimeCream: {
+    height: 40,
+    backgroundColor: "#fff1c9",
+  },
+  memoryHeroChimeViolet: {
+    height: 26,
+    backgroundColor: "#e3d8f2",
   },
   memorySubtitle: {
     color: colors.muted,
-    fontSize: 15,
-    lineHeight: 22,
-    fontWeight: "500",
+    fontSize: 14,
+    lineHeight: 21,
+    fontWeight: "700",
   },
   memoryCalendarCard: {
-    gap: 13,
-    paddingBottom: 16,
+    position: "relative",
+    overflow: "hidden",
+    gap: 10,
+    paddingBottom: 14,
+    backgroundColor: "rgba(255,255,255,0.76)",
+    borderRadius: 32,
+    borderColor: "rgba(255,255,255,0.86)",
+    boxShadow: "0 12px 28px rgba(90,68,76,0.045), inset 0 1px 2px rgba(255,255,255,0.88)",
+  },
+  memoryCalendarWash: {
+    position: "absolute",
+    left: -40,
+    top: -54,
+    width: 150,
+    height: 118,
+    borderRadius: 999,
+    backgroundColor: "rgba(255,240,201,0.34)",
+    transform: [{ rotate: "14deg" }],
   },
   photoAlbumCard: {
     gap: 14,
+    borderRadius: 32,
+    backgroundColor: "rgba(255,255,255,0.76)",
+    borderColor: "rgba(255,255,255,0.86)",
+    boxShadow: "0 10px 20px rgba(90,68,76,0.04), inset 0 1px 2px rgba(255,255,255,0.9)",
   },
   photoAlbumHeader: {
     flexDirection: "row",
@@ -4160,6 +5795,7 @@ const styles = StyleSheet.create({
     fontWeight: "900",
   },
   photoAlbumUploadButton: {
+    position: "relative",
     width: 36,
     height: 36,
     borderRadius: 18,
@@ -4169,30 +5805,44 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
+    overflow: "hidden",
+  },
+  photoNativeFileInput: {
+    position: "absolute",
+    inset: 0,
+    width: "100%",
+    height: "100%",
+    opacity: 0,
+    cursor: "pointer",
+    zIndex: 4,
   },
   photoAlbumGrid: {
     flexDirection: "row",
     flexWrap: "wrap",
-    gap: 6,
+    justifyContent: "space-between",
+    rowGap: 12,
+    paddingTop: 4,
+    paddingBottom: 2,
   },
   photoAlbumThumb: {
-    width: "31.8%",
-    aspectRatio: 0.84,
+    width: "31%",
+    aspectRatio: 0.72,
     position: "relative",
-    borderRadius: 8,
-    backgroundColor: "#fff",
+    borderRadius: 7,
+    backgroundColor: "#fffefc",
     borderWidth: 1,
-    borderColor: "rgba(184,95,123,0.12)",
-    paddingTop: 5,
-    paddingHorizontal: 5,
-    paddingBottom: 15,
-    boxShadow: "0 8px 18px rgba(82, 61, 66, 0.08)",
+    borderColor: "rgba(214,177,159,0.2)",
+    paddingTop: 6,
+    paddingHorizontal: 6,
+    paddingBottom: 24,
+    boxShadow: "0 10px 18px rgba(82, 61, 66, 0.1)",
   },
   photoAlbumThumbPressable: {
     width: "100%",
     height: "100%",
     borderRadius: 4,
     overflow: "hidden",
+    backgroundColor: "#f6eee8",
   },
   photoAlbumImage: {
     width: "100%",
@@ -4221,27 +5871,54 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
+  photoAlbumCaption: {
+    position: "absolute",
+    left: 6,
+    right: 6,
+    bottom: 6,
+    color: "rgba(103,82,86,0.74)",
+    fontSize: 10,
+    lineHeight: 13,
+    fontWeight: "700",
+    textAlign: "center",
+    fontFamily: Platform.select({ web: "'Courier New', Courier, monospace", default: undefined }) as never,
+  },
   photoAlbumEmpty: {
-    minHeight: 112,
-    borderRadius: 18,
+    minHeight: 132,
+    width: "31%",
+    borderRadius: 7,
     borderWidth: 1,
-    borderColor: "rgba(184,95,123,0.12)",
-    backgroundColor: colors.panelSoft,
+    borderStyle: "dashed",
+    borderColor: "rgba(112,94,98,0.26)",
+    backgroundColor: "#fffdf9",
     alignItems: "center",
     justifyContent: "center",
-    padding: 14,
+    alignSelf: "flex-start",
+    padding: 9,
     gap: 5,
+    boxShadow: "0 10px 18px rgba(82,61,66,0.07)",
+  },
+  photoAlbumEmptyCamera: {
+    width: 46,
+    height: 42,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderStyle: "dashed",
+    borderColor: "rgba(112,94,98,0.24)",
+    alignItems: "center",
+    justifyContent: "center",
   },
   photoAlbumEmptyTitle: {
-    color: colors.ink,
-    fontSize: 16,
-    lineHeight: 21,
-    fontWeight: "900",
+    color: "rgba(103,82,86,0.74)",
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: "800",
+    textAlign: "center",
   },
   photoAlbumEmptyText: {
-    color: colors.muted,
-    fontSize: 13,
-    lineHeight: 19,
+    color: "rgba(103,82,86,0.58)",
+    fontSize: 10,
+    lineHeight: 14,
     fontWeight: "600",
     textAlign: "center",
   },
@@ -4434,30 +6111,30 @@ const styles = StyleSheet.create({
   memoryFilterRow: {
     flexDirection: "row",
     flexWrap: "wrap",
-    gap: 8,
-    padding: 6,
+    gap: 7,
+    padding: 7,
     borderRadius: 999,
-    backgroundColor: "rgba(255,255,255,0.5)",
+    backgroundColor: "rgba(255,249,239,0.7)",
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.72)",
-    boxShadow: "inset 0 1px 1px rgba(255,255,255,0.85), 0 10px 22px rgba(82,61,66,0.05)",
+    borderColor: "rgba(255,255,255,0.86)",
+    boxShadow: "inset 0 1px 1px rgba(255,255,255,0.9), 0 10px 22px rgba(82,61,66,0.045)",
   },
   memoryFilterChip: {
     minHeight: 34,
     borderRadius: 999,
-    backgroundColor: "rgba(255,255,255,0.56)",
+    backgroundColor: "rgba(255,255,255,0.72)",
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.72)",
+    borderColor: "rgba(255,255,255,0.86)",
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 13,
-    boxShadow: "0 5px 10px rgba(82,61,66,0.04)",
+    boxShadow: "0 5px 10px rgba(82,61,66,0.035), inset 0 1px 1px rgba(255,255,255,0.82)",
   },
   memoryFilterChipActive: {
     backgroundColor: colors.accent,
     borderColor: "rgba(255,255,255,0.86)",
-    transform: [{ scale: 1.04 }, { rotate: "-1deg" }],
-    boxShadow: "0 9px 16px rgba(184,95,123,0.2), inset 0 1px 2px rgba(255,255,255,0.72)",
+    transform: [{ scale: 1.035 }, { rotate: "-1deg" }],
+    boxShadow: "0 9px 16px rgba(184,95,123,0.18), inset 0 1px 2px rgba(255,255,255,0.72)",
   },
   memoryFilterText: {
     color: colors.muted,
@@ -4470,31 +6147,40 @@ const styles = StyleSheet.create({
   },
   memoryTimeline: {
     gap: 0,
-    paddingTop: 2,
+    paddingTop: 4,
   },
   memoryTimelineItem: {
     flexDirection: "row",
     alignItems: "stretch",
   },
   memoryRail: {
-    width: 30,
+    width: 32,
     alignItems: "center",
     position: "relative",
+  },
+  memoryRailString: {
+    position: "absolute",
+    top: 0,
+    bottom: 0,
+    width: 1,
+    borderRadius: 999,
+    backgroundColor: "rgba(184,95,123,0.18)",
+    transform: [{ translateX: 0.5 }],
   },
   memoryDotHalo: {
     position: "absolute",
     top: 20,
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    backgroundColor: "rgba(255,220,232,0.62)",
+    width: 31,
+    height: 31,
+    borderRadius: 16,
+    backgroundColor: "rgba(255,220,232,0.58)",
   },
   memoryDot: {
-    width: 17,
-    height: 10,
+    width: 22,
+    height: 13,
     borderRadius: 999,
     backgroundColor: "#fff7e7",
-    marginTop: 29,
+    marginTop: 28,
     zIndex: 1,
     borderWidth: 1,
     borderColor: "rgba(255,255,255,0.92)",
@@ -4510,14 +6196,14 @@ const styles = StyleSheet.create({
     backgroundColor: "#ffd5e0",
   },
   memoryLine: {
-    width: 4,
+    width: 5,
     flex: 1,
     borderRadius: 999,
     backgroundColor: colors.accent,
-    backgroundImage: "linear-gradient(180deg, #dd7897 0%, #c798d4 100%)" as never,
-    marginTop: 8,
-    marginBottom: -1,
-    boxShadow: "0 0 10px rgba(184,95,123,0.14)",
+    backgroundImage: "linear-gradient(180deg, #dd7897 0%, #f0c6d2 45%, #c798d4 100%)" as never,
+    marginTop: 9,
+    marginBottom: -2,
+    boxShadow: "0 0 12px rgba(184,95,123,0.13)",
   },
   memoryCard: {
     position: "relative",
@@ -4527,35 +6213,35 @@ const styles = StyleSheet.create({
     gap: 12,
     marginBottom: 18,
     padding: 18,
-    borderRadius: 28,
-    backgroundColor: "#fff",
+    borderRadius: 30,
+    backgroundColor: "rgba(255,255,255,0.82)",
     borderWidth: 1,
-    borderColor: "rgba(184,95,123,0.09)",
-    boxShadow: "0 14px 34px rgba(82, 61, 66, 0.06)",
+    borderColor: "rgba(255,255,255,0.84)",
+    boxShadow: "0 16px 34px rgba(82, 61, 66, 0.06), inset 0 1px 2px rgba(255,255,255,0.84)",
     elevation: 2,
     overflow: "hidden",
   },
   memoryCardDaily: {
-    backgroundColor: "rgba(255,254,250,0.98)",
-    backgroundImage: "linear-gradient(135deg, rgba(255,253,249,0.98), rgba(255,246,250,0.95))" as never,
+    backgroundColor: "rgba(255,254,250,0.96)",
+    backgroundImage: "linear-gradient(135deg, rgba(255,253,249,0.98), rgba(255,246,250,0.94))" as never,
   },
   memoryCardWhisper: {
-    backgroundColor: "rgba(250,247,255,0.98)",
-    backgroundImage: "linear-gradient(135deg, rgba(255,255,255,0.98), rgba(239,233,249,0.94))" as never,
+    backgroundColor: "rgba(250,247,255,0.96)",
+    backgroundImage: "linear-gradient(135deg, rgba(255,255,255,0.98), rgba(239,233,249,0.93))" as never,
     borderColor: "rgba(151,124,196,0.18)",
   },
   memoryCardLetter: {
-    backgroundColor: "rgba(255,252,242,0.98)",
+    backgroundColor: "rgba(255,252,242,0.96)",
     backgroundImage: "linear-gradient(135deg, rgba(255,255,250,0.98), rgba(255,240,204,0.86))" as never,
     borderColor: "rgba(218,171,82,0.2)",
   },
   memoryCardPhoto: {
-    backgroundColor: "rgba(250,253,255,0.98)",
+    backgroundColor: "rgba(250,253,255,0.96)",
     backgroundImage: "linear-gradient(135deg, rgba(255,255,255,0.99), rgba(231,243,247,0.92))" as never,
     borderColor: "rgba(124,148,170,0.16)",
   },
   memoryCardAnniversary: {
-    backgroundColor: "rgba(255,232,232,0.98)",
+    backgroundColor: "rgba(255,232,232,0.96)",
     backgroundImage: "linear-gradient(135deg, rgba(255,241,231,0.98) 0%, rgba(255,214,223,0.96) 45%, rgba(247,191,202,0.94) 100%)" as never,
     borderColor: "rgba(198,88,112,0.26)",
     boxShadow: "0 22px 46px rgba(198,88,112,0.16), inset 0 1px 2px rgba(255,255,255,0.66)",
@@ -4564,7 +6250,43 @@ const styles = StyleSheet.create({
     borderColor: "rgba(184,95,123,0.2)",
     boxShadow: "0 18px 38px rgba(82, 61, 66, 0.09)",
   },
+  memoryCardTopTape: {
+    position: "absolute",
+    left: 42,
+    top: -7,
+    width: 70,
+    height: 18,
+    borderRadius: 6,
+    backgroundColor: "rgba(255,246,217,0.72)",
+    borderWidth: 1,
+    borderColor: "rgba(219,180,122,0.14)",
+    transform: [{ rotate: "-2deg" }],
+    boxShadow: "0 8px 12px rgba(82,61,66,0.045)",
+    zIndex: 2,
+  },
+  memoryCardRuledLines: {
+    position: "absolute",
+    left: 18,
+    right: 18,
+    top: 58,
+    bottom: 16,
+    opacity: 0.58,
+    backgroundImage: "repeating-linear-gradient(0deg, transparent 0px, transparent 25px, rgba(218,139,160,0.14) 25px, rgba(218,139,160,0.14) 26px)" as never,
+  },
+  memoryLetterFlap: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    top: 0,
+    height: 74,
+    backgroundColor: "rgba(255,255,255,0.22)",
+    borderBottomWidth: 1,
+    borderBottomColor: "rgba(218,171,82,0.14)",
+    transform: [{ skewY: "-5deg" }, { translateY: -18 }],
+  },
   memoryCardContent: {
+    position: "relative",
+    zIndex: 1,
     flex: 1,
     gap: 7,
     minWidth: 0,
@@ -4780,6 +6502,13 @@ const styles = StyleSheet.create({
     width: "100%",
     height: "100%",
   },
+  memoryPhotoAddButton: {
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    alignItems: "center",
+    justifyContent: "center",
+  },
   memoryThumbEmpty: {
     alignItems: "center",
     justifyContent: "center",
@@ -4840,6 +6569,617 @@ const styles = StyleSheet.create({
     bottom: "calc(224px + env(safe-area-inset-bottom))" as never,
     alignItems: "center",
     zIndex: 2,
+  },
+  creationTownPage: {
+    gap: 12,
+  },
+  creationAssetBar: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+    padding: 7,
+    borderRadius: 26,
+    backgroundColor: "rgba(255,255,255,0.86)",
+    borderWidth: 1,
+    borderColor: "rgba(184,95,123,0.14)",
+    boxShadow: "0 14px 30px rgba(116,74,89,0.1)",
+  },
+  creationAssetChip: {
+    flexGrow: 1,
+    minWidth: "30%",
+    minHeight: 50,
+    borderRadius: 22,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    backgroundColor: "rgba(255,250,252,0.96)",
+    borderWidth: 1,
+    borderColor: "rgba(184,95,123,0.08)",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 7,
+  },
+  creationAssetChipCompact: {
+    flexGrow: 0,
+    minWidth: 86,
+    minHeight: 40,
+    borderRadius: 20,
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    backgroundColor: "rgba(255,255,255,0.82)",
+  },
+  creationAssetChipPulse: {
+    backgroundColor: "#fff0c9",
+    borderColor: "rgba(215,162,78,0.42)",
+    boxShadow: "0 10px 22px rgba(215,162,78,0.2)",
+    transform: [{ translateY: -1 }],
+  },
+  creationAssetChipIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: "#FDF3D6",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  creationAssetChipIconCompact: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+  },
+  creationAssetChipCopy: {
+    minWidth: 0,
+  },
+  creationAssetChipLabel: {
+    color: colors.faint,
+    fontSize: 10,
+    lineHeight: 13,
+    fontWeight: "900",
+  },
+  creationAssetChipLabelCompact: {
+    fontSize: 9,
+    lineHeight: 11,
+  },
+  creationAssetChipValue: {
+    color: colors.ink,
+    fontSize: 14,
+    lineHeight: 17,
+    fontWeight: "900",
+  },
+  creationAssetChipValueCompact: {
+    fontSize: 13,
+    lineHeight: 15,
+  },
+  creationRewardRibbon: {
+    flexDirection: "row",
+    gap: 10,
+    paddingHorizontal: 2,
+  },
+  creationRewardPill: {
+    flex: 1,
+    minHeight: 58,
+    borderRadius: 25,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    backgroundColor: "rgba(255,250,247,0.88)",
+    borderWidth: 1,
+    borderColor: "rgba(184,95,123,0.12)",
+    boxShadow: "0 12px 24px rgba(116,74,89,0.1), inset 0 1px 1px rgba(255,255,255,0.9)",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 9,
+  },
+  creationRewardPillPulse: {
+    backgroundColor: "#fff1d2",
+    borderColor: "rgba(215,162,78,0.38)",
+    transform: [{ translateY: -1 }],
+  },
+  creationRewardPillIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: "#FDF3D6",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  creationRewardPillCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  creationRewardPillLabel: {
+    color: colors.muted,
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: "900",
+  },
+  creationRewardPillValue: {
+    color: colors.ink,
+    fontSize: 14,
+    lineHeight: 18,
+    fontWeight: "900",
+  },
+  creationRewardPillDelta: {
+    color: colors.accent,
+    fontSize: 23,
+    lineHeight: 28,
+    fontWeight: "900",
+  },
+  creationRewardToast: {
+    position: "absolute",
+    left: 16,
+    right: 16,
+    top: 86,
+    zIndex: 20,
+    borderRadius: 24,
+    padding: 12,
+    backgroundColor: "rgba(255,250,252,0.96)",
+    borderWidth: 1,
+    borderColor: "rgba(184,95,123,0.16)",
+    boxShadow: "0 18px 38px rgba(116,74,89,0.18)",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  creationRewardIcon: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: "#FDF3D6",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  creationRewardCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
+  },
+  creationRewardTitle: {
+    color: colors.ink,
+    fontSize: 14,
+    lineHeight: 18,
+    fontWeight: "900",
+  },
+  creationRewardText: {
+    color: colors.muted,
+    fontSize: 12,
+    lineHeight: 17,
+    fontWeight: "700",
+  },
+  creationHub: {
+    position: "relative",
+    minHeight: "calc(100vh - 8px)" as never,
+    borderRadius: 0,
+    overflow: "hidden",
+    backgroundColor: "#fffaf7",
+    backgroundImage: "linear-gradient(180deg, #fffaf7 0%, #fff0f5 48%, #eef4f6 100%)" as never,
+    marginHorizontal: -18,
+    marginTop: -8,
+    marginBottom: -24,
+    paddingBottom: "calc(24px + env(safe-area-inset-bottom))" as never,
+  },
+  creationHubConceptImage: {
+    position: "absolute",
+    left: 0,
+    top: 0,
+    width: "100%",
+    height: "100%",
+  },
+  creationHubVeil: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    top: 0,
+    bottom: 0,
+    backgroundImage: "linear-gradient(180deg, rgba(255,250,247,0.9) 0%, rgba(255,250,247,0.58) 16%, rgba(255,250,247,0.08) 42%, rgba(255,250,247,0.18) 74%, rgba(255,250,247,0.86) 100%)" as never,
+  },
+  creationHubBackButton: {
+    position: "absolute",
+    left: 18,
+    top: 28,
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: "rgba(255,255,255,0.62)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.8)",
+    alignItems: "center",
+    justifyContent: "center",
+    zIndex: 4,
+  },
+  creationHubTitleBlock: {
+    position: "absolute",
+    left: 28,
+    top: 78,
+    zIndex: 3,
+    gap: 3,
+  },
+  creationHubKicker: {
+    color: colors.accentDark,
+    fontSize: 15,
+    lineHeight: 19,
+    fontWeight: "800",
+  },
+  creationHubScreenTitle: {
+    color: colors.ink,
+    fontSize: 31,
+    lineHeight: 38,
+    fontWeight: "900",
+    letterSpacing: 0,
+  },
+  creationHubScreenSubtitle: {
+    color: "rgba(127,83,94,0.72)",
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: "700",
+  },
+  creationHubPetHotspot: {
+    position: "absolute",
+    left: 54,
+    right: 54,
+    top: 236,
+    height: 258,
+    borderRadius: 42,
+    zIndex: 5,
+  },
+  creationHubDilingCover: {
+    position: "absolute",
+    left: "50%",
+    top: 232,
+    width: 148,
+    height: 168,
+    marginLeft: -74,
+    zIndex: 4,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  creationHubDilingMask: {
+    position: "absolute",
+    left: -2,
+    right: -2,
+    top: 26,
+    bottom: -4,
+    borderRadius: 58,
+    backgroundColor: "rgba(255,250,247,0.92)",
+    boxShadow: "0 18px 34px rgba(116,74,89,0.16), inset 0 1px 1px rgba(255,255,255,0.9)",
+  },
+  creationHubDilingGlow: {
+    width: 150,
+    height: 150,
+    marginTop: 6,
+    overflow: "visible",
+  },
+  creationHubFootprintHotspot: {
+    position: "absolute",
+    left: 24,
+    bottom: "max(64px, calc(48px + env(safe-area-inset-bottom)))" as never,
+    width: "44%",
+    height: 160,
+    borderRadius: 34,
+    zIndex: 4,
+  },
+  creationHubGameHotspot: {
+    position: "absolute",
+    right: 24,
+    bottom: "max(64px, calc(48px + env(safe-area-inset-bottom)))" as never,
+    width: "44%",
+    height: 160,
+    borderRadius: 34,
+    zIndex: 4,
+  },
+  creationHubHotspotButton: {
+    flex: 1,
+    borderRadius: 34,
+    justifyContent: "flex-end",
+    padding: 8,
+  },
+  creationHubPetLabel: {
+    alignSelf: "center",
+    minWidth: 174,
+    maxWidth: 220,
+    borderRadius: 28,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    backgroundColor: "rgba(255,252,248,0.88)",
+    borderWidth: 1.5,
+    borderColor: "rgba(255,255,255,0.9)",
+    boxShadow: "0 16px 30px rgba(116,74,89,0.15), inset 0 1px 1px rgba(255,255,255,0.9)",
+    gap: 3,
+  },
+  creationHubSmallLabel: {
+    borderRadius: 24,
+    paddingHorizontal: 13,
+    paddingVertical: 11,
+    backgroundColor: "rgba(255,252,248,0.88)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.82)",
+    boxShadow: "0 14px 24px rgba(116,74,89,0.13), inset 0 1px 1px rgba(255,255,255,0.9)",
+    gap: 3,
+  },
+  creationHubLabelTitle: {
+    color: colors.ink,
+    fontSize: 19,
+    lineHeight: 24,
+    fontWeight: "900",
+    textAlign: "center",
+  },
+  creationHubLabelBadge: {
+    alignSelf: "center",
+    color: colors.accentDark,
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: "900",
+    paddingHorizontal: 10,
+    paddingVertical: 3,
+    borderRadius: 999,
+    backgroundColor: "rgba(253,235,241,0.82)",
+    overflow: "hidden",
+  },
+  creationHubLabelText: {
+    color: colors.muted,
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: "800",
+    textAlign: "center",
+  },
+  creationCloudClusterTop: {
+    position: "absolute",
+    left: -28,
+    top: 20,
+    width: 150,
+    height: 90,
+    borderRadius: 60,
+    backgroundColor: "rgba(255,255,255,0.44)",
+    boxShadow: "70px 12px 0 rgba(253,235,241,0.42), 180px 8px 0 rgba(255,255,255,0.5)",
+  },
+  creationCloudClusterBottom: {
+    position: "absolute",
+    right: -36,
+    bottom: 34,
+    width: 168,
+    height: 82,
+    borderRadius: 60,
+    backgroundColor: "rgba(255,255,255,0.52)",
+    boxShadow: "-86px 16px 0 rgba(227,238,244,0.36), -190px -8px 0 rgba(253,243,214,0.25)",
+  },
+  creationIsland: {
+    position: "relative",
+    minHeight: 154,
+    borderRadius: 30,
+    padding: 0,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.86)",
+    boxShadow: "0 20px 34px rgba(116,74,89,0.11)",
+    gap: 9,
+    overflow: "hidden",
+  },
+  creationIslandPressed: {
+    opacity: 0.9,
+    transform: [{ translateY: 1 }],
+  },
+  creationPetIsland: {
+    minHeight: 318,
+    backgroundColor: "rgba(255,248,251,0.5)",
+    backgroundImage: "linear-gradient(180deg, rgba(255,255,255,0.62), rgba(253,235,241,0.44))" as never,
+  },
+  creationFootprintIsland: {
+    flex: 1,
+    minHeight: 238,
+    backgroundColor: "rgba(255,247,245,0.54)",
+    backgroundImage: "linear-gradient(180deg, rgba(255,255,255,0.58), rgba(253,243,214,0.38))" as never,
+  },
+  creationGameIsland: {
+    flex: 1,
+    minHeight: 238,
+    backgroundColor: "rgba(249,246,255,0.54)",
+    backgroundImage: "linear-gradient(180deg, rgba(255,255,255,0.58), rgba(238,232,246,0.42))" as never,
+  },
+  creationIslandHeroImage: {
+    width: "100%",
+    height: 250,
+    marginTop: 4,
+  },
+  creationSmallIslandImage: {
+    width: "118%",
+    height: 150,
+    marginLeft: "-9%" as never,
+    marginTop: 6,
+  },
+  creationIslandOverlayTop: {
+    position: "absolute",
+    top: 12,
+    right: 12,
+    minHeight: 30,
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    backgroundColor: "rgba(255,255,255,0.82)",
+    borderWidth: 1,
+    borderColor: "rgba(184,95,123,0.12)",
+    justifyContent: "center",
+  },
+  creationIslandCaption: {
+    position: "absolute",
+    left: 14,
+    right: 14,
+    bottom: 14,
+    borderRadius: 24,
+    padding: 13,
+    backgroundColor: "rgba(255,255,255,0.86)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.72)",
+    gap: 4,
+  },
+  creationIslandCaptionSmall: {
+    position: "absolute",
+    left: 10,
+    right: 10,
+    bottom: 10,
+    borderRadius: 21,
+    padding: 10,
+    backgroundColor: "rgba(255,255,255,0.88)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.72)",
+    gap: 2,
+  },
+  creationIslandTall: {
+    flex: 1,
+    minWidth: 0,
+  },
+  creationIslandHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 10,
+  },
+  creationIslandIcon: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.75)",
+  },
+  creationIslandIconPet: {
+    backgroundColor: "#FDEBF1",
+  },
+  creationIslandIconFootprint: {
+    backgroundColor: "#FDF3D6",
+  },
+  creationIslandIconGame: {
+    backgroundColor: "#E3EEF4",
+  },
+  creationIslandTag: {
+    color: colors.accentDark,
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: "900",
+  },
+  creationIslandTitle: {
+    color: colors.ink,
+    fontSize: 19,
+    lineHeight: 23,
+    fontWeight: "900",
+  },
+  creationIslandText: {
+    color: colors.muted,
+    fontSize: 12,
+    lineHeight: 17,
+    fontWeight: "700",
+  },
+  creationIslandMeta: {
+    color: colors.accentDark,
+    fontSize: 11,
+    lineHeight: 15,
+    fontWeight: "900",
+  },
+  creationHubPetRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+  },
+  creationHubPetImage: {
+    width: 82,
+    height: 82,
+    borderRadius: 30,
+    backgroundColor: "#fff",
+  },
+  creationHubPetCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: 5,
+  },
+  creationIslandGrid: {
+    flexDirection: "row",
+    gap: 12,
+  },
+  creationIslandHalf: {
+    flex: 1,
+    minWidth: 0,
+  },
+  creationTownLogCard: {
+    gap: 8,
+    backgroundColor: "rgba(255,255,255,0.82)",
+  },
+  creationCabin: {
+    gap: 12,
+  },
+  creationCabinStageCard: {
+    overflow: "hidden",
+    gap: 13,
+    padding: 12,
+    borderRadius: 32,
+    backgroundColor: "rgba(255,250,247,0.96)",
+    backgroundImage: "linear-gradient(160deg, rgba(255,250,247,0.98), rgba(253,235,241,0.48), rgba(227,238,244,0.24))" as never,
+    boxShadow: "0 18px 40px rgba(116,74,89,0.1), inset 0 1px 2px rgba(255,255,255,0.94)",
+  },
+  creationCabinStageWrap: {
+    position: "relative",
+    minHeight: 456,
+    borderRadius: 32,
+    overflow: "hidden",
+    backgroundColor: "#f4dcc4",
+    boxShadow: "0 18px 34px rgba(116,74,89,0.16)",
+  },
+  creationCabinInteriorImage: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    top: 0,
+    width: "100%",
+    height: "100%",
+  },
+  creationCabinPetStage: {
+    position: "absolute",
+    left: 8,
+    right: 8,
+    bottom: 24,
+    minHeight: 300,
+    borderRadius: 26,
+    overflow: "hidden",
+    backgroundColor: "rgba(255,255,255,0)",
+  },
+  creationGranaryButton: {
+    position: "absolute",
+    right: 12,
+    bottom: 12,
+    minWidth: 86,
+    height: 62,
+    borderRadius: 26,
+    paddingHorizontal: 15,
+    backgroundColor: "rgba(255,249,241,0.92)",
+    borderWidth: 1,
+    borderColor: "rgba(184,95,123,0.16)",
+    boxShadow: "0 14px 28px rgba(116,74,89,0.18), inset 0 1px 1px rgba(255,255,255,0.85)",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 5,
+  },
+  creationGranaryButtonText: {
+    color: colors.accentDark,
+    fontSize: 13,
+    lineHeight: 16,
+    fontWeight: "900",
+  },
+  creationGranaryDrawer: {
+    borderRadius: 26,
+    padding: 13,
+    backgroundColor: "rgba(255,255,255,0.9)",
+    borderWidth: 1,
+    borderColor: "rgba(184,95,123,0.1)",
+    boxShadow: "0 16px 32px rgba(116,74,89,0.11)",
+    gap: 11,
+  },
+  creationGranaryHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 10,
+  },
+  creationGranaryTitle: {
+    color: colors.ink,
+    fontSize: 16,
+    lineHeight: 21,
+    fontWeight: "900",
   },
   creationHeroCard: {
     overflow: "hidden",
@@ -4933,17 +7273,18 @@ const styles = StyleSheet.create({
   },
   creationMeters: {
     flexDirection: "row",
-    gap: 8,
+    gap: 9,
   },
   creationMeter: {
     flex: 1,
     minWidth: 0,
-    borderRadius: 17,
-    padding: 9,
-    backgroundColor: "rgba(255,255,255,0.7)",
+    borderRadius: 22,
+    padding: 10,
+    backgroundColor: "rgba(255,255,255,0.76)",
     borderWidth: 1,
-    borderColor: "rgba(184,95,123,0.09)",
-    gap: 6,
+    borderColor: "rgba(255,255,255,0.82)",
+    boxShadow: "0 10px 18px rgba(116,74,89,0.07), inset 0 1px 1px rgba(255,255,255,0.9)",
+    gap: 7,
   },
   creationMeterHead: {
     flexDirection: "row",
@@ -4964,7 +7305,7 @@ const styles = StyleSheet.create({
     fontWeight: "900",
   },
   creationMeterTrack: {
-    height: 6,
+    height: 8,
     borderRadius: 999,
     backgroundColor: "rgba(129,111,116,0.12)",
     overflow: "hidden",
@@ -5016,6 +7357,49 @@ const styles = StyleSheet.create({
     lineHeight: 16,
     fontWeight: "900",
   },
+  homePetCard: {
+    gap: 12,
+    overflow: "hidden",
+  },
+  homePetSubtitle: {
+    color: colors.muted,
+    fontSize: 12,
+    lineHeight: 17,
+    fontWeight: "700",
+    marginTop: 2,
+  },
+  petMemoryList: {
+    gap: 9,
+  },
+  petMemoryItem: {
+    minHeight: 58,
+    borderRadius: 20,
+    backgroundColor: "#fff9fb",
+    borderWidth: 1,
+    borderColor: "rgba(184,95,123,0.09)",
+    padding: 11,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 10,
+  },
+  petMemoryCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: 3,
+  },
+  petMemorySummary: {
+    color: colors.ink,
+    fontSize: 14,
+    lineHeight: 19,
+    fontWeight: "800",
+  },
+  petMemoryMeta: {
+    color: colors.faint,
+    fontSize: 11,
+    lineHeight: 15,
+    fontWeight: "700",
+  },
   creationLevelText: {
     color: colors.accentDark,
     fontSize: 12,
@@ -5028,68 +7412,55 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 8,
   },
-  creationPetGrid: {
+  creationDilingProfile: {
     flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 10,
-  },
-  creationPetOption: {
-    position: "relative",
-    width: "48%",
-    minWidth: 142,
-    flexGrow: 1,
+    alignItems: "center",
+    gap: 14,
     borderRadius: 22,
-    backgroundColor: "#fffafb",
+    padding: 12,
+    backgroundColor: "#fff9fb",
     borderWidth: 1,
-    borderColor: "rgba(184,95,123,0.1)",
-    overflow: "hidden",
-    boxShadow: "0 10px 24px rgba(82,61,66,0.06)",
+    borderColor: "rgba(184,95,123,0.12)",
   },
-  creationPetOptionActive: {
-    borderColor: "rgba(184,95,123,0.34)",
+  creationDilingPortrait: {
+    width: 92,
+    height: 92,
+    borderRadius: 24,
     backgroundColor: "#fff2f5",
-    boxShadow: "0 14px 28px rgba(184,95,123,0.12)",
-  },
-  creationPetOptionPressed: {
-    opacity: 0.88,
-    transform: [{ translateY: 1 }],
-  },
-  creationPetOptionImage: {
-    width: "100%",
-    height: 118,
-  },
-  creationPetOptionText: {
-    padding: 11,
-    gap: 2,
-  },
-  creationPetOptionTitle: {
-    color: colors.ink,
-    fontSize: 14,
-    lineHeight: 18,
-    fontWeight: "900",
-  },
-  creationPetOptionMeta: {
-    color: colors.muted,
-    fontSize: 11,
-    lineHeight: 15,
-    fontWeight: "800",
-  },
-  creationPetCheck: {
-    position: "absolute",
-    right: 10,
-    top: 10,
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    backgroundColor: colors.accent,
     alignItems: "center",
     justifyContent: "center",
-    boxShadow: "0 8px 16px rgba(184,95,123,0.22)",
+    overflow: "hidden",
   },
-  creationPetCheckText: {
-    color: "#fff",
-    fontSize: 10,
-    lineHeight: 12,
+  creationDilingPortrait3D: {
+    width: 118,
+    height: 118,
+    overflow: "visible",
+    backgroundColor: "transparent",
+  },
+  creationDilingProfile3DStage: {
+    width: 118,
+    height: 118,
+    position: "relative",
+    overflow: "visible",
+  },
+  creationDilingImage: {
+    width: 84,
+    height: 84,
+  },
+  creationDilingCopy: {
+    flex: 1,
+    gap: 3,
+  },
+  creationDilingTitle: {
+    color: colors.ink,
+    fontSize: 16,
+    lineHeight: 21,
+    fontWeight: "900",
+  },
+  creationDilingMeta: {
+    color: colors.accentDark,
+    fontSize: 12,
+    lineHeight: 16,
     fontWeight: "900",
   },
   creationPetDescription: {
@@ -5097,6 +7468,31 @@ const styles = StyleSheet.create({
     fontSize: 13,
     lineHeight: 19,
     fontWeight: "700",
+  },
+  creationIdentityPill: {
+    minHeight: 52,
+    borderRadius: 20,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    backgroundColor: "#fff9fb",
+    borderWidth: 1,
+    borderColor: "rgba(184,95,123,0.1)",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 12,
+  },
+  creationIdentityLabel: {
+    color: colors.muted,
+    fontSize: 12,
+    lineHeight: 17,
+    fontWeight: "800",
+  },
+  creationIdentityValue: {
+    color: colors.accentDark,
+    fontSize: 17,
+    lineHeight: 22,
+    fontWeight: "900",
   },
   creationDecorRow: {
     flexDirection: "row",
@@ -5159,6 +7555,134 @@ const styles = StyleSheet.create({
     flexWrap: "wrap",
     gap: 8,
   },
+  creationFootprintPage: {
+    gap: 12,
+  },
+  creationJourneyCard: {
+    position: "relative",
+    gap: 13,
+    minHeight: 708,
+    overflow: "hidden",
+    borderRadius: 32,
+    padding: 14,
+    backgroundColor: "rgba(255,250,247,0.98)",
+    backgroundImage: "linear-gradient(180deg, rgba(255,250,247,0.96), rgba(253,235,241,0.5), rgba(253,243,214,0.28))" as never,
+  },
+  creationJourneySceneImage: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    top: 0,
+    width: "100%",
+    height: "100%",
+  },
+  creationJourneySceneVeil: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    top: 0,
+    bottom: 0,
+    backgroundImage: "linear-gradient(180deg, rgba(255,250,247,0.18), rgba(255,250,247,0.42) 26%, rgba(255,250,247,0.84) 86%)" as never,
+  },
+  creationJourneyBackdrop: {
+    position: "absolute",
+    right: -72,
+    top: 10,
+    width: 280,
+    height: 220,
+    opacity: 0.36,
+  },
+  creationJourneyHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    paddingTop: 4,
+    paddingHorizontal: 2,
+    zIndex: 1,
+  },
+  creationCompass: {
+    width: 58,
+    height: 58,
+    borderRadius: 29,
+    backgroundColor: "#FDF3D6",
+    borderWidth: 1,
+    borderColor: "rgba(184,95,123,0.1)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  creationJourneyCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: 4,
+  },
+  creationPolaroidRail: {
+    position: "relative",
+    gap: 14,
+    paddingLeft: 20,
+    paddingTop: 6,
+    paddingBottom: 4,
+    borderLeftWidth: 2,
+    borderLeftColor: "rgba(229,111,137,0.34)",
+    zIndex: 1,
+  },
+  creationPolaroid: {
+    position: "relative",
+    minHeight: 124,
+    borderRadius: 22,
+    padding: 15,
+    paddingRight: 94,
+    backgroundColor: "rgba(255,255,255,0.88)",
+    borderWidth: 1,
+    borderColor: "rgba(184,95,123,0.13)",
+    boxShadow: "0 14px 28px rgba(116,74,89,0.12)",
+    gap: 4,
+    transform: [{ rotate: "-0.5deg" }],
+  },
+  creationPolaroidPhoto: {
+    position: "absolute",
+    right: 14,
+    top: 18,
+    width: 72,
+    height: 58,
+    borderRadius: 7,
+    backgroundColor: "#BFD9E5",
+    backgroundImage: "linear-gradient(145deg, #b7d9e7, #f5d4dd)" as never,
+    borderWidth: 5,
+    borderColor: "#fff",
+    transform: [{ rotate: "4deg" }],
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  creationTimelineHeart: {
+    position: "absolute",
+    left: -30,
+    top: 34,
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: "#FDEBF1",
+    borderWidth: 1,
+    borderColor: "rgba(184,95,123,0.22)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  creationPolaroidPin: {
+    position: "absolute",
+    right: 12,
+    top: 10,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: "#FDEBF1",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  creationFootprintFormCard: {
+    gap: 11,
+    borderRadius: 28,
+    backgroundColor: "rgba(255,255,255,0.92)",
+    boxShadow: "0 14px 28px rgba(116,74,89,0.08)",
+  },
   creationShopGrid: {
     flexDirection: "row",
     flexWrap: "wrap",
@@ -5167,11 +7691,12 @@ const styles = StyleSheet.create({
   creationFoodCard: {
     flex: 1,
     minWidth: 148,
-    borderRadius: 22,
+    borderRadius: 23,
     padding: 13,
-    backgroundColor: "#fff9fb",
+    backgroundColor: "rgba(255,249,251,0.92)",
     borderWidth: 1,
     borderColor: "rgba(184,95,123,0.09)",
+    boxShadow: "0 10px 20px rgba(116,74,89,0.06)",
     gap: 8,
   },
   creationFoodTop: {
@@ -5210,6 +7735,52 @@ const styles = StyleSheet.create({
     gap: 10,
     backgroundColor: "rgba(255,255,255,0.9)",
   },
+  creationPlayground: {
+    gap: 12,
+  },
+  creationPuzzleEnvelope: {
+    position: "relative",
+    gap: 10,
+    minHeight: 620,
+    paddingTop: 170,
+    borderRadius: 32,
+    paddingHorizontal: 16,
+    paddingBottom: 16,
+    backgroundColor: "#fffafb",
+    backgroundImage: "linear-gradient(180deg, rgba(255,250,252,0.98), rgba(253,235,241,0.68) 52%, rgba(227,238,244,0.36))" as never,
+    overflow: "hidden",
+  },
+  creationPuzzleSceneImage: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    top: 0,
+    width: "100%",
+    height: "100%",
+  },
+  creationPuzzleSceneVeil: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    top: 0,
+    bottom: 0,
+    backgroundImage: "linear-gradient(180deg, rgba(255,250,252,0.08), rgba(255,250,252,0.36) 36%, rgba(255,250,252,0.92) 78%)" as never,
+  },
+  creationPuzzleBackdrop: {
+    position: "absolute",
+    top: -36,
+    alignSelf: "center",
+    width: 300,
+    height: 230,
+    opacity: 0.82,
+  },
+  creationPuzzleTopLine: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    gap: 10,
+    zIndex: 1,
+  },
   creationPuzzleHeader: {
     flexDirection: "row",
     alignItems: "center",
@@ -5223,7 +7794,9 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
-    backgroundColor: colors.accentSoft,
+    backgroundColor: "rgba(253,235,241,0.88)",
+    borderWidth: 1,
+    borderColor: "rgba(184,95,123,0.12)",
   },
   creationPuzzleBadgeText: {
     color: colors.accentDark,
@@ -5231,41 +7804,61 @@ const styles = StyleSheet.create({
     lineHeight: 16,
     fontWeight: "900",
   },
+  creationPuzzleStars: {
+    flexDirection: "row",
+    gap: 2,
+  },
   creationPuzzleQuestion: {
     color: colors.ink,
-    fontSize: 16,
-    lineHeight: 23,
+    fontSize: 21,
+    lineHeight: 29,
     fontWeight: "900",
+    textAlign: "center",
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderRadius: 24,
+    backgroundColor: "rgba(255,255,255,0.68)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.82)",
+    zIndex: 1,
   },
   creationPuzzleOptions: {
     flexDirection: "row",
     flexWrap: "wrap",
     gap: 8,
+    zIndex: 1,
   },
   creationPuzzleOption: {
     flexGrow: 1,
-    minWidth: "30%",
-    minHeight: 42,
-    borderRadius: 17,
-    paddingHorizontal: 12,
+    minWidth: "100%",
+    minHeight: 45,
+    borderRadius: 999,
+    paddingHorizontal: 18,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "#fffafb",
+    backgroundColor: "rgba(255,248,251,0.92)",
     borderWidth: 1,
     borderColor: "rgba(184,95,123,0.1)",
+    boxShadow: "0 8px 16px rgba(116,74,89,0.05)",
   },
   creationPuzzleOptionActive: {
-    backgroundColor: colors.accentSoft,
-    borderColor: "rgba(184,95,123,0.28)",
+    backgroundColor: "#E3EEF4",
+    borderColor: "rgba(89,142,166,0.34)",
+    boxShadow: "0 10px 20px rgba(89,142,166,0.13)",
   },
   creationPuzzleOptionText: {
     color: colors.muted,
-    fontSize: 13,
-    lineHeight: 18,
+    fontSize: 14,
+    lineHeight: 19,
     fontWeight: "900",
   },
   creationPuzzleOptionTextActive: {
     color: colors.accentDark,
+  },
+  creationPlaygroundRewardCard: {
+    gap: 8,
+    borderRadius: 28,
+    backgroundColor: "rgba(255,255,255,0.88)",
   },
   creationActionItem: {
     borderBottomWidth: 1,
@@ -5286,15 +7879,107 @@ const styles = StyleSheet.create({
     fontWeight: "700",
   },
   heroCard: {
+    position: "relative",
+    overflow: "hidden",
+    paddingTop: 16,
+    paddingBottom: 18,
+    gap: 16,
+    borderRadius: 32,
+    backgroundColor: "rgba(255, 255, 255, 0.76)",
+    borderColor: "rgba(255,255,255,0.86)",
+    backgroundImage: "radial-gradient(circle at 14% 6%, rgba(255, 214, 227, 0.46), rgba(255,255,255,0.08) 42%), radial-gradient(circle at 88% 18%, rgba(255, 246, 209, 0.48), rgba(255,255,255,0.08) 40%)" as never,
+    boxShadow: "0 10px 20px rgba(90,68,76,0.04), inset 0 1px 2px rgba(255,255,255,0.9)",
+  },
+  heroTopRow: {
+    width: "100%",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 12,
+  },
+  brandRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    flex: 1,
+  },
+  heroBrand: {
+    color: "#6b404b",
+    fontSize: 20,
+    lineHeight: 25,
+    fontWeight: "800",
+  },
+  heroBrandSub: {
+    color: "rgba(92,70,76,0.58)",
+    fontSize: 11,
+    lineHeight: 15,
+    fontWeight: "600",
+  },
+  heroLovePanel: {
+    position: "relative",
+    width: "100%",
+    minHeight: 258,
+    borderRadius: 30,
+    paddingTop: 22,
+    paddingHorizontal: 14,
+    paddingBottom: 12,
     alignItems: "center",
     overflow: "hidden",
-    paddingTop: 14,
-    paddingBottom: 10,
-    gap: 4,
-    // 高级流砂微发光底纹
-    backgroundColor: "rgba(255, 255, 255, 0.94)",
-    backgroundImage: "radial-gradient(circle at 10% 20%, rgba(255, 211, 226, 0.22) 0%, rgba(255, 255, 255, 0.2) 90%)" as never,
-    boxShadow: "0 20px 48px rgba(184, 95, 123, 0.08), inset 0 1px 1px rgba(255,255,255,0.9)",
+    backgroundColor: "rgba(255,255,255,0.38)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.72)",
+    boxShadow: "inset 0 1px 1px rgba(255,255,255,0.86), 0 16px 32px rgba(90,68,76,0.035)",
+  },
+  heroAvatarPair: {
+    width: "100%",
+    alignItems: "center",
+    opacity: 0.92,
+    transform: [{ scale: 0.96 }],
+  },
+  heroLoveBody: {
+    alignItems: "center",
+    marginTop: -8,
+    zIndex: 2,
+  },
+  heroLoveTitle: {
+    color: "rgba(96,71,77,0.68)",
+    fontSize: 15,
+    lineHeight: 19,
+    fontWeight: "600",
+  },
+  heroNumberRow: {
+    flexDirection: "row",
+    alignItems: "flex-end",
+    justifyContent: "center",
+    gap: 6,
+    marginTop: -2,
+  },
+  heroLoveNumber: {
+    color: "#764851",
+    fontSize: 58,
+    lineHeight: 63,
+    fontWeight: "500",
+    textAlign: "center",
+    fontFamily: Platform.select({ web: "Georgia, 'Times New Roman', serif", default: undefined }) as never,
+    textShadowColor: "rgba(223, 128, 158, 0.16)",
+    textShadowOffset: { width: 0, height: 5 },
+    textShadowRadius: 12,
+  },
+  heroLoveUnit: {
+    color: "#764851",
+    fontSize: 16,
+    lineHeight: 24,
+    fontWeight: "700",
+    textAlign: "center",
+    marginBottom: 6,
+  },
+  heroWave: {
+    position: "absolute",
+    top: 48,
+    left: 18,
+    right: 18,
+    opacity: 0.8,
+    filter: "drop-shadow(0 0 6px rgba(238,138,170,0.28))" as never,
   },
   heroRelationText: {
     color: colors.muted,
@@ -5315,10 +8000,6 @@ const styles = StyleSheet.create({
     lineHeight: 50,
     fontWeight: "800",
     textAlign: "center",
-    // 霓虹发光投影
-    textShadowColor: "rgba(223, 79, 121, 0.18)",
-    textShadowOffset: { width: 0, height: 4 },
-    textShadowRadius: 12,
   },
   loveUnit: {
     color: colors.ink,
@@ -5329,10 +8010,10 @@ const styles = StyleSheet.create({
     marginBottom: 6,
   },
   startedText: {
-    color: colors.muted,
-    fontSize: 12,
-    lineHeight: 16,
-    fontWeight: "500",
+    color: "rgba(100,76,82,0.7)",
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: "600",
   },
   countdownText: {
     color: colors.accentDark,
@@ -5379,84 +8060,110 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   moodStatusCard: {
-    paddingVertical: 8,
-    gap: 6,
+    position: "relative",
+    overflow: "hidden",
+    borderRadius: 32,
+    paddingVertical: 17,
+    gap: 14,
+    backgroundColor: "rgba(255, 255, 255, 0.76)",
+    borderColor: "rgba(255,255,255,0.86)",
+    boxShadow: "0 10px 20px rgba(90,68,76,0.04), inset 0 1px 2px rgba(255,255,255,0.9)",
   },
   loveLetterEntryCard: {
-    width: "100%",
-    minHeight: 62,
-    borderRadius: 24,
+    position: "relative",
+    width: "92%",
+    minHeight: 84,
+    borderRadius: 10,
     paddingHorizontal: 16,
-    paddingVertical: 8,
-    marginTop: 6,
-    // 改为极轻半透明毛玻璃 Wash，微带渐变
-    backgroundColor: "rgba(255, 255, 255, 0.42)",
+    paddingTop: 38,
+    paddingBottom: 10,
+    marginTop: 12,
+    backgroundColor: "#fff9f5",
     borderWidth: 1,
-    borderColor: "rgba(255, 255, 255, 0.78)",
-    flexDirection: "row",
+    borderColor: "rgba(226,189,171,0.46)",
     alignItems: "center",
-    gap: 12,
-    boxShadow: "0 14px 30px rgba(184, 95, 123, 0.04), inset 0 1px 1px rgba(255, 255, 255, 0.8)",
+    justifyContent: "center",
+    overflow: "visible",
+    boxShadow: "0 12px 22px rgba(90,68,76,0.12), inset 0 1px 1px rgba(255,255,255,0.9)",
   },
   loveLetterEntryCardPressed: {
     transform: [{ scale: 0.98 }],
     opacity: 0.9,
     backgroundColor: "rgba(255, 255, 255, 0.52)",
   },
-  loveLetterEntryIcon: {
-    width: 44,
-    height: 44,
-    borderRadius: 16,
-    // 纯白信封底座，浮雕影
-    backgroundColor: "rgba(255, 255, 255, 0.84)",
-    alignItems: "center",
-    justifyContent: "center",
-    position: "relative",
-    borderWidth: 1,
-    borderColor: "rgba(255, 255, 255, 0.9)",
-    boxShadow: "0 5px 12px rgba(184, 95, 123, 0.05)",
-  },
-  loveLetterEntryHeart: {
+  envelopeFlap: {
     position: "absolute",
-    right: -3,
-    top: -4,
-    width: 18,
-    height: 18,
-    borderRadius: 9,
-    backgroundColor: colors.accent,
+    left: 0,
+    right: 0,
+    top: 0,
+    height: 48,
+    backgroundColor: "#fffdf9",
+    borderTopLeftRadius: 10,
+    borderTopRightRadius: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: "rgba(210,171,154,0.38)",
+    transform: [{ skewY: "-6deg" }],
+    boxShadow: "0 5px 12px rgba(90,68,76,0.07)",
+  },
+  envelopeLeftFold: {
+    position: "absolute",
+    left: 0,
+    bottom: 0,
+    width: "52%",
+    height: 52,
+    borderBottomLeftRadius: 10,
+    borderRightWidth: 1,
+    borderRightColor: "rgba(210,171,154,0.28)",
+    transform: [{ skewY: "-14deg" }],
+    backgroundColor: "rgba(255,248,243,0.82)",
+  },
+  envelopeRightFold: {
+    position: "absolute",
+    right: 0,
+    bottom: 0,
+    width: "52%",
+    height: 52,
+    borderBottomRightRadius: 10,
+    borderLeftWidth: 1,
+    borderLeftColor: "rgba(210,171,154,0.28)",
+    transform: [{ skewY: "14deg" }],
+    backgroundColor: "rgba(255,248,243,0.82)",
+  },
+  envelopeSeal: {
+    position: "absolute",
+    top: 29,
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: "rgba(237,143,169,0.72)",
     alignItems: "center",
     justifyContent: "center",
-    borderWidth: 1.5,
-    borderColor: "#fff",
-    boxShadow: "0 2px 6px rgba(223, 79, 121, 0.22)",
+    borderWidth: 2,
+    borderColor: "rgba(255,222,165,0.88)",
+    boxShadow: "0 8px 14px rgba(184,95,123,0.18), inset 0 1px 2px rgba(255,255,255,0.7)",
   },
-  loveLetterEntryCopy: {
-    flex: 1,
-    gap: 2,
+  envelopeSealInner: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(255,196,213,0.7)",
   },
   loveLetterEntryTitle: {
-    color: colors.ink,
-    fontSize: 15,
-    lineHeight: 20,
-    fontWeight: "900",
+    color: "#a4586d",
+    fontSize: 20,
+    lineHeight: 25,
+    fontWeight: "800",
+    marginTop: 6,
+    fontFamily: Platform.select({ web: "Georgia, 'Times New Roman', serif", default: undefined }) as never,
   },
   loveLetterEntryText: {
-    color: colors.muted,
+    color: "rgba(112,83,90,0.58)",
     fontSize: 12,
     lineHeight: 16,
     fontWeight: "600",
-  },
-  loveLetterEntryAction: {
-    borderRadius: 999,
-    backgroundColor: colors.accentSoft,
-    paddingHorizontal: 10,
-    paddingVertical: 7,
-  },
-  loveLetterEntryActionText: {
-    color: colors.accentDark,
-    fontSize: 12,
-    lineHeight: 15,
-    fontWeight: "900",
+    textAlign: "center",
   },
   profileName: {
     color: colors.ink,
@@ -5482,6 +8189,9 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "space-between",
     gap: 14,
+  },
+  disabledRow: {
+    opacity: 0.45,
   },
   settingLabel: {
     color: colors.ink,
@@ -5545,12 +8255,23 @@ const styles = StyleSheet.create({
     fontWeight: "900",
   },
   homeMessageInput: {
-    minHeight: 52,
+    height: 150,
     paddingTop: 10,
+    paddingRight: 16,
+    paddingLeft: 16,
     textAlignVertical: "top",
+    borderWidth: 0,
+    backgroundColor: "transparent",
+    boxShadow: "none" as never,
+    color: "#6f4c55",
+    fontSize: 16,
+    lineHeight: 30,
+    zIndex: 2,
   },
   homeMessageList: {
-    gap: 8,
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 10,
   },
   notificationRow: {
     flexDirection: "row",
@@ -5691,6 +8412,64 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: "800",
   },
+  bubbleMoodSlot: {
+    flex: 1,
+    minHeight: 94,
+    borderRadius: 34,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 4,
+    overflow: "visible",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.84)",
+    boxShadow: "0 10px 22px rgba(90,68,76,0.06), inset 0 1px 2px rgba(255,255,255,0.88)",
+  },
+  bubbleMoodSlotWarm: {
+    backgroundColor: "rgba(255,226,233,0.72)",
+    backgroundImage: "radial-gradient(circle at 28% 20%, rgba(255,255,255,0.72), rgba(255,226,233,0.22) 46%, rgba(255,214,226,0.52))" as never,
+  },
+  bubbleMoodSlotCool: {
+    backgroundColor: "rgba(238,235,250,0.76)",
+    backgroundImage: "radial-gradient(circle at 30% 18%, rgba(255,255,255,0.72), rgba(240,237,250,0.28) 44%, rgba(222,220,246,0.56))" as never,
+  },
+  bubbleMoodSlotActive: {
+    transform: [{ rotate: "-0.7deg" }],
+  },
+  bubbleMoodLobeOne: {
+    position: "absolute",
+    left: 22,
+    top: -10,
+    width: 56,
+    height: 42,
+    borderRadius: 26,
+    backgroundColor: "rgba(255,255,255,0.34)",
+  },
+  bubbleMoodLobeTwo: {
+    position: "absolute",
+    right: 16,
+    top: 2,
+    width: 50,
+    height: 38,
+    borderRadius: 24,
+    backgroundColor: "rgba(255,255,255,0.26)",
+  },
+  bubbleMoodLobeThree: {
+    position: "absolute",
+    left: 9,
+    bottom: 12,
+    width: 34,
+    height: 26,
+    borderRadius: 18,
+    backgroundColor: "rgba(255,255,255,0.2)",
+  },
+  bubbleMoodIcon: {
+    width: 26,
+    height: 22,
+    borderRadius: 14,
+    backgroundColor: "rgba(255,255,255,0.54)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
   interactionGrid: {
     flexDirection: "row",
     flexWrap: "wrap",
@@ -5715,6 +8494,209 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     justifyContent: "flex-end",
     gap: 10,
+  },
+  homeMessageBoardCard: {
+    position: "relative",
+    overflow: "hidden",
+    borderRadius: 32,
+    paddingTop: 18,
+    paddingBottom: 14,
+    backgroundColor: "rgba(255,250,248,0.82)",
+    borderColor: "rgba(255,255,255,0.86)",
+    boxShadow: "0 10px 20px rgba(90,68,76,0.04), inset 0 1px 2px rgba(255,255,255,0.9)",
+  },
+  messageBoardAnchorWrap: {
+    gap: 12,
+  },
+  messagePaperLines: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    top: 6,
+    bottom: 0,
+    borderRadius: 20,
+    backgroundImage: "repeating-linear-gradient(0deg, transparent 0px, transparent 29px, rgba(218,139,160,0.12) 29px, rgba(218,139,160,0.12) 30px)" as never,
+    zIndex: 1,
+  },
+  messagePaperFold: {
+    position: "absolute",
+    right: -1,
+    top: -1,
+    width: 48,
+    height: 48,
+    backgroundColor: "#fff7f7",
+    borderLeftWidth: 1,
+    borderBottomWidth: 1,
+    borderColor: "rgba(218,139,160,0.14)",
+    transform: [{ rotate: "12deg" }, { translateX: 18 }, { translateY: -15 }],
+    boxShadow: "-7px 8px 16px rgba(90,68,76,0.06)",
+  },
+  homeMessagePaperInput: {
+    position: "relative",
+    height: 180,
+    borderRadius: 20,
+    backgroundColor: "rgba(255,255,255,0.28)",
+    overflow: "hidden",
+  },
+  homeMessageSendButton: {
+    minHeight: 36,
+    borderRadius: 999,
+    paddingHorizontal: 16,
+    backgroundColor: "rgba(225,128,156,0.78)",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 5,
+    boxShadow: "0 8px 14px rgba(184,95,123,0.16), inset 0 1px 1px rgba(255,255,255,0.6)",
+  },
+  homeMessageComposer: {
+    gap: 6,
+  },
+  homeMessageActionRow: {
+    flexDirection: "row",
+    justifyContent: "flex-end",
+  },
+  homeMessageSendButtonDisabled: {
+    opacity: 0.48,
+  },
+  homeMessageSendText: {
+    color: "#fff",
+    fontSize: 13,
+    lineHeight: 17,
+    fontWeight: "900",
+  },
+  stickyMemoCard: {
+    position: "relative",
+    width: "48%",
+    minHeight: 100,
+    borderRadius: 6,
+    paddingHorizontal: 10,
+    paddingTop: 18,
+    paddingBottom: 10,
+    backgroundColor: "#fff1c9",
+    borderWidth: 1,
+    borderColor: "rgba(201,158,105,0.18)",
+    transform: [{ rotate: "-1.2deg" }],
+    boxShadow: "0 10px 18px rgba(82,61,66,0.08)",
+  },
+  stickyMemoTape: {
+    position: "absolute",
+    left: "35%",
+    top: -8,
+    width: 42,
+    height: 16,
+    borderRadius: 3,
+    backgroundColor: "rgba(255,223,215,0.7)",
+    transform: [{ rotate: "2deg" }],
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.48)",
+  },
+  stickyMemoTop: {
+    gap: 2,
+    marginBottom: 6,
+  },
+  stickyMemoAuthor: {
+    color: "#8a5a4d",
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: "900",
+  },
+  stickyMemoMeta: {
+    color: "rgba(116,88,81,0.54)",
+    fontSize: 10,
+    lineHeight: 14,
+    fontWeight: "700",
+  },
+  stickyMemoBody: {
+    color: "#5f4542",
+    fontSize: 14,
+    lineHeight: 20,
+    fontWeight: "600",
+  },
+  stickyMemoDelete: {
+    alignSelf: "flex-start",
+    marginTop: 8,
+    minHeight: 28,
+    borderRadius: 999,
+    paddingHorizontal: 8,
+    backgroundColor: "rgba(255,255,255,0.44)",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+  },
+  stickyMemoDeleteText: {
+    color: colors.accentDark,
+    fontSize: 11,
+    lineHeight: 15,
+    fontWeight: "900",
+  },
+  creationCrystalButton: {
+    position: "relative",
+    width: 76,
+    height: 92,
+    borderRadius: 38,
+    alignItems: "center",
+    justifyContent: "center",
+    overflow: "visible",
+  },
+  creationCrystalAura: {
+    position: "absolute",
+    width: 76,
+    height: 76,
+    borderRadius: 38,
+    backgroundColor: "rgba(246,169,196,0.24)",
+    boxShadow: "0 0 24px rgba(246,169,196,0.38)",
+  },
+  creationCrystalSheen: {
+    position: "absolute",
+    width: 68,
+    height: 68,
+    borderRadius: 34,
+    backgroundColor: "rgba(255,255,255,0.32)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.78)",
+    backgroundImage: "radial-gradient(circle at 30% 20%, rgba(255,255,255,0.88), rgba(255,255,255,0.2) 34%, rgba(245,163,195,0.34) 72%, rgba(238,203,245,0.24))" as never,
+    boxShadow: "0 18px 32px rgba(90,68,76,0.16), inset 0 1px 2px rgba(255,255,255,0.92)",
+  },
+  creationCrystalPets: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(191,144,169,0.18)",
+  },
+  creationCrystalHeart: {
+    position: "absolute",
+    right: 9,
+    bottom: 10,
+  },
+  creationCrystalStar: {
+    position: "absolute",
+    right: 0,
+    top: 3,
+    width: 25,
+    height: 25,
+    borderRadius: 13,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(255,211,139,0.5)",
+    boxShadow: "0 4px 10px rgba(231,174,83,0.26)",
+  },
+  creationCrystalLabel: {
+    position: "absolute",
+    bottom: 0,
+    minWidth: 58,
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    overflow: "hidden",
+    backgroundColor: "rgba(255,255,255,0.6)",
+    color: colors.accentDark,
+    textAlign: "center",
+    fontSize: 12,
+    lineHeight: 15,
+    fontWeight: "900",
   },
   floatingReaction: {
     position: "absolute",
@@ -6091,74 +9073,190 @@ const styles = StyleSheet.create({
   capsulePreviewCard: {
     position: "relative",
     overflow: "hidden",
-    minHeight: 156,
+    minHeight: 192,
     alignItems: "center",
     justifyContent: "center",
-    gap: 8,
-    paddingVertical: 18,
-    backgroundColor: "rgba(255,253,251,0.98)",
-    borderColor: "rgba(255,255,255,0.82)",
-    boxShadow: "0 14px 30px rgba(116,74,89,0.055), inset 0 1px 2px rgba(255,255,255,0.94)",
+    gap: 7,
+    paddingVertical: 20,
+    paddingHorizontal: 18,
+    borderRadius: 32,
+    backgroundColor: "rgba(255,253,251,0.78)",
+    borderColor: "rgba(255,255,255,0.88)",
+    boxShadow: "0 16px 34px rgba(116,74,89,0.055), inset 0 1px 2px rgba(255,255,255,0.94)",
   },
   capsulePreviewGlow: {
     position: "absolute",
-    width: 150,
-    height: 86,
+    width: 220,
+    height: 126,
     borderRadius: 999,
-    opacity: 0.18,
-    transform: [{ translateY: -2 }],
+    opacity: 0.2,
+    transform: [{ translateY: -12 }],
   },
   capsulePreviewMoodWash: {
     position: "absolute",
-    width: 128,
-    height: 74,
+    width: 154,
+    height: 92,
     borderRadius: 999,
     opacity: 0.16,
-    transform: [{ translateY: -6 }],
+    transform: [{ translateY: -16 }],
+  },
+  capsulePreviewStageRing: {
+    position: "absolute",
+    width: 154,
+    height: 154,
+    borderRadius: 77,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.76)",
+    backgroundColor: "rgba(255,255,255,0.16)",
+    boxShadow: "inset 0 1px 2px rgba(255,255,255,0.82)",
+    transform: [{ translateY: -17 }],
+  },
+  capsulePreviewSparkOne: {
+    position: "absolute",
+    right: 58,
+    top: 30,
+    width: 9,
+    height: 9,
+    borderRadius: 5,
+    backgroundColor: "rgba(255,213,224,0.86)",
+    boxShadow: "0 0 12px rgba(217,120,150,0.18)",
+  },
+  capsulePreviewSparkTwo: {
+    position: "absolute",
+    left: 58,
+    top: 74,
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+    backgroundColor: "rgba(255,242,199,0.9)",
+    boxShadow: "0 0 10px rgba(231,185,99,0.18)",
+  },
+  capsulePreviewStage: {
+    position: "relative",
+    zIndex: 1,
+    width: 114,
+    height: 94,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  capsulePreviewPedestal: {
+    position: "absolute",
+    left: 8,
+    right: 8,
+    bottom: 7,
+    height: 24,
+    borderRadius: 999,
+    backgroundColor: "rgba(255,255,255,0.62)",
+    boxShadow: "0 10px 18px rgba(82,61,66,0.06)",
   },
   capsulePreviewImage: {
     width: 36,
     height: 36,
     borderRadius: 14,
   },
+  capsulePreviewMetaPill: {
+    position: "relative",
+    zIndex: 1,
+    minHeight: 27,
+    borderRadius: 999,
+    paddingHorizontal: 11,
+    backgroundColor: "rgba(255,255,255,0.64)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.82)",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 5,
+  },
+  capsulePreviewMetaText: {
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: "900",
+  },
   capsulePreviewTitle: {
     position: "relative",
+    zIndex: 1,
     color: colors.ink,
-    fontSize: 18,
-    lineHeight: 23,
+    fontSize: 20,
+    lineHeight: 25,
     fontWeight: "900",
     marginTop: 2,
+    textAlign: "center",
   },
   capsulePreviewText: {
     position: "relative",
+    zIndex: 1,
     color: colors.muted,
     fontSize: 13,
     lineHeight: 18,
-    fontWeight: "500",
+    fontWeight: "700",
     textAlign: "center",
   },
   capsuleComposerHeader: {
-    gap: 5,
+    position: "relative",
+    zIndex: 1,
+    gap: 6,
+    paddingRight: 38,
+  },
+  capsuleComposerTitleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+  },
+  capsuleComposerSeal: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: colors.accent,
+    alignItems: "center",
+    justifyContent: "center",
+    boxShadow: "0 8px 14px rgba(184,95,123,0.18), inset 0 1px 2px rgba(255,255,255,0.45)",
   },
   capsuleComposerHint: {
     color: colors.muted,
-    fontSize: 14,
-    lineHeight: 20,
-    fontWeight: "500",
+    fontSize: 13,
+    lineHeight: 19,
+    fontWeight: "700",
+    textAlign: "center",
   },
   moodOptionalBlock: {
+    position: "relative",
+    zIndex: 1,
+    gap: 10,
+    borderRadius: 24,
+    padding: 12,
+    backgroundColor: "rgba(255,255,255,0.48)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.76)",
+  },
+  moodTrayHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
     gap: 10,
   },
   moodOptionalTitle: {
     color: colors.muted,
     fontSize: 13,
     lineHeight: 18,
-    fontWeight: "700",
+    fontWeight: "900",
+  },
+  moodTrayLabel: {
+    color: colors.accentDark,
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: "900",
+    backgroundColor: "rgba(255,226,232,0.74)",
+    borderRadius: 999,
+    overflow: "hidden",
+    paddingHorizontal: 9,
+    paddingVertical: 4,
   },
   customMoodInput: {
     minHeight: 46,
     borderRadius: 999,
-    backgroundColor: "rgba(255,255,255,0.78)",
+    backgroundColor: "rgba(255,255,255,0.82)",
   },
   linkText: {
     color: colors.accentDark,
@@ -6208,7 +9306,7 @@ const styles = StyleSheet.create({
   },
   storyInput: {
     minHeight: 124,
-    paddingTop: 14,
+    paddingTop: 13,
     paddingBottom: 14,
     textAlignVertical: "top",
     backgroundColor: "transparent",
@@ -6216,27 +9314,59 @@ const styles = StyleSheet.create({
     boxShadow: "none",
     outlineStyle: "none" as never,
     paddingHorizontal: 0,
+    fontSize: 16,
+    lineHeight: 29,
   },
   createCapsuleCard: {
+    position: "relative",
+    overflow: "hidden",
     gap: 14,
     padding: 18,
-    backgroundColor: "rgba(255,253,251,0.96)",
-    borderColor: "rgba(255,255,255,0.82)",
-    boxShadow: "0 18px 40px rgba(82,61,66,0.07), inset 0 1px 1px rgba(255,255,255,0.92)",
+    borderRadius: 32,
+    backgroundColor: "rgba(255,253,251,0.78)",
+    borderColor: "rgba(255,255,255,0.88)",
+    boxShadow: "0 18px 40px rgba(82,61,66,0.065), inset 0 1px 1px rgba(255,255,255,0.92)",
+  },
+  createCapsuleCardWash: {
+    position: "absolute",
+    left: -46,
+    top: -50,
+    width: 164,
+    height: 128,
+    borderRadius: 999,
+    backgroundColor: "rgba(255,220,232,0.32)",
+    transform: [{ rotate: "14deg" }],
+  },
+  createCapsulePaperFold: {
+    position: "absolute",
+    right: 0,
+    top: 0,
+    width: 50,
+    height: 50,
+    borderBottomLeftRadius: 18,
+    backgroundColor: "rgba(255,226,218,0.76)",
+    borderLeftWidth: 1,
+    borderBottomWidth: 1,
+    borderColor: "rgba(222,128,154,0.14)",
+    boxShadow: "-8px 8px 16px rgba(184,95,123,0.05)",
   },
   emotionCandyGrid: {
     flexDirection: "row",
     flexWrap: "wrap",
-    columnGap: 8,
+    justifyContent: "space-between",
+    columnGap: 0,
     rowGap: 9,
     overflow: "visible",
   },
   emotionCandyMotion: {
-    width: "48.5%",
+    width: "48%",
+    flexBasis: "48%",
+    maxWidth: "48%",
     overflow: "visible",
   },
   emotionCandy: {
     position: "relative",
+    width: "100%",
     minHeight: 43,
     borderRadius: 999,
     borderWidth: 1,
@@ -6277,19 +9407,35 @@ const styles = StyleSheet.create({
   },
   foldedMoodNote: {
     position: "relative",
-    minHeight: 134,
+    minHeight: 146,
     borderRadius: 24,
-    backgroundColor: "#fff0ed",
+    backgroundColor: "#fff2ef",
     borderWidth: 1,
     borderColor: "rgba(222,128,154,0.18)",
     overflow: "hidden",
-    paddingLeft: 18,
+    paddingLeft: 22,
     paddingRight: 44,
     boxShadow: "0 12px 26px rgba(184,95,123,0.08), inset 0 1px 2px rgba(255,255,255,0.84)",
   },
   foldedMoodNoteFocused: {
     borderColor: "rgba(215,123,150,0.58)",
     boxShadow: "0 0 0 4px rgba(215,123,150,0.13), 0 0 28px rgba(215,123,150,0.22), inset 0 1px 2px rgba(255,255,255,0.9)",
+  },
+  foldedMoodNoteLines: {
+    position: "absolute",
+    left: 18,
+    right: 12,
+    top: 33,
+    bottom: 13,
+    backgroundImage: "repeating-linear-gradient(0deg, transparent 0px, transparent 28px, rgba(218,139,160,0.2) 28px, rgba(218,139,160,0.2) 29px)" as never,
+  },
+  foldedMoodNoteMarginLine: {
+    position: "absolute",
+    left: 15,
+    top: 18,
+    bottom: 16,
+    width: 1,
+    backgroundColor: "rgba(218,139,160,0.12)",
   },
   foldedMoodNoteFold: {
     position: "absolute",
@@ -6312,6 +9458,93 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     backgroundColor: "rgba(184,95,123,0.08)",
     transform: [{ rotate: "-35deg" }],
+  },
+  capsulePhotoUploadRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    flexWrap: "wrap",
+  },
+  capsulePhotoUploadButton: {
+    position: "relative",
+    minHeight: 42,
+    borderRadius: 999,
+    backgroundColor: "rgba(255,255,255,0.86)",
+    borderWidth: 1,
+    borderColor: "rgba(184,95,123,0.16)",
+    paddingHorizontal: 14,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    overflow: "hidden",
+  },
+  capsulePhotoUploadButtonDisabled: {
+    opacity: 0.5,
+  },
+  capsulePhotoUploadText: {
+    color: colors.accentDark,
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: "900",
+  },
+  capsulePhotoUploadMeta: {
+    flex: 1,
+    minWidth: 158,
+    color: colors.faint,
+    fontSize: 12,
+    lineHeight: 17,
+    fontWeight: "700",
+  },
+  capsulePhotoPreviewRow: {
+    flexDirection: "row",
+    gap: 10,
+  },
+  capsulePhotoPreviewItem: {
+    position: "relative",
+    flex: 1,
+    minWidth: 0,
+    height: 78,
+    borderRadius: 18,
+    overflow: "hidden",
+    backgroundColor: "rgba(255,255,255,0.66)",
+    borderWidth: 1,
+    borderColor: "rgba(184,95,123,0.12)",
+  },
+  capsulePhotoPreviewImage: {
+    width: "100%",
+    height: "100%",
+  },
+  capsulePhotoPreviewBadge: {
+    position: "absolute",
+    left: 6,
+    top: 6,
+    minHeight: 20,
+    borderRadius: 999,
+    paddingHorizontal: 7,
+    justifyContent: "center",
+    backgroundColor: "rgba(255,255,255,0.9)",
+    borderWidth: 1,
+    borderColor: "rgba(184,95,123,0.12)",
+  },
+  capsulePhotoPreviewBadgeText: {
+    color: colors.accentDark,
+    fontSize: 10,
+    lineHeight: 13,
+    fontWeight: "900",
+  },
+  capsulePhotoPreviewLabel: {
+    position: "absolute",
+    left: 7,
+    right: 7,
+    bottom: 6,
+    color: "#fff",
+    fontSize: 10,
+    lineHeight: 13,
+    fontWeight: "900",
+    textShadowColor: "rgba(42,31,34,0.42)",
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 3,
   },
   capsuleSaveFlight: {
     position: "absolute",
@@ -6362,6 +9595,12 @@ const styles = StyleSheet.create({
   },
   emptyStatePressable: {
     borderRadius: 28,
+  },
+  historyCapsuleCard: {
+    borderRadius: 32,
+    backgroundColor: "rgba(255,255,255,0.72)",
+    borderColor: "rgba(255,255,255,0.84)",
+    boxShadow: "0 12px 28px rgba(82,61,66,0.045), inset 0 1px 1px rgba(255,255,255,0.88)",
   },
   stepHeader: {
     flexDirection: "row",
@@ -6681,30 +9920,49 @@ const styles = StyleSheet.create({
     fontSize: 12,
     lineHeight: 18,
   },
+  todayCapsuleSummaryCard: {
+    position: "relative",
+    overflow: "hidden",
+    borderRadius: 32,
+    backgroundColor: "rgba(255,255,255,0.74)",
+    borderColor: "rgba(255,255,255,0.86)",
+    boxShadow: "0 14px 32px rgba(82,61,66,0.052), inset 0 1px 2px rgba(255,255,255,0.9)",
+  },
+  todayCapsuleSummaryGlow: {
+    position: "absolute",
+    right: -44,
+    top: -42,
+    width: 146,
+    height: 110,
+    borderRadius: 999,
+    backgroundColor: "rgba(255,240,201,0.36)",
+    transform: [{ rotate: "-18deg" }],
+  },
   // 1. 双人同频并排卡片样式
   doubleCapsulesRow: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
     position: "relative",
-    paddingHorizontal: 4,
+    paddingHorizontal: 2,
+    paddingTop: 2,
     gap: 8,
   },
   sideCapsuleContainer: {
     flex: 1,
-    minHeight: 110,
-    borderRadius: 20,
-    backgroundColor: "rgba(255,255,255,0.72)",
+    height: 138,
+    borderRadius: 22,
+    backgroundColor: "rgba(255,255,255,0.7)",
     borderWidth: 1,
-    borderColor: "rgba(184,95,123,0.12)",
+    borderColor: "rgba(255,255,255,0.84)",
     overflow: "hidden",
-    boxShadow: "0 10px 24px rgba(82, 61, 66, 0.05)",
+    boxShadow: "0 10px 24px rgba(82, 61, 66, 0.05), inset 0 1px 2px rgba(255,255,255,0.78)",
   },
   sideCapsuleEmpty: {
     flex: 1,
     alignItems: "center",
     justifyContent: "center",
-    minHeight: 110,
+    height: "100%" as never,
     backgroundColor: "rgba(255, 255, 255, 0.38)",
     padding: 10,
   },
@@ -6717,7 +9975,7 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: "center",
     justifyContent: "center",
-    minHeight: 110,
+    height: "100%" as never,
     backgroundColor: "rgba(255, 255, 255, 0.28)",
     padding: 10,
   },

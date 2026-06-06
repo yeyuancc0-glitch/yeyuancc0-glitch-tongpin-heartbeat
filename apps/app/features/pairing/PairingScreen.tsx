@@ -1,6 +1,7 @@
 import { Copy, Link as LinkIcon, Send } from "lucide-react-native";
 import { useState } from "react";
 import { Platform, StyleSheet, Text, View } from "react-native";
+import Reanimated from "react-native-reanimated";
 
 import {
   AppTextInput,
@@ -14,6 +15,7 @@ import { DateField, InlineNotice, useToast } from "@/components/ui";
 import { useAuth } from "@/features/auth/AuthProvider";
 import { supabase } from "@/lib/supabase/client";
 import type { PairInvite } from "@/lib/supabase/database.types";
+import { useErrorShake } from "@/motion/useErrorShake";
 import { colors } from "@/styles/theme";
 
 function makeCode() {
@@ -45,6 +47,7 @@ export function PairingScreen({
   const [creating, setCreating] = useState(false);
   const [binding, setBinding] = useState(false);
   const [bound, setBound] = useState(false);
+  const { triggerShake, shakeStyle } = useErrorShake();
   const latestInvite = pendingInvites[0];
 
   async function createInvite() {
@@ -64,6 +67,7 @@ export function PairingScreen({
 
     setCreating(false);
     if (error) {
+      triggerShake();
       showToast({ title: "创建邀请码失败", message: error.message, tone: "error" });
       return;
     }
@@ -90,6 +94,7 @@ export function PairingScreen({
     setBinding(false);
 
     if (error) {
+      triggerShake();
       showToast({ title: "绑定失败", message: error.message, tone: "error" });
       return;
     }
@@ -135,6 +140,7 @@ export function PairingScreen({
       </View>
 
       {mode === "invite" ? (
+        <Reanimated.View style={shakeStyle}>
         <Card>
           <View style={styles.envelopeArt}>
             <Text style={styles.envelopeText}>✉</Text>
@@ -158,7 +164,9 @@ export function PairingScreen({
             loading={creating}
           />
         </Card>
+        </Reanimated.View>
       ) : (
+        <Reanimated.View style={shakeStyle}>
         <Card>
           <View style={styles.codeArt}>
             <Text style={styles.codeArtText}>A7K92Q</Text>
@@ -179,6 +187,7 @@ export function PairingScreen({
             icon={<LinkIcon color="#fff" size={16} />}
           />
         </Card>
+        </Reanimated.View>
       )}
     </View>
   );

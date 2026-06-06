@@ -13,6 +13,7 @@ import type {
   MoodStatus,
   Notification,
   PairInvite,
+  PetMemory,
   CoupleFootprint,
   Profile,
 } from "@/lib/supabase/database.types";
@@ -31,6 +32,7 @@ export type CoupleDashboard = {
   notifications: Notification[];
   creationSpace: CreationSpace | null;
   creationActions: CreationAction[];
+  petMemories: PetMemory[];
   footprints: CoupleFootprint[];
 };
 
@@ -48,12 +50,34 @@ function createEmptyDashboard(): CoupleDashboard {
     notifications: [],
     creationSpace: null,
     creationActions: [],
+    petMemories: [],
     footprints: [],
   };
 }
 
 const emptyDashboard = createEmptyDashboard();
-const dashboardCachePrefix = "couple-dashboard:v2:";
+const dashboardCachePrefix = "couple-dashboard:v3:";
+
+function stripVolatileSignedUrls(data: CoupleDashboard): CoupleDashboard {
+  return {
+    ...data,
+    profile: data.profile ? { ...data.profile, avatar_signed_url: null } : null,
+    couple: data.couple
+      ? {
+          ...data.couple,
+          couple_members: data.couple.couple_members.map((member) => ({
+            ...member,
+            profile: member.profile ? { ...member.profile, avatar_signed_url: null } : member.profile,
+          })),
+        }
+      : null,
+    messages: data.messages.map((message) => ({
+      ...message,
+      sender: message.sender ? { ...message.sender, avatar_signed_url: null } : message.sender,
+    })),
+    mediaFiles: data.mediaFiles.map((file) => ({ ...file, signedUrl: null })),
+  };
+}
 
 function readCachedDashboard(userId: string) {
   if (typeof window === "undefined") {
@@ -69,7 +93,7 @@ function readCachedDashboard(userId: string) {
     if (cached.data?.profile?.id !== userId) {
       return null;
     }
-    return cached.data;
+    return stripVolatileSignedUrls(cached.data);
   } catch {
     return null;
   }
@@ -81,7 +105,7 @@ function writeCachedDashboard(userId: string, data: CoupleDashboard) {
   }
 
   try {
-    window.localStorage.setItem(`${dashboardCachePrefix}${userId}`, JSON.stringify({ savedAt: Date.now(), data }));
+    window.localStorage.setItem(`${dashboardCachePrefix}${userId}`, JSON.stringify({ savedAt: Date.now(), data: stripVolatileSignedUrls(data) }));
   } catch {
     // Cache writes are only for refresh UX; storage quota/private mode failures should not affect the app.
   }
@@ -126,95 +150,112 @@ export function useCoupleData(userId?: string) {
       setRefreshing(true);
     }
 
-    const [profileResult, coupleResult] = await Promise.all([
-      supabase.from("profiles").select("*").eq("id", userId).maybeSingle(),
-      supabase
-        .from("couples")
-        .select("*, couple_members(*, profile:profiles(*))")
-        .eq("status", "active")
-        .order("created_at", { ascending: false })
-        .limit(1)
-        .maybeSingle(),
-    ]);
+    try {
+      const [profileResult, coupleResult] = await Promise.all([
+        supabase.from("profiles").select("*").eq("id", userId).maybeSingle(),
+        supabase
+          .from("couples")
+          .select("*, couple_members(*, profile:profiles(*))")
+          .eq("status", "active")
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle(),
+      ]);
 
-    const couple = coupleResult.data as ActiveCouple | null;
-    const coupleId = couple?.id;
-    const currentDashboard = dataRef.current;
+      const couple = coupleResult.data as ActiveCouple | null;
+      const coupleMembers = couple?.couple_members ?? [];
+      const coupleId = couple?.id;
+      const currentDashboard = dataRef.current;
 
-    const avatarUrlByUserId = new Map([
-      ...(currentDashboard.profile ? [[currentDashboard.profile.id, currentDashboard.profile.avatar_signed_url ?? null] as const] : []),
-      ...(currentDashboard.couple?.couple_members ?? []).map((member) => [member.user_id, member.profile?.avatar_signed_url ?? null] as const),
-    ]);
-    const profile = profileResult.data
-      ? { ...profileResult.data, avatar_signed_url: avatarUrlByUserId.get(profileResult.data.id) ?? null }
-      : null;
-    const coupleWithAvatarUrls = couple
-      ? {
-          ...couple,
-          couple_members: couple.couple_members.map((member) => ({
-            ...member,
-            profile: member.profile
-              ? {
-                  ...member.profile,
-                  avatar_signed_url: avatarUrlByUserId.get(member.user_id) ?? null,
-                }
-              : member.profile,
-          })),
-      }
-      : null;
-
-    if (requestId !== requestIdRef.current) {
-      return;
-    }
-
-    const baseData: CoupleDashboard = {
-      profile,
-      couple: coupleWithAvatarUrls,
-      pendingInvites: currentDashboard.profile?.id === userId ? currentDashboard.pendingInvites : [],
-      checkins: currentDashboard.profile?.id === userId ? currentDashboard.checkins : [],
-      messages: currentDashboard.profile?.id === userId ? currentDashboard.messages : [],
-      events: currentDashboard.profile?.id === userId ? currentDashboard.events : [],
-      letters: currentDashboard.profile?.id === userId ? currentDashboard.letters : [],
-      mediaFiles: currentDashboard.profile?.id === userId ? currentDashboard.mediaFiles : [],
-      moodStatuses: currentDashboard.profile?.id === userId ? currentDashboard.moodStatuses : [],
-      notifications: currentDashboard.profile?.id === userId ? currentDashboard.notifications : [],
-      creationSpace: currentDashboard.profile?.id === userId ? currentDashboard.creationSpace : null,
-      creationActions: currentDashboard.profile?.id === userId ? currentDashboard.creationActions : [],
-      footprints: currentDashboard.profile?.id === userId ? currentDashboard.footprints : [],
-    };
-    saveData(baseData);
-    writeCachedDashboard(userId, baseData);
-    setLoadedUserId(userId);
-    setLoading(false);
-    setRefreshing(false);
-
-    if (!coupleId) {
-      const { data: pendingInvites } = await supabase
-        .from("pair_invites")
-        .select("*")
-        .eq("created_by", userId)
-        .eq("status", "pending")
-        .order("created_at", { ascending: false });
+      const avatarStateByUserId = new Map(
+        [
+          ...(currentDashboard.profile ? [currentDashboard.profile] : []),
+          ...(currentDashboard.couple?.couple_members.map((member) => member.profile).filter(Boolean) ?? []),
+        ]
+          .filter((avatarProfile): avatarProfile is Profile => Boolean(avatarProfile))
+          .map((avatarProfile) => [
+            avatarProfile.id,
+            { path: avatarProfile.avatar_url, signedUrl: avatarProfile.avatar_signed_url ?? null },
+          ] as const)
+      );
+      const preservedAvatarUrlForUser = (userIdToMatch: string, avatarPath?: string | null) => {
+        const existingAvatar = avatarStateByUserId.get(userIdToMatch);
+        if (!existingAvatar || existingAvatar.path !== avatarPath) {
+          return null;
+        }
+        return existingAvatar.signedUrl;
+      };
+      const profile = profileResult.data
+        ? { ...profileResult.data, avatar_signed_url: preservedAvatarUrlForUser(profileResult.data.id, profileResult.data.avatar_url) }
+        : null;
+      const coupleWithAvatarUrls = couple
+        ? {
+            ...couple,
+            couple_members: coupleMembers.map((member) => ({
+              ...member,
+              profile: member.profile
+                ? {
+                    ...member.profile,
+                    avatar_signed_url: preservedAvatarUrlForUser(member.user_id, member.profile.avatar_url),
+                  }
+                : member.profile,
+            })),
+        }
+        : null;
 
       if (requestId !== requestIdRef.current) {
         return;
       }
 
-      saveData((current) => {
-        if (current.profile?.id !== userId) {
-          return current;
-        }
-        const pairingData = {
-          ...current,
-          pendingInvites: pendingInvites ?? [],
-        };
-        writeCachedDashboard(userId, pairingData);
-        return pairingData;
-      });
-      return;
-    }
+      const baseData: CoupleDashboard = {
+        profile,
+        couple: coupleWithAvatarUrls,
+        pendingInvites: currentDashboard.profile?.id === userId ? currentDashboard.pendingInvites : [],
+        checkins: currentDashboard.profile?.id === userId ? currentDashboard.checkins : [],
+        messages: currentDashboard.profile?.id === userId ? currentDashboard.messages : [],
+        events: currentDashboard.profile?.id === userId ? currentDashboard.events : [],
+        letters: currentDashboard.profile?.id === userId ? currentDashboard.letters : [],
+        mediaFiles: currentDashboard.profile?.id === userId ? currentDashboard.mediaFiles : [],
+        moodStatuses: currentDashboard.profile?.id === userId ? currentDashboard.moodStatuses : [],
+      notifications: currentDashboard.profile?.id === userId ? currentDashboard.notifications : [],
+      creationSpace: currentDashboard.profile?.id === userId ? currentDashboard.creationSpace : null,
+      creationActions: currentDashboard.profile?.id === userId ? currentDashboard.creationActions : [],
+      petMemories: currentDashboard.profile?.id === userId ? currentDashboard.petMemories : [],
+      footprints: currentDashboard.profile?.id === userId ? currentDashboard.footprints : [],
+    };
+      saveData(baseData);
+      writeCachedDashboard(userId, baseData);
+      setLoadedUserId(userId);
+      setLoading(false);
+      setRefreshing(false);
 
-    void (async () => {
+      if (!coupleId) {
+        const { data: pendingInvites } = await supabase
+          .from("pair_invites")
+          .select("*")
+          .eq("created_by", userId)
+          .eq("status", "pending")
+          .order("created_at", { ascending: false });
+
+        if (requestId !== requestIdRef.current) {
+          return;
+        }
+
+        saveData((current) => {
+          if (current.profile?.id !== userId) {
+            return current;
+          }
+          const pairingData = {
+            ...current,
+            pendingInvites: pendingInvites ?? [],
+          };
+          writeCachedDashboard(userId, pairingData);
+          return pairingData;
+        });
+        return;
+      }
+
+      void (async () => {
       const [
         checkinsResult,
         messagesResult,
@@ -224,6 +265,7 @@ export function useCoupleData(userId?: string) {
         notificationsResult,
         creationSpaceResult,
         creationActionsResult,
+        petMemoriesResult,
         footprintsResult,
         lettersResult,
       ] = await Promise.all([
@@ -273,6 +315,14 @@ export function useCoupleData(userId?: string) {
           .order("created_at", { ascending: false })
           .limit(12),
         supabase
+          .from("pet_memories")
+          .select("*")
+          .eq("couple_id", coupleId)
+          .is("archived_at", null)
+          .or(`memory_scope.eq.core,expires_at.gt.${new Date().toISOString()}`)
+          .order("created_at", { ascending: false })
+          .limit(12),
+        supabase
           .from("couple_footprints")
           .select("*")
           .eq("couple_id", coupleId)
@@ -284,8 +334,15 @@ export function useCoupleData(userId?: string) {
       ]);
 
       const mediaRows = ((mediaFilesResult.data as MediaFile[] | null) ?? []);
-      const signedMediaUrlById = new Map(dataRef.current.mediaFiles.map((file) => [file.id, file.signedUrl ?? null]));
-      const mediaFiles = mediaRows.map((file) => ({ ...file, signedUrl: signedMediaUrlById.get(file.id) ?? null }));
+      const signedMediaUrlById = new Map(
+        dataRef.current.mediaFiles
+          .filter((file) => file.storage_path)
+          .map((file) => [file.id, { path: file.storage_path, signedUrl: file.signedUrl ?? null }] as const)
+      );
+      const mediaFiles = mediaRows.map((file) => {
+        const existingMediaUrl = signedMediaUrlById.get(file.id);
+        return { ...file, signedUrl: existingMediaUrl?.path === file.storage_path ? existingMediaUrl.signedUrl : null };
+      });
 
       if (requestId !== requestIdRef.current) {
         return;
@@ -302,26 +359,21 @@ export function useCoupleData(userId?: string) {
         notifications: notificationsResult.data ?? [],
         creationSpace: (creationSpaceResult.data as CreationSpace | null) ?? null,
         creationActions: (creationActionsResult.data as CreationAction[] | null) ?? [],
+        petMemories: (petMemoriesResult.data as PetMemory[] | null) ?? [],
         footprints: (footprintsResult.data as CoupleFootprint[] | null) ?? [],
       };
       saveData(contentData);
       writeCachedDashboard(userId, contentData);
 
-      const avatarProfiles = [profileResult.data, ...(couple?.couple_members.map((member) => member.profile).filter(Boolean) ?? [])] as Profile[];
+      const avatarProfiles = [profileResult.data, ...coupleMembers.map((member) => member.profile).filter(Boolean)] as Profile[];
       const avatarUrlByPath = new Map<string, string | null>();
-      const existingAvatarUrlByPath = new Map(
-        [dataRef.current.profile, ...(dataRef.current.couple?.couple_members.map((member) => member.profile).filter(Boolean) ?? [])]
-          .filter((avatarProfile): avatarProfile is Profile => Boolean(avatarProfile?.avatar_url))
-          .map((avatarProfile) => [avatarProfile.avatar_url!, avatarProfile.avatar_signed_url ?? null] as const)
-      );
       await Promise.all(
         avatarProfiles
           .filter((avatarProfile) => avatarProfile.avatar_url)
           .map(async (avatarProfile) => {
             const path = avatarProfile.avatar_url!;
             if (!avatarUrlByPath.has(path)) {
-              const existingUrl = existingAvatarUrlByPath.get(path);
-              avatarUrlByPath.set(path, existingUrl ?? (await createSignedUrl(storageBuckets.avatars, path)));
+              avatarUrlByPath.set(path, await createSignedUrl(storageBuckets.avatars, path));
             }
           })
       );
@@ -332,7 +384,7 @@ export function useCoupleData(userId?: string) {
       const hydratedCouple = couple
         ? {
             ...couple,
-            couple_members: couple.couple_members.map((member) => ({
+            couple_members: coupleMembers.map((member) => ({
               ...member,
               profile: member.profile
                 ? {
@@ -344,10 +396,13 @@ export function useCoupleData(userId?: string) {
           }
         : null;
       const hydratedMediaFiles = await Promise.all(
-        mediaRows.map(async (file) => ({
-          ...file,
-          signedUrl: signedMediaUrlById.get(file.id) ?? (await createSignedUrl(storageBuckets.coupleMedia, file.storage_path)),
-        }))
+        mediaRows.map(async (file) => {
+          const existingMediaUrl = signedMediaUrlById.get(file.id);
+          return {
+            ...file,
+            signedUrl: existingMediaUrl?.path === file.storage_path ? existingMediaUrl.signedUrl : await createSignedUrl(storageBuckets.coupleMedia, file.storage_path),
+          };
+        })
       );
 
       if (requestId !== requestIdRef.current) {
@@ -367,7 +422,18 @@ export function useCoupleData(userId?: string) {
         writeCachedDashboard(userId, hydratedData);
         return hydratedData;
       });
-    })();
+      })().catch((error) => {
+        console.warn("Couple dashboard background load failed:", error);
+      });
+    } catch (error) {
+      if (requestId !== requestIdRef.current) {
+        return;
+      }
+      console.warn("Couple dashboard initial load failed:", error);
+      setLoadedUserId(userId);
+      setLoading(false);
+      setRefreshing(false);
+    }
   }, [saveData, userId]);
 
   useEffect(() => {

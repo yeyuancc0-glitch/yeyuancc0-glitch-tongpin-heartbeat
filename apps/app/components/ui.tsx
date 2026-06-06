@@ -3,8 +3,8 @@ import type { CSSProperties, ChangeEvent, FormEvent, PropsWithChildren, ReactNod
 import {
   ActivityIndicator,
   Platform,
+  RefreshControl,
   ScrollView,
-  Pressable,
   StyleSheet,
   Text,
   TextInput,
@@ -17,7 +17,11 @@ import {
   type ViewStyle,
   useWindowDimensions,
 } from "react-native";
+import Reanimated, { useAnimatedStyle, useSharedValue, withSpring, withTiming } from "react-native-reanimated";
 
+import { BouncyPressable } from "@/motion/BouncyPressable";
+import { haptics } from "@/motion/haptics";
+import { motionTokens } from "@/motion/tokens";
 import { colors, shadows } from "@/styles/theme";
 
 type ViewStyleProps = PropsWithChildren<Omit<ViewProps, "style"> & { style?: StyleProp<ViewStyle> }>;
@@ -37,11 +41,42 @@ type ToastContextValue = {
 
 const ToastContext = createContext<ToastContextValue | undefined>(undefined);
 const ScrollContext = createContext(0);
+const RefreshContext = createContext<((refresh: (() => Promise<void> | void) | null) => void) | undefined>(undefined);
 
 let toastId = 0;
+const pullRefreshDistance = 76;
+const maxRubberBandDistance = 84;
+
+function dampenPullDistance(distance: number) {
+  return Math.min(maxRubberBandDistance, Math.sqrt(distance) * 9);
+}
+
+function getWebScrollBounds(target?: HTMLElement | null) {
+  if (typeof window === "undefined" || typeof document === "undefined") {
+    return { atTop: true, atBottom: true };
+  }
+
+  const documentElement = document.documentElement;
+  const scrollingElement = document.scrollingElement ?? documentElement;
+  const pageScrollTop = window.scrollY || scrollingElement.scrollTop || documentElement.scrollTop || 0;
+  const pageMaxScroll = Math.max(0, scrollingElement.scrollHeight - window.innerHeight);
+
+  const targetScrollTop = target?.scrollTop ?? 0;
+  const targetScrollHeight = target?.scrollHeight ?? 0;
+  const targetClientHeight = target?.clientHeight ?? 0;
+  const targetCanScroll = targetScrollHeight > targetClientHeight + 1;
+  const scrollTop = targetCanScroll ? targetScrollTop : pageScrollTop;
+  const maxScroll = targetCanScroll ? targetScrollHeight - targetClientHeight : pageMaxScroll;
+
+  return {
+    atTop: scrollTop <= 0,
+    atBottom: scrollTop >= maxScroll - 1,
+  };
+}
 
 export function ToastProvider({ children }: PropsWithChildren) {
   const [toast, setToast] = useState<ToastMessage | null>(null);
+  const toastProgress = useSharedValue(0);
 
   useEffect(() => {
     if (Platform.OS !== "web") {
@@ -66,8 +101,13 @@ export function ToastProvider({ children }: PropsWithChildren) {
 
   useEffect(() => {
     if (!toast) {
+      toastProgress.value = withTiming(0, { duration: 140 });
       return undefined;
     }
+
+    haptics.play(toast.tone === "success" ? "success" : toast.tone === "error" ? "error" : "selection");
+    toastProgress.value = 0;
+    toastProgress.value = withSpring(1, motionTokens.spring.gentle);
 
     const timeout = setTimeout(() => {
       setToast(null);
@@ -76,16 +116,24 @@ export function ToastProvider({ children }: PropsWithChildren) {
     return () => clearTimeout(timeout);
   }, [toast]);
 
+  const toastMotionStyle = useAnimatedStyle(() => ({
+    opacity: toastProgress.value,
+    transform: [
+      { translateY: (1 - toastProgress.value) * -10 },
+      { scale: 0.98 + toastProgress.value * 0.02 },
+    ],
+  }));
+
   const value = useMemo(() => ({ showToast }), [showToast]);
 
   return (
     <ToastContext.Provider value={value}>
       {children}
       {toast ? (
-        <View style={[styles.toast, styles[`toast_${toast.tone}`]]}>
+        <Reanimated.View pointerEvents="none" style={[styles.toast, styles[`toast_${toast.tone}`], toastMotionStyle]}>
           <Text style={styles.toastTitle}>{toast.title}</Text>
           {toast.message ? <Text style={styles.toastMessage}>{toast.message}</Text> : null}
-        </View>
+        </Reanimated.View>
       ) : null}
     </ToastContext.Provider>
   );
@@ -109,31 +157,170 @@ export function AppShell({ children }: PropsWithChildren) {
 
 export function AppScroll({ children }: PropsWithChildren) {
   const [scrollY, setScrollY] = useState(0);
+  const [refreshing, setRefreshing] = useState(false);
+  const [pullState, setPullState] = useState<"idle" | "pulling" | "ready">("idle");
   const lastScrollY = useRef(0);
+  const lastTouchY = useRef(0);
+  const refreshRef = useRef<(() => Promise<void> | void) | null>(null);
+  const pullReadyRef = useRef(false);
+  const rubberBand = useSharedValue(0);
+
+  const setRefreshHandler = useCallback((refresh: (() => Promise<void> | void) | null) => {
+    refreshRef.current = refresh;
+  }, []);
+
+  const runRefresh = useCallback(async () => {
+    const refresh = refreshRef.current;
+    if (!refresh || refreshing) {
+      return;
+    }
+
+    setRefreshing(true);
+    try {
+      await refresh();
+    } finally {
+      setRefreshing(false);
+    }
+  }, [refreshing]);
+
+  const releaseRubberBand = useCallback(() => {
+    rubberBand.value = withSpring(0, motionTokens.spring.gentle);
+    pullReadyRef.current = false;
+    setPullState("idle");
+  }, [rubberBand]);
+
+  const webPullHandlers =
+    Platform.OS === "web"
+      ? {
+          onWheel: (event: unknown) => {
+            const wheelEvent = event as { deltaY?: number; currentTarget?: HTMLElement };
+            const deltaY = wheelEvent.deltaY ?? 0;
+            const target = wheelEvent.currentTarget;
+            if (!target || refreshing) {
+              return;
+            }
+
+            const { atTop, atBottom } = getWebScrollBounds(target);
+            const overscrollingTop = atTop && deltaY < 0;
+            const overscrollingBottom = atBottom && deltaY > 0;
+            if (!overscrollingTop && !overscrollingBottom) {
+              if (rubberBand.value !== 0) {
+                releaseRubberBand();
+              }
+              return;
+            }
+
+            const direction = overscrollingTop ? 1 : -1;
+            const nextDistance = dampenPullDistance(Math.abs(deltaY));
+            rubberBand.value = withSpring(direction * nextDistance, motionTokens.spring.press);
+            window.setTimeout(releaseRubberBand, 90);
+          },
+          onTouchStart: (event: unknown) => {
+            const touchEvent = event as { touches?: ArrayLike<{ clientY: number }> };
+            const firstTouch = touchEvent.touches?.[0];
+            if (!firstTouch) {
+              return;
+            }
+            lastTouchY.current = firstTouch.clientY;
+          },
+          onTouchMove: (event: unknown) => {
+            const touchEvent = event as {
+              touches?: ArrayLike<{ clientY: number }>;
+              currentTarget?: HTMLElement;
+            };
+            const firstTouch = touchEvent.touches?.[0];
+            const target = touchEvent.currentTarget;
+            if (!firstTouch || !target || refreshing) {
+              return;
+            }
+
+            const deltaY = firstTouch.clientY - lastTouchY.current;
+            const { atTop, atBottom } = getWebScrollBounds(target);
+            const overscrollingTop = atTop && deltaY > 0;
+            const overscrollingBottom = atBottom && deltaY < 0;
+
+            if (overscrollingTop || overscrollingBottom) {
+              const direction = overscrollingTop ? 1 : -1;
+              const pullDistance = Math.abs(deltaY) * 1.8;
+              const nextDistance = dampenPullDistance(pullDistance);
+              rubberBand.value = direction * nextDistance;
+              if (overscrollingTop && refreshRef.current) {
+                const isReady = nextDistance >= pullRefreshDistance;
+                pullReadyRef.current = isReady;
+                setPullState(isReady ? "ready" : "pulling");
+              }
+            }
+          },
+          onTouchEnd: () => {
+            const shouldRefresh = pullReadyRef.current && Boolean(refreshRef.current);
+            releaseRubberBand();
+            if (shouldRefresh) {
+              void runRefresh();
+            }
+          },
+          onTouchCancel: releaseRubberBand,
+        }
+      : {};
+
+  const scrollMotionStyle = useAnimatedStyle(() => ({
+    transform: [{ translateY: rubberBand.value }],
+  }));
+  const refreshText = refreshing ? "正在刷新" : pullState === "ready" ? "松开刷新" : "下拉刷新";
 
   return (
-    <ScrollView
-      style={styles.scroll}
-      contentContainerStyle={styles.scrollContent}
-      showsVerticalScrollIndicator={false}
-      showsHorizontalScrollIndicator={false}
-      scrollEventThrottle={16}
-      onScroll={(event) => {
-        const nextScrollY = event.nativeEvent.contentOffset.y;
-        if (Math.abs(nextScrollY - lastScrollY.current) < 8) {
-          return;
+    <RefreshContext.Provider value={setRefreshHandler}>
+      <ScrollView
+        style={styles.scroll}
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={false}
+        showsHorizontalScrollIndicator={false}
+        scrollEventThrottle={16}
+        bounces
+        alwaysBounceVertical
+        overScrollMode="always"
+        refreshControl={
+          Platform.OS === "web" ? undefined : (
+            <RefreshControl refreshing={refreshing} tintColor={colors.accent} onRefresh={runRefresh} />
+          )
         }
-        lastScrollY.current = nextScrollY;
-        setScrollY(nextScrollY);
-      }}
-    >
-      <ScrollContext.Provider value={scrollY}>{children}</ScrollContext.Provider>
-    </ScrollView>
+        onScroll={(event) => {
+          const nextScrollY = event.nativeEvent.contentOffset.y;
+          if (Math.abs(nextScrollY - lastScrollY.current) < 8) {
+            return;
+          }
+          lastScrollY.current = nextScrollY;
+          setScrollY(nextScrollY);
+        }}
+        {...webPullHandlers}
+      >
+        {Platform.OS === "web" && (pullState !== "idle" || refreshing) ? (
+          <View style={styles.pullRefreshIndicator}>
+            <Text style={styles.pullRefreshText}>{refreshText}</Text>
+          </View>
+        ) : null}
+        <Reanimated.View style={scrollMotionStyle}>
+          <ScrollContext.Provider value={scrollY}>{children}</ScrollContext.Provider>
+        </Reanimated.View>
+      </ScrollView>
+    </RefreshContext.Provider>
   );
 }
 
 export function useAppScrollY() {
   return useContext(ScrollContext);
+}
+
+export function useAppPullToRefresh(refresh: () => Promise<void> | void) {
+  const setRefreshHandler = useContext(RefreshContext);
+
+  useEffect(() => {
+    if (!setRefreshHandler) {
+      return undefined;
+    }
+
+    setRefreshHandler(refresh);
+    return () => setRefreshHandler(null);
+  }, [refresh, setRefreshHandler]);
 }
 
 export function ResponsiveRow({ children, style }: ViewStyleProps) {
@@ -228,10 +415,11 @@ export function Button({
   const isDisabled = disabled || loading;
 
   return (
-    <Pressable
+    <BouncyPressable
       accessibilityRole="button"
       disabled={isDisabled}
       onPress={onPress}
+      haptic={variant === "ghost" ? "selection" : "light"}
       style={({ pressed }) => [
         styles.button,
         styles[`button_${variant}`],
@@ -241,15 +429,15 @@ export function Button({
     >
       {loading ? <ActivityIndicator color={variant === "primary" ? "#fff" : colors.accentDark} size="small" /> : icon}
       <Text style={[styles.buttonText, styles[`buttonText_${variant}`]]}>{label}</Text>
-    </Pressable>
+    </BouncyPressable>
   );
 }
 
 export function InlineLink({ label, onPress }: { label: string; onPress: () => void }) {
   return (
-    <Pressable onPress={onPress} accessibilityRole="link" style={styles.inlineLink}>
+    <BouncyPressable onPress={onPress} accessibilityRole="link" haptic="selection" style={styles.inlineLink}>
       <Text style={styles.inlineLinkText}>{label}</Text>
-    </Pressable>
+    </BouncyPressable>
   );
 }
 
@@ -300,6 +488,22 @@ const styles = StyleSheet.create({
   scrollContent: {
     backgroundColor: "transparent",
     flexGrow: 1,
+  },
+  pullRefreshIndicator: {
+    position: "absolute",
+    top: 10,
+    left: 0,
+    right: 0,
+    zIndex: 0,
+    alignItems: "center",
+    pointerEvents: "none",
+  },
+  pullRefreshText: {
+    color: colors.muted,
+    fontSize: 12,
+    fontWeight: "700",
+    lineHeight: 16,
+    letterSpacing: 0,
   },
   shell: {
     width: "100%",

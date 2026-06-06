@@ -153,6 +153,51 @@ export type Notification = {
   created_at: string;
 };
 
+export type PushToken = {
+  id: string;
+  user_id: string;
+  token: string;
+  provider: "expo" | "web_push";
+  device_id: string | null;
+  platform: "ios" | "android" | "web" | "unknown";
+  app_version: string | null;
+  web_p256dh: string | null;
+  web_auth: string | null;
+  user_agent: string | null;
+  enabled: boolean;
+  last_seen_at: string;
+  revoked_at: string | null;
+  created_at: string;
+};
+
+export type NotificationPreference = {
+  user_id: string;
+  push_enabled: boolean;
+  message_enabled: boolean;
+  interaction_enabled: boolean;
+  checkin_enabled: boolean;
+  letter_enabled: boolean;
+  calendar_enabled: boolean;
+  quiet_hours_enabled: boolean;
+  quiet_start: string;
+  quiet_end: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type PushDelivery = {
+  id: string;
+  notification_id: string;
+  user_id: string;
+  status: "pending" | "sent" | "skipped" | "failed";
+  attempt_count: number;
+  last_error: string | null;
+  expo_ticket_id: string | null;
+  sent_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
 export type Report = {
   id: string;
   couple_id: string | null;
@@ -194,15 +239,35 @@ export type CreationSpace = {
   fullness: number;
   cleanliness: number;
   affection: number;
+  energy: number;
+  boredom: number;
+  comfort: number;
+  curiosity: number;
+  current_action: "idle" | "walk" | "eat" | "pet" | "clean" | "play" | "sleep" | "sad" | "happy";
+  personality_seed: string;
+  last_brain_tick_at: string | null;
+  last_ai_response_at: string | null;
+  last_ai_bubble: string | null;
+  last_rig_cue: Json;
   treat_balance: number;
   basic_food_count: number;
   premium_food_count: number;
   last_fed_food: "basic" | "premium" | null;
+  last_fed_at: string | null;
+  last_played_at: string | null;
   home_theme: string;
   decor_slot_1: string;
   decor_slot_2: string;
   decor_slot_3: string;
   last_interaction_at: string | null;
+  last_world_decision: Json;
+  pet_world_surface: "home" | "share" | "memory" | "creation_hub" | "pet_room" | "footprints" | "playground";
+  pet_world_state: "idle" | "walk" | "run" | "hop" | "float" | "eat" | "pet" | "clean" | "play" | "sleep" | "sad" | "happy" | "curious" | "hide" | "peek" | "found" | "summon" | "return_home" | "inspect" | "visit_partner";
+  pet_world_mood: "happy" | "curious" | "sleepy" | "lonely" | "excited" | "calm" | "hungry";
+  pet_hidden: boolean;
+  pet_last_seen_at: string | null;
+  pet_last_found_at: string | null;
+  pet_last_surface_changed_at: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -211,8 +276,47 @@ export type CreationAction = {
   id: string;
   couple_id: string;
   actor_id: string;
-  action_type: "feed" | "pet" | "clean" | "rename" | "decorate" | "choose_pet" | "buy_food" | "game_reward" | "footprint_add" | "footprint_update" | "footprint_delete";
+  action_type: "feed" | "pet" | "clean" | "play" | "rename" | "decorate" | "choose_pet" | "buy_food" | "game_reward" | "ai_brain" | "memory_update" | "footprint_add" | "footprint_update" | "footprint_delete";
   action_label: string;
+  metadata: Json;
+  created_at: string;
+};
+
+export type PetMemory = {
+  id: string;
+  couple_id: string;
+  memory_type: "preference" | "care_summary" | "footprint" | "online_together" | "milestone";
+  memory_scope: "short" | "core";
+  importance: number;
+  summary: string;
+  metadata: Json;
+  expires_at: string | null;
+  archived_at: string | null;
+  created_by: string | null;
+  created_at: string;
+};
+
+export type PetAiGeneration = {
+  id: string;
+  couple_id: string;
+  actor_id: string | null;
+  trigger_type: string;
+  model: string | null;
+  input_summary: Json;
+  output_json: Json;
+  fallback_used: boolean;
+  error_code: string | null;
+  duration_ms: number | null;
+  created_at: string;
+};
+
+export type PetWorldEvent = {
+  id: string;
+  couple_id: string;
+  actor_id: string | null;
+  event_type: string;
+  surface: string;
+  intent: string | null;
   metadata: Json;
   created_at: string;
 };
@@ -408,6 +512,63 @@ export type Database = {
         Update: Partial<Omit<Notification, "id" | "user_id" | "actor_id" | "created_at">>;
         Relationships: [];
       };
+      push_tokens: {
+        Row: PushToken;
+        Insert: {
+          id?: string;
+          user_id: string;
+          token: string;
+          provider?: PushToken["provider"];
+          device_id?: string | null;
+          platform: PushToken["platform"];
+          app_version?: string | null;
+          web_p256dh?: string | null;
+          web_auth?: string | null;
+          user_agent?: string | null;
+          enabled?: boolean;
+          last_seen_at?: string;
+          revoked_at?: string | null;
+          created_at?: string;
+        };
+        Update: Partial<Omit<PushToken, "id" | "user_id" | "token" | "created_at">>;
+        Relationships: [];
+      };
+      notification_preferences: {
+        Row: NotificationPreference;
+        Insert: {
+          user_id: string;
+          push_enabled?: boolean;
+          message_enabled?: boolean;
+          interaction_enabled?: boolean;
+          checkin_enabled?: boolean;
+          letter_enabled?: boolean;
+          calendar_enabled?: boolean;
+          quiet_hours_enabled?: boolean;
+          quiet_start?: string;
+          quiet_end?: string;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: Partial<Omit<NotificationPreference, "user_id" | "created_at">>;
+        Relationships: [];
+      };
+      push_deliveries: {
+        Row: PushDelivery;
+        Insert: {
+          id?: string;
+          notification_id: string;
+          user_id: string;
+          status?: PushDelivery["status"];
+          attempt_count?: number;
+          last_error?: string | null;
+          expo_ticket_id?: string | null;
+          sent_at?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: Partial<Omit<PushDelivery, "id" | "notification_id" | "user_id" | "created_at">>;
+        Relationships: [];
+      };
       reports: {
         Row: Report;
         Insert: {
@@ -463,15 +624,35 @@ export type Database = {
           fullness?: number;
           cleanliness?: number;
           affection?: number;
+          energy?: number;
+          boredom?: number;
+          comfort?: number;
+          curiosity?: number;
+          current_action?: CreationSpace["current_action"];
+          personality_seed?: string;
+          last_brain_tick_at?: string | null;
+          last_ai_response_at?: string | null;
+          last_ai_bubble?: string | null;
+          last_rig_cue?: Json;
           treat_balance?: number;
           basic_food_count?: number;
           premium_food_count?: number;
           last_fed_food?: CreationSpace["last_fed_food"];
+          last_fed_at?: string | null;
+          last_played_at?: string | null;
           home_theme?: string;
           decor_slot_1?: string;
           decor_slot_2?: string;
           decor_slot_3?: string;
           last_interaction_at?: string | null;
+          last_world_decision?: Json;
+          pet_world_surface?: CreationSpace["pet_world_surface"];
+          pet_world_state?: CreationSpace["pet_world_state"];
+          pet_world_mood?: CreationSpace["pet_world_mood"];
+          pet_hidden?: boolean;
+          pet_last_seen_at?: string | null;
+          pet_last_found_at?: string | null;
+          pet_last_surface_changed_at?: string | null;
           created_at?: string;
           updated_at?: string;
         };
@@ -490,6 +671,57 @@ export type Database = {
           created_at?: string;
         };
         Update: Partial<Omit<CreationAction, "id" | "couple_id" | "actor_id" | "created_at">>;
+        Relationships: [];
+      };
+      pet_memories: {
+        Row: PetMemory;
+        Insert: {
+          id?: string;
+          couple_id: string;
+          memory_type: PetMemory["memory_type"];
+          memory_scope?: PetMemory["memory_scope"];
+          importance?: number;
+          summary: string;
+          metadata?: Json;
+          expires_at?: string | null;
+          archived_at?: string | null;
+          created_by?: string | null;
+          created_at?: string;
+        };
+        Update: Partial<Omit<PetMemory, "id" | "couple_id" | "created_at">>;
+        Relationships: [];
+      };
+      pet_ai_generations: {
+        Row: PetAiGeneration;
+        Insert: {
+          id?: string;
+          couple_id: string;
+          actor_id?: string | null;
+          trigger_type: string;
+          model?: string | null;
+          input_summary?: Json;
+          output_json?: Json;
+          fallback_used?: boolean;
+          error_code?: string | null;
+          duration_ms?: number | null;
+          created_at?: string;
+        };
+        Update: Partial<Omit<PetAiGeneration, "id" | "couple_id" | "actor_id" | "created_at">>;
+        Relationships: [];
+      };
+      pet_world_events: {
+        Row: PetWorldEvent;
+        Insert: {
+          id?: string;
+          couple_id: string;
+          actor_id?: string | null;
+          event_type: string;
+          surface: string;
+          intent?: string | null;
+          metadata?: Json;
+          created_at?: string;
+        };
+        Update: Partial<Omit<PetWorldEvent, "id" | "couple_id" | "actor_id" | "created_at">>;
         Relationships: [];
       };
       couple_footprints: {
@@ -589,6 +821,36 @@ export type Database = {
           notification_id: string;
         }[];
       };
+      current_user_notification_preferences: {
+        Args: Record<string, never>;
+        Returns: NotificationPreference;
+      };
+      register_push_token: {
+        Args: {
+          push_token: string;
+          push_platform: PushToken["platform"];
+          push_device_id?: string | null;
+          push_app_version?: string | null;
+        };
+        Returns: PushToken;
+      };
+      register_web_push_subscription: {
+        Args: {
+          push_endpoint: string;
+          push_p256dh: string;
+          push_auth: string;
+          push_user_agent?: string | null;
+        };
+        Returns: PushToken;
+      };
+      disable_current_push_token: {
+        Args: {
+          push_token: string;
+        };
+        Returns: {
+          id: string;
+        }[];
+      };
       block_partner_and_end_couple: {
         Args: {
           reason?: string | null;
@@ -615,7 +877,7 @@ export type Database = {
       interact_creation_pet: {
         Args: {
           target_couple_id: string;
-          interaction_type: "feed" | "pet" | "clean";
+          interaction_type: "feed" | "pet" | "clean" | "play";
         };
         Returns: CreationSpace[];
       };
@@ -650,6 +912,13 @@ export type Database = {
         };
         Returns: CreationSpace[];
       };
+      claim_creation_footprint_reward: {
+        Args: {
+          target_couple_id: string;
+          target_footprint_id: string;
+        };
+        Returns: CreationSpace[];
+      };
       update_creation_home: {
         Args: {
           target_couple_id: string;
@@ -658,6 +927,68 @@ export type Database = {
           decor_slot_1: string;
           decor_slot_2: string;
           decor_slot_3: string;
+        };
+        Returns: CreationSpace[];
+      };
+      prepare_pet_ai_context: {
+        Args: {
+          target_couple_id: string;
+          trigger_type: string;
+        };
+        Returns: Json;
+      };
+      apply_pet_ai_decision: {
+        Args: {
+          target_couple_id: string;
+          trigger_type: string;
+          decision: Json;
+          generation_meta?: Json;
+        };
+        Returns: CreationSpace[];
+      };
+      apply_pet_brain_fallback: {
+        Args: {
+          target_couple_id: string;
+          trigger_type: string;
+        };
+        Returns: CreationSpace[];
+      };
+      archive_expired_pet_memories: {
+        Args: Record<string, never>;
+        Returns: number;
+      };
+      toggle_pet_memory_core: {
+        Args: {
+          memory_id: string;
+          remember: boolean;
+        };
+        Returns: PetMemory[];
+      };
+      apply_pet_world_decision: {
+        Args: {
+          target_couple_id: string;
+          decision: Json;
+          generation_meta?: Json;
+        };
+        Returns: CreationSpace[];
+      };
+      find_creation_pet: {
+        Args: {
+          target_couple_id: string;
+          surface: string;
+        };
+        Returns: CreationSpace[];
+      };
+      summon_creation_pet: {
+        Args: {
+          target_couple_id: string;
+        };
+        Returns: CreationSpace[];
+      };
+      mark_pet_surface_seen: {
+        Args: {
+          target_couple_id: string;
+          surface: string;
         };
         Returns: CreationSpace[];
       };

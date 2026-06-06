@@ -10,9 +10,17 @@ import {
   Text,
   TextInput,
   type ImageSourcePropType,
+  type LayoutChangeEvent,
   type TextInputProps,
   View,
 } from "react-native";
+import Reanimated, {
+  useAnimatedStyle,
+  useSharedValue,
+  withSequence,
+  withSpring,
+  withTiming,
+} from "react-native-reanimated";
 import {
   Bell,
   CalendarDays,
@@ -26,6 +34,10 @@ import {
   UserRound,
 } from "lucide-react-native";
 
+import { BouncyPressable } from "@/motion/BouncyPressable";
+import { CrossFadeImage } from "@/motion/CrossFadeImage";
+import { haptics } from "@/motion/haptics";
+import { motionTokens } from "@/motion/tokens";
 import { colors, shadows } from "@/styles/theme";
 
 const brandCapsuleImage = require("@/assets/capsule-icons/brand-capsule.png") as ImageSourcePropType;
@@ -109,7 +121,6 @@ export function BottomTabBar({
   activeTab: BottomTabKey;
   onChange: (tab: BottomTabKey) => void;
 }) {
-  const viewportLift = useVisualViewportLift();
   const items: Array<{ key: BottomTabKey; label: string; Icon: typeof Home }> = [
     { key: "home", label: "首页", Icon: Home },
     { key: "checkins", label: "分享", Icon: Sparkles },
@@ -120,51 +131,87 @@ export function BottomTabBar({
   const profileItem = items.find((item) => item.key === "me")!;
   const ProfileIcon = profileItem.Icon;
   const profileActive = profileItem.key === activeTab;
+  const activeMainIndex = Math.max(0, mainItems.findIndex((item) => item.key === activeTab));
+  const [tabTrackWidth, setTabTrackWidth] = useState(0);
+  const tabSlotWidth = tabTrackWidth > 0 ? (tabTrackWidth - 14 - (mainItems.length - 1) * 3) / mainItems.length : 0;
+  const indicatorX = useSharedValue(activeMainIndex);
+  const profileScale = useSharedValue(1);
+
+  useEffect(() => {
+    indicatorX.value = withSpring(activeMainIndex, motionTokens.spring.tab);
+  }, [activeMainIndex, indicatorX]);
+
+  const indicatorStyle = useAnimatedStyle(() => ({
+    opacity: activeTab === "me" || !tabSlotWidth ? 0 : 1,
+    width: tabSlotWidth,
+    transform: [{ translateX: 7 + indicatorX.value * (tabSlotWidth + 3) }],
+  }));
+
+  const profileMotionStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: profileScale.value }],
+  }));
+
+  function changeTab(tab: BottomTabKey) {
+    if (tab === activeTab) {
+      return;
+    }
+    haptics.selection();
+    onChange(tab);
+  }
+
+  function onTabTrackLayout(event: LayoutChangeEvent) {
+    setTabTrackWidth(event.nativeEvent.layout.width);
+  }
 
   const dock = (
-    <View style={[styles.bottomTabsDock, Platform.OS === "web" ? ({ bottom: `calc(2px + env(safe-area-inset-bottom) + ${viewportLift}px)` } as never) : null]}>
+    <View style={[styles.bottomTabsDock, Platform.OS === "web" ? styles.bottomTabsDockWeb : null]}>
       <View style={styles.bottomTabsRow}>
-        <View style={[styles.bottomTabs, Platform.OS === "web" ? glassDockStyle : null]}>
+        <View style={[styles.bottomTabs, Platform.OS === "web" ? glassDockStyle : null]} onLayout={onTabTrackLayout}>
           <View pointerEvents="none" style={styles.bottomGlassWash} />
           <View pointerEvents="none" style={styles.bottomGlassTopSheen} />
           <View pointerEvents="none" style={styles.bottomGlassBottomShade} />
+          <Reanimated.View pointerEvents="none" style={[styles.bottomTabLiquidIndicator, indicatorStyle]}>
+            <View pointerEvents="none" style={styles.bottomTabActivePrism} />
+            <View pointerEvents="none" style={styles.bottomTabActiveSheen} />
+          </Reanimated.View>
           {mainItems.map((item) => {
             const active = item.key === activeTab;
             const iconColor = active ? colors.accentDark : "rgba(42,36,38,0.78)";
             const Icon = item.Icon;
             return (
-              <Pressable
+              <BottomTabItem
                 key={item.key}
-                accessibilityRole="tab"
-                accessibilityState={{ selected: active }}
-                onPress={() => onChange(item.key)}
-                style={[styles.bottomTab, active ? styles.bottomTabActive : null]}
-              >
-                {active ? (
-                  <>
-                    <View pointerEvents="none" style={styles.bottomTabActivePrism} />
-                    <View pointerEvents="none" style={styles.bottomTabActiveSheen} />
-                  </>
-                ) : null}
-                <View style={styles.bottomTabIconSlot}>
-                  <Icon color={iconColor} size={22} strokeWidth={active ? 2.5 : 2.25} />
-                </View>
-                <Text style={[styles.bottomTabText, active ? styles.bottomTabTextActive : null]}>{item.label}</Text>
-              </Pressable>
+                active={active}
+                iconColor={iconColor}
+                label={item.label}
+                Icon={Icon}
+                onPress={() => changeTab(item.key)}
+              />
             );
           })}
         </View>
-        <Pressable
+        <Reanimated.View style={profileMotionStyle}>
+        <BouncyPressable
           accessibilityRole="tab"
           accessibilityLabel={profileItem.label}
           accessibilityState={{ selected: profileActive }}
-          onPress={() => onChange(profileItem.key)}
+          haptic="selection"
+          scaleTo={motionTokens.iconPressScale}
+          onPress={() => changeTab(profileItem.key)}
+          onPressIn={() => {
+            profileScale.value = withTiming(motionTokens.iconPressScale, { duration: 80 });
+          }}
+          onPressOut={() => {
+            profileScale.value = withSpring(1, motionTokens.spring.press);
+          }}
           style={[styles.bottomProfileTab, profileActive ? styles.bottomProfileTabActive : null, Platform.OS === "web" ? glassDockStyle : null]}
         >
           <View pointerEvents="none" style={styles.bottomProfileGlassWash} />
           <View pointerEvents="none" style={styles.bottomProfileTopSheen} />
+          {profileActive ? <View pointerEvents="none" style={styles.bottomProfileHalo} /> : null}
           <ProfileIcon color={profileActive ? colors.accentDark : "rgba(42,36,38,0.78)"} size={28} strokeWidth={profileActive ? 2.55 : 2.25} />
-        </Pressable>
+        </BouncyPressable>
+        </Reanimated.View>
       </View>
     </View>
   );
@@ -176,35 +223,53 @@ export function BottomTabBar({
   return dock;
 }
 
-function useVisualViewportLift() {
-  const [lift, setLift] = useState(0);
+function BottomTabItem({
+  active,
+  iconColor,
+  label,
+  Icon,
+  onPress,
+}: {
+  active: boolean;
+  iconColor: string;
+  label: string;
+  Icon: typeof Home;
+  onPress: () => void;
+}) {
+  const iconScale = useSharedValue(1);
 
   useEffect(() => {
-    if (Platform.OS !== "web" || typeof window === "undefined" || !window.visualViewport) {
-      return undefined;
+    if (active) {
+      iconScale.value = withSequence(
+        withTiming(motionTokens.iconPressScale, { duration: 70 }),
+        withSpring(motionTokens.iconPopScale, motionTokens.spring.press),
+        withSpring(1, motionTokens.spring.tab),
+      );
     }
+  }, [active, iconScale]);
 
-    const viewport = window.visualViewport;
-    const updateLift = () => {
-      const hiddenBottom = window.innerHeight - viewport.height - viewport.offsetTop;
-      const rounded = Math.round(hiddenBottom);
-      // 过滤非键盘弹起状态下由 iOS Safari 滚动阻尼或工具栏变化导致的微小偏差 (通常 < 45px)
-      setLift(rounded > 45 ? rounded : 0);
-    };
+  const iconStyle = useAnimatedStyle(() => ({
+    transform: [
+      { translateY: active ? -1 : 0 },
+      { scale: iconScale.value },
+    ],
+  }));
 
-    updateLift();
-    viewport.addEventListener("resize", updateLift);
-    viewport.addEventListener("scroll", updateLift);
-    window.addEventListener("orientationchange", updateLift);
-
-    return () => {
-      viewport.removeEventListener("resize", updateLift);
-      viewport.removeEventListener("scroll", updateLift);
-      window.removeEventListener("orientationchange", updateLift);
-    };
-  }, []);
-
-  return lift;
+  return (
+    <BouncyPressable
+      accessibilityRole="tab"
+      accessibilityState={{ selected: active }}
+      haptic="selection"
+      scaleTo={motionTokens.iconPressScale}
+      onPress={onPress}
+      style={[styles.bottomTab, active ? styles.bottomTabActive : null]}
+    >
+      <Reanimated.View style={[styles.bottomTabIconSlot, iconStyle]}>
+        <Icon color={iconColor} size={22} strokeWidth={active ? 2.5 : 2.25} />
+      </Reanimated.View>
+      <Text style={[styles.bottomTabText, active ? styles.bottomTabTextActive : null]}>{label}</Text>
+    </BouncyPressable>
+  );
 }
 
 export function Card({ children, soft, style }: { children: ReactNode; soft?: boolean; style?: object }) {
@@ -225,15 +290,17 @@ export function PrimaryButton({
   icon?: ReactNode;
 }) {
   return (
-    <Pressable
+    <BouncyPressable
       accessibilityRole="button"
       disabled={disabled || loading}
       onPress={onPress}
-      style={({ pressed }) => [styles.primaryButton, pressed ? styles.pressed : null, disabled ? styles.disabled : null]}
+      haptic="light"
+      style={styles.primaryButton}
+      disabledStyle={styles.disabled}
     >
       {loading ? <ActivityIndicator color="#fff" size="small" /> : icon}
       <Text style={styles.primaryText}>{label}</Text>
-    </Pressable>
+    </BouncyPressable>
   );
 }
 
@@ -256,10 +323,11 @@ export function SecondaryButton({
 }) {
   const isDisabled = disabled || loading;
   return (
-    <Pressable
+    <BouncyPressable
       accessibilityRole="button"
       disabled={isDisabled}
       onPress={onPress}
+      haptic={active ? "selection" : "light"}
       style={[
         styles.secondaryButton,
         active ? styles.secondaryButtonActive : null,
@@ -269,7 +337,7 @@ export function SecondaryButton({
     >
       {loading ? <ActivityIndicator color={danger || !active ? colors.accentDark : "#fff"} size="small" /> : icon}
       <Text style={[styles.secondaryText, active ? styles.secondaryTextActive : null, danger ? styles.dangerText : null]}>{label}</Text>
-    </Pressable>
+    </BouncyPressable>
   );
 }
 
@@ -318,7 +386,6 @@ export function Avatar({
   size?: number;
   wrapWidth?: number;
 }) {
-  const [loadedImageUrl, setLoadedImageUrl] = useState<string | null>(null);
   const [failedImageUrl, setFailedImageUrl] = useState<string | null>(null);
   const borderWidth = Math.max(3, Math.round(size * 0.07));
   const innerRadius = Math.max(16, size / 2 - borderWidth);
@@ -326,12 +393,10 @@ export function Avatar({
 
   useEffect(() => {
     if (!imageUrl) {
-      setLoadedImageUrl(null);
       setFailedImageUrl(null);
       return;
     }
 
-    setLoadedImageUrl((current) => (current === imageUrl ? current : null));
     setFailedImageUrl((current) => (current === imageUrl ? current : null));
   }, [imageUrl]);
 
@@ -342,13 +407,12 @@ export function Avatar({
         <UserRound color="rgba(184,95,123,0.22)" size={Math.round(size * 0.33)} strokeWidth={2.1} />
         <Text style={[styles.avatarText, { bottom: Math.round(size * 0.17), fontSize: Math.max(13, Math.round(size * 0.21)) }]}>{initial.slice(0, 1)}</Text>
         {shouldLoadImage ? (
-          <Image
-            source={{ uri: imageUrl! }}
-            style={[styles.avatarImage, { borderRadius: innerRadius, opacity: loadedImageUrl === imageUrl ? 1 : 0 }]}
+          <CrossFadeImage
+            source={imageUrl ? { uri: imageUrl } : undefined}
+            style={[styles.avatarImage, { borderRadius: innerRadius }]}
+            containerStyle={StyleSheet.absoluteFill}
             resizeMode="cover"
-            onLoad={() => setLoadedImageUrl(imageUrl!)}
             onError={() => {
-              setLoadedImageUrl(null);
               setFailedImageUrl(imageUrl!);
             }}
           />
@@ -467,15 +531,15 @@ export function EventCard({ title, date, type }: { title: string; date: string; 
   );
 }
 
-export function CheckinCard({ author, mood, body, date }: { author: string; mood?: string; body: string; date: string }) {
+export function CheckinCard({ author, mood, body, date, compact }: { author: string; mood?: string; body: string; date: string; compact?: boolean }) {
   return (
-    <View style={styles.checkinCard}>
+    <View style={[styles.checkinCard, compact ? styles.checkinCardCompact : null]}>
       <View style={styles.messageTop}>
         <Text style={styles.messageAuthor}>{author}</Text>
         <Text style={styles.eventMeta}>{date}</Text>
       </View>
-      {mood ? <Text style={styles.checkinMood}>{mood}</Text> : null}
-      <Text style={styles.messageBody}>{body}</Text>
+      {mood ? <Text numberOfLines={compact ? 1 : undefined} style={styles.checkinMood}>{mood}</Text> : null}
+      <Text numberOfLines={compact ? 3 : undefined} ellipsizeMode="tail" style={[styles.messageBody, compact ? styles.checkinBodyCompact : null]}>{body}</Text>
     </View>
   );
 }
@@ -514,8 +578,9 @@ export function InteractionButton({
   label: string;
   color: string;
   icon?: ImageSourcePropType;
-  onPress?: () => void;
+  onPress?: (origin?: { x: number; y: number; width: number; height: number } | null) => void;
 }) {
+  const buttonRef = useRef<View | null>(null);
   const scale = useRef(new Animated.Value(1)).current;
   const iconLift = useRef(new Animated.Value(0)).current;
 
@@ -530,12 +595,24 @@ export function InteractionButton({
         Animated.spring(iconLift, { toValue: 0, friction: 6, tension: 160, useNativeDriver: false }),
       ]),
     ]).start();
-    onPress?.();
+    if (!onPress) {
+      return;
+    }
+    let called = false;
+    buttonRef.current?.measureInWindow((x, y, width, height) => {
+      called = true;
+      onPress({ x, y, width, height });
+    });
+    setTimeout(() => {
+      if (!called) {
+        onPress(null);
+      }
+    }, 40);
   }
 
   return (
     <Animated.View style={[styles.interactionMotion, { transform: [{ scale }] }]}>
-      <Pressable onPress={press} style={[styles.interaction, { backgroundColor: color }]}>
+      <BouncyPressable ref={buttonRef} onPress={press} haptic="light" style={[styles.interaction, { backgroundColor: color }]}>
         {icon ? (
           <Animated.View
             style={[
@@ -556,20 +633,20 @@ export function InteractionButton({
           </Animated.View>
         ) : null}
         <Text style={styles.interactionText}>{label}</Text>
-      </Pressable>
+      </BouncyPressable>
     </Animated.View>
   );
 }
 
 export function SettingRow({ label, danger, onPress, icon }: { label: string; danger?: boolean; onPress?: () => void; icon?: ReactNode }) {
   return (
-    <Pressable onPress={onPress} style={styles.settingRow}>
+    <BouncyPressable onPress={onPress} haptic="selection" style={styles.settingRow}>
       <View style={[styles.settingIcon, danger ? styles.settingIconDanger : null]}>
         {icon ?? <Settings color={danger ? colors.accentDark : colors.blue} size={16} />}
       </View>
       <Text style={[styles.settingText, danger ? styles.dangerText : null]}>{label}</Text>
       <ChevronRight color={colors.faint} size={18} />
-    </Pressable>
+    </BouncyPressable>
   );
 }
 
@@ -593,14 +670,15 @@ export function FloatingEntryButton({
   accessibilityLabel?: string;
 }) {
   return (
-    <Pressable
+    <BouncyPressable
       accessibilityRole="button"
       accessibilityLabel={accessibilityLabel ?? label}
       onPress={onPress}
-      style={({ pressed }) => [styles.floatingEntryButton, Platform.OS === "web" ? glassDockStyle : null, pressed ? styles.floatingEntryButtonPressed : null]}
+      haptic="selection"
+      style={[styles.floatingEntryButton, Platform.OS === "web" ? glassDockStyle : null]}
     >
       <View style={styles.floatingEntryIcon}>{icon}</View>
-    </Pressable>
+    </BouncyPressable>
   );
 }
 
@@ -688,6 +766,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     zIndex: 10,
   },
+  bottomTabsDockWeb: {
+    bottom: "calc(2px + env(safe-area-inset-bottom))" as never,
+  },
   bottomTabsRow: {
     width: "96%",
     maxWidth: 448,
@@ -741,6 +822,18 @@ const styles = StyleSheet.create({
     backgroundImage: "linear-gradient(0deg, rgba(72,43,52,0.1), rgba(72,43,52,0))" as never,
     opacity: 0.34,
   },
+  bottomTabLiquidIndicator: {
+    position: "absolute",
+    left: 0,
+    top: 7,
+    bottom: 7,
+    borderRadius: 999,
+    overflow: "hidden",
+    backgroundColor: "rgba(255,255,255,0.3)",
+    borderColor: "rgba(255,255,255,0.52)",
+    borderWidth: 1,
+    boxShadow: "inset 0 1px 1px rgba(255,255,255,0.78), inset 0 -1px 1px rgba(93,48,60,0.05), 0 8px 18px rgba(223,79,121,0.08)",
+  },
   bottomProfileTab: {
     width: 76,
     height: 76,
@@ -778,6 +871,17 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(255,255,255,0.68)",
     opacity: 0.76,
   },
+  bottomProfileHalo: {
+    position: "absolute",
+    left: 10,
+    right: 10,
+    top: 10,
+    bottom: 10,
+    borderRadius: 999,
+    backgroundColor: "rgba(247,226,232,0.52)",
+    borderWidth: 1,
+    borderColor: "rgba(184,95,123,0.1)",
+  },
   bottomTab: {
     flex: 1,
     alignItems: "center",
@@ -793,9 +897,8 @@ const styles = StyleSheet.create({
     borderColor: "rgba(255,255,255,0)",
   },
   bottomTabActive: {
-    backgroundColor: "rgba(255,255,255,0.26)",
-    borderColor: "rgba(255,255,255,0.48)",
-    boxShadow: "inset 0 1px 1px rgba(255,255,255,0.78), inset 0 -1px 1px rgba(93,48,60,0.05), 0 8px 18px rgba(223,79,121,0.08)",
+    backgroundColor: "rgba(255,255,255,0.02)",
+    borderColor: "rgba(255,255,255,0)",
   },
   bottomTabActivePrism: {
     position: "absolute",
@@ -1100,6 +1203,10 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
     borderWidth: 1,
   },
+  checkinCardCompact: {
+    height: 132,
+    justifyContent: "flex-start",
+  },
   checkinMood: {
     alignSelf: "flex-start",
     color: colors.accentDark,
@@ -1126,6 +1233,11 @@ const styles = StyleSheet.create({
     color: colors.ink,
     fontSize: 15,
     lineHeight: 22,
+  },
+  checkinBodyCompact: {
+    fontSize: 14,
+    lineHeight: 20,
+    overflow: "hidden",
   },
   interaction: {
     width: "100%",

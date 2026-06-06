@@ -33,7 +33,11 @@
 - V0.1B 的信件产品文案统一叫“信件 / 胶囊信”，底层仍复用 `future_letters`；即时信使用当前时间作为 `unlock_at`，未来信使用指定送达时间。
 - 信件删除必须走 `delete_letter(letter_id)` RPC：发信人删除为全局软删，收信人删除为对自己隐藏；不要从前端直接 update `future_letters.deleted_at`。
 - 对方收到 letter 通知时，首页应弹出独立绘制的居中来信弹窗，引导“打开来信”，不要只依赖通知设置里的普通通知行。
-- V0.1B 不做原生推送、AI、支付、复杂审核后台、视频相册和账号物理删除自动化。
+- V0.1B 不做 AI、支付、复杂审核后台、视频相册和账号物理删除自动化；系统消息推送已作为例外接入。
+- 手机系统推送：原生 iOS / Android 使用 Expo Notifications；网页版使用标准 Web Push（Service Worker + Push API + VAPID），不能依靠 `expo-notifications` 在浏览器页面关闭时收到 Expo Push。需要推送的是对方新留言、快捷互动、今日胶囊和胶囊信，默认不推送自己触发的通知、删除/已读/设置变更、普通日历事件、喂养类事件、相册上传和历史 `投递了「...」` 留言。
+- Web Push 订阅使用 `push_tokens.provider = 'web_push'`，endpoint 存 `token`，密钥存 `web_p256dh` / `web_auth`；前端 Service Worker 位于 `apps/app/public/sw.js`。iPhone 网页推送要求 iOS 16.4+ 且用户先将网站添加到主屏幕，再从主屏幕图标打开并授权。
+- Web 端构建时不要直接让 `expo export` 解析原生推送依赖；`apps/app/lib/notifications/webPush.ts` 这类平台拆分逻辑用于让网页产物绕开 `expo-application` / `expo-device` / `expo-notifications`。
+- 用户当前没有 Apple Developer Program 账号；在用户准备好 Apple 开发者账号前，不继续承诺或推进 iOS 原生 APNs 推送上线。等账号准备好后，再配置 EAS credentials / APNs、打真机包并验证 iPhone 后台系统推送。
 - 业务用户表命名为 `profiles`，不要创建 `public.users`。
 - 情侣关系必须通过 `pair_invites` 接受事务创建，不要在创建邀请时提前创建空 `couples`。
 - 一个用户同一时间只能拥有一个 active couple。
@@ -62,10 +66,15 @@
 - 日历 tab 当前对外呈现为“记忆”时间线界面，仍复用 `calendar_events`、分享和留言数据；右下角悬浮按钮进入添加事件流程。
 - 当前 UI 视觉语言为“情绪胶囊风”：奶油白 / 浅粉白背景、纯白卡片、柔和蔷薇粉主色，辅助色可使用雾紫、奶黄和浅蓝灰；胶囊化控件与“胶囊 / 封存 / 投递 / 记忆”文案体系应保持一致。
 - “胶囊”是品牌符号，优先使用半粉半奶油色的自定义 `CapsuleMark` 或同风格插画资源，不要再用 `💊` emoji 代表品牌胶囊。
+- 全局动效基础层位于 `apps/app/motion/`，通过 `MotionProvider`、`BouncyPressable`、`BreathingSkeleton`、`CrossFadeImage`、`MotionLayer`、`useErrorShake` 统一弹簧、骨架、图片淡入、投递飞行和错误抖动；根布局需保留 `GestureHandlerRootView` 与 `MotionProvider`。
+- Web 端纵向滚动必须保留 App 式边界回弹和顶部下拉刷新；不要把 `html, body` 的 `overscroll-behavior-y` 设为 `none`，下拉刷新入口统一通过 `AppScroll` / `useAppPullToRefresh` 维护。
+- 触感反馈使用 `expo-haptics` 经 `apps/app/motion/haptics.ts` 封装；Web 或不支持设备必须静默降级，不能让触感失败阻塞交互。
 - 头像和相册使用 Supabase private Storage；数据库只保存 Storage path，前端展示时生成 signed URL，不能把 signed URL 写回数据库。
+- 首页本地 dashboard / localStorage 缓存不要持久化 `avatar_signed_url` 或相册 `signedUrl`；只缓存 Storage path，刷新后后台重新签名，避免头像更新、对象删除或 URL 过期后继续显示失效链接。
 - 首页快捷心情投递必须写入双方共享数据；当前实现复用 `messages` 表保存“投递了「...」”，不能只做本地 toast 假反馈。
 - 首页快捷互动不再写入 `messages` 留言表；只创建 `notifications` 站内弹窗，用户点“知道了”后标记已读并消失。历史 `messages.body` 形如 `投递了「...」` 的数据应从留言板、日历和记忆展示中过滤。
 - 首页快捷互动通知通过 `send_quick_interaction(target_couple_id, interaction_label)` RPC 创建，避免前端直接向对方 `user_id` 插入 `notifications` 触发 RLS 失败。
+- 首页快捷互动只创建站内通知和系统推送，不写入留言；推送标题使用“TA 向你投递了一点心情”，正文只放互动短句。
 - 首页快捷互动最多 10 个，自定义项先用 Web localStorage 保存；按钮需随数量增加自动换行并保持小图标不裁切。
 - 首页“此刻同频”快捷互动总数最多 8 个，最后一张固定作为自定义互动入口，不要把自定义项插到中间。
 - 首页自定义快捷互动必须使用页内输入/编辑 UI，不要使用 `window.prompt`；内置浏览器中原生 prompt 可能表现为点击无反馈。
@@ -75,20 +84,19 @@
 - 当前首页结构：此刻同频卡片内合并快捷心情投递；相册卡片位于此刻同频下方；留言板在首页一级界面直接提供输入框；首页不展示最近纪念日和今日胶囊卡片。
 - 首页“写情书 / 写一封信”入口必须融合在恋爱天数主卡内部，位于开始日期下方，作为首屏可见入口；来信页可保留回复/空状态入口，但不能作为唯一入口。
 - 首页“共创空间”入口使用右下角悬浮圆形按钮，样式参考记忆页添加事件入口；不要改成首页大卡片或新增底部 tab。
-- 共创空间首版是首页子页，包含共享宠物/小屋 MVP、轻量足迹记录和小游戏占位；双人小游戏在玩法确定前只保留入口，不创建房间、对局或积分等表。
-- 共创宠物/小屋状态通过 `creation_spaces`、`creation_actions` 和 `ensure_creation_space` / `interact_creation_pet` / `update_creation_home` RPC 管理，关键成长值不要由前端直接改。
-- 共创空间后续宠物默认资产放在 `apps/app/assets/creation-pets/`，当前提供写实风云猫/云狗可选项（银纹云猫、奶霜短毛猫、金毛云狗、柯基云狗）；宠物选择、喂养、买粮和解谜奖励分别走 `choose_creation_pet` / `feed_creation_pet` / `buy_creation_food` / `claim_creation_game_reward` RPC。
-- 共创空间粮仓首版使用 `treat_balance`、`basic_food_count`、`premium_food_count` 和 `last_fed_food` 保存共享资源，解谜/脑筋急转弯奖励用于购买宠物粮，再喂给共享云宠。
+- 共创空间首版是首页子页，包含小屋、轻量足迹记录和小游戏占位；双人小游戏在玩法确定前只保留入口，不创建房间、对局或积分等表。
 - 共创空间页面本地状态不要被较旧的父级缓存直接覆盖，必须优先保留 `updated_at` 更新更晚的共享状态。
+- 共创小镇视觉插画资源位于 `apps/app/assets/creation-town/`；`cloud-cabin.png`、`footprints.png`、`playground.png` 和 `cabin-interior.png` 用于小镇 Hub、足迹页、游乐场页和小屋背景。
 - 足迹记录使用 `couple_footprints`，允许坐标为空；只记录地点名和备注也必须可用，且足迹可沉淀到记忆页“日常”。
 - 今日胶囊卡片位于分享页，用于替代“今天存下的胶囊”卡片。
 - 分享页今日胶囊以 `checkins` 写入成功作为封存成功标准；`mood_status` 与 `notifications` 属于附属同步，失败时不能阻塞封存按钮或底部导航交互。
+- 今日胶囊图片不新增独立表字段，仍上传到 `couple-media` 并写入 `media_files`，caption 使用 `今日胶囊图片:<checkin_id>` 绑定到对应 `checkins`；这类图片也必须自动进入拍立得时光墙。
 - 分享页今日胶囊采用触感化视觉：精致小尺寸情绪糖果、折角心情便签、柔和呼吸胶囊预览；标题仍叫“今日胶囊”，不要使用“情感封存魔盒”作为界面标题。
 - 首页相册缩略图必须可点开全屏查看，查看层使用居中预览卡片而不是系统原生弹窗。
 - 分享页“今天的心情”固定选项为“开心 / 难过 / 想你 / 委屈”，不展示“甜蜜 / 平静”。
 - 记忆页筛选分类固定为“全部 / 日常 / 留言 / 纪念日 / 信件”，不展示“想你”分类；想你类今日胶囊仍归入“日常”。
 - 记忆页时间线采用“彩色回忆风铃”视觉：奶油气泡筛选器、蔷薇到雾紫渐变轨道、微缩胶囊节点、按分类异构的糖果色记忆卡；卡片内角标和图标需保持移动端小尺寸。
-- Web 底部导航的默认位置应保持在更低的起始位，避免悬浮得过高；`BottomTabBar` 仍需保留 `visualViewport` 修正（已将 Web 端默认 bottom offset 降至 2px，并在 `useVisualViewportLift` 中引入了 45px 的微小偏差过滤阈值，避免非键盘状态下由 Safari 滚动阻尼或工具栏收缩引发底栏无端高高托起）。
+- Web 底部导航必须是固定导航栏：`BottomTabBar` 的 Web bottom offset 固定为 `calc(2px + env(safe-area-inset-bottom))`，不要再用 `visualViewport` / 键盘高度动态抬升，否则顶部回弹或输入聚焦会让底栏上下跳动。
 - 相册和记忆卡片图片上传当前最多 10 张；首页相册卡片使用九宫格预览前 9 张，超过 9 张显示 `+N` 并提供“查看全部”入口，完整预览层支持全量浏览与单张删除。
 
 ## Migration 与数据变更
@@ -96,6 +104,8 @@
 - Supabase migration 放在 `packages/db/migrations`。
 - V0.1B 新增 schema 放在 `packages/db/migrations/004_v01b_schema.sql`。
 - 共创空间 schema 放在 `packages/db/migrations/008_v02_creation_space.sql`。
+- 共创空间足迹/解谜反哺生态 RPC 放在 `packages/db/migrations/018_creation_reward_ecosystem.sql`。
+- 当前 Supabase 项目 `lrwzvxcuchfkchtkqdfs` 已应用 `018_creation_reward_ecosystem.sql`，并确认 `claim_creation_footprint_reward(uuid, uuid)` 与 `claim_creation_game_reward(uuid, text, boolean)` 存在。
 - 当前 Supabase 项目 `lrwzvxcuchfkchtkqdfs` 已按顺序应用 `001_v01a_schema.sql` 到 `004_v01b_schema.sql`，并验证 V0.1B 表、RPC、private bucket 和 RLS 存在。
 - RLS policy 放在 `packages/db/policies`。
 - 事务性绑定逻辑使用 Postgres RPC，不允许前端直接创建 `couples` 和 `couple_members`。
@@ -115,6 +125,7 @@
 - Vercel 构建配置在根目录 `vercel.json`，构建命令为 `npm run build:web`，输出目录为 `apps/app/dist`。
 - Vercel 的 Production、Preview、Development 环境都需要配置 `EXPO_PUBLIC_SUPABASE_URL` 和 `EXPO_PUBLIC_SUPABASE_ANON_KEY`。
 - 推送更新到线上时，先运行 `npm run typecheck` 和 `npm run build:web`；普通 UI 更新无需跑数据库验收。
+- 推送功能上线前除前端构建外，还需要应用 `packages/db/migrations/011_push_notifications.sql`、`012_web_push_subscriptions.sql`、`022_push_delivery_scheduler.sql`、`023_push_service_role_grants.sql` 和 `025_push_immediate_delivery.sql`，部署 Supabase Edge Function `send-push-notifications --no-verify-jwt`，配置 Web Push VAPID secrets，并在 `push_delivery_settings` 写入项目 URL 与 `PUSH_DELIVERY_WORKER_SECRET`。当前 Supabase 项目没有 `vault` extension，不能依赖 Vault 存 worker 调用密钥。推送延迟修复依赖 `push_deliveries_immediate_flush` 在新队列写入后立即通过 `pg_net` 调用发送函数，`push-delivery-worker` 的 30 秒 cron 只作为兜底；不要退回只靠 cron 轮询。`send-push-notifications` 的 Web Push TTL / Expo ttl 当前为入队后 5 分钟内的剩余有效期并使用高优先级，超过 5 分钟的队列直接 `skipped`，Web Service Worker 也会按 `expiresAt` 丢弃过期通知，避免设备离线或浏览器滞留后把旧消息隔天展示；不要再把 TTL 设回 2 小时或 24 小时。原生移动端还需要真实 EAS projectId，并用 EAS credentials 配好 iOS APNs / Android FCM。移动端真机包至少登录打开过一次才能注册 Expo Push Token；Web 端至少需要用户在通知设置中手动开启当前网页推送。iOS APNs 配置依赖有效 Apple Developer Program 账号，用户当前未准备好账号时只保留已完成的基础设施，不做 iOS 真机推送验收。
 - 用户明确说“推送更新 / 发布 / 部署 / 上线”时，按生产发布处理，使用项目根目录命令：`npx vercel --prod -y`。
 - 当前环境里 `vercel` 不在 PATH，已验证可直接用 `npx vercel ...`；第一次可能需要访问 npm registry，若沙盒报 `ENOTFOUND registry.npmjs.org`，用同一条命令申请网络授权重跑。
 - Vercel 生产部署当前基本按固定流程成功：本地验证通过后运行 `npx vercel --prod -y`，部署成功后记录 Production URL，并以 `https://app.fanch.tech` 作为用户访问主地址。
@@ -138,10 +149,16 @@
 - Expo Web 静态导出需要让 Expo 从 `apps/app/.env` 加载公开变量；`build:web` 使用 `--clear` 避免旧 bundle 继续显示“需要先连接 Supabase”。
 - 最近 30 天内 Vercel 生产部署已验证：`npx vercel --prod -y` 会在云端执行 `npm install` 和 `npm run build:web`，构建成功后自动 alias 到 `app.fanch.tech`，通常无需额外域名检查。
 - Expo Web 上新增 React Native `Animated` 微交互时使用 `useNativeDriver: false`，否则浏览器控制台会出现 native animated module 缺失警告。
+- `BouncyPressable` 在 Web 上必须先在组件内部解析 `style` 再交给 Reanimated；不要把 `style` 函数直接透传给 `AnimatedPressable`，否则会丢失布局样式并导致底部导航、按钮等控件错位。
+- `CrossFadeImage` 判断图片是否变化时必须使用稳定的 uri/source key，不要把每次 render 新建的 `{ uri }` 对象作为 effect 依赖；否则头像、快捷互动图标和相册图会反复重置加载态并闪烁。
+- `CrossFadeImage` 必须让外层容器继承传入尺寸、内部图片绝对铺满；若只把尺寸给内部 `Animated.Image`，相册缩略图会因为外层无高度而压成 1-3px 白块。
+- Web 相册上传入口应优先使用真实 `input[type=file]` 覆盖在按钮上，让用户点击直接命中原生文件控件；不要只依赖动态创建 input 后再程序化 `input.click()`，内置浏览器可能表现为点击无反应。
+- 全局动效修改后除 `npm run typecheck` 和 `npm run build:web` 外，还应静态预览并用浏览器检查首页、底部导航、相册预览；共创模块若不在当前范围内，只做入口/页面可打开回归。
 - Web 版 `DateField` 需要同时处理 `input` / `change` / `blur` 事件；涉及关键日期提交（如 V0.1B 未来信）时，提交函数应兜底读取当前 date input 值，避免状态滞后把未来日期错误提交为当天。
-- iOS Safari 下底部导航必须兼容地址栏收缩和回弹，`BottomTabBar` 使用 `visualViewport` 动态修正 fixed 底栏位置，不要随意删除。
-- 底部导航参考 App Store 风格：半透明玻璃长胶囊承载主要 tab，选中态只在固定 tab 槽位内显示柔和彩虹折射高光，不改变 tab 宽度或位置；右侧独立圆形“我的”入口；调整时保留高透明度、强圆角、模糊背景和 `visualViewport` 修正。
+- iOS Safari 下底部导航必须兼容地址栏收缩和回弹，但不能跟随 `visualViewport` / 键盘高度移动；固定贴近底部安全区，避免滚动阻尼或输入聚焦导致底栏弹上弹下。
+- 底部导航参考 App Store 风格：半透明玻璃长胶囊承载主要 tab，选中态只在固定 tab 槽位内显示柔和彩虹折射高光，不改变 tab 宽度或位置；右侧独立圆形“我的”入口；调整时保留高透明度、强圆角和模糊背景。
 - mock 数据不能包含真实或测试账号昵称、邮箱等可识别信息，避免被打包进 Web 产物或误用于加载态。
+- 首页若长时间停留在骨架屏，优先检查 `AuthProvider` 的会话恢复和 `useCoupleData` 的首屏查询是否报错或超时；这两处现在有兜底，但仍应作为首查点。
 
 ## 更新 `AGENTS.md` 的规则
 

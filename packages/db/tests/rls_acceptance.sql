@@ -89,11 +89,14 @@
 
 -- 17. Pet state changes must go through RPC and remain scoped to the active couple.
 -- select * from public.interact_creation_pet('<COUPLE_AB_UUID>', 'feed'); -- as User A, expect success and growth/fullness changes
+-- select * from public.interact_creation_pet('<COUPLE_AB_UUID>', 'play'); -- as User A, expect success and energy/current_action changes
 -- select * from public.interact_creation_pet('<COUPLE_CD_UUID>', 'feed'); -- as User A, expect active_couple_not_found
 
 -- 18. Footprints support manual privacy-preserving records and author-only edits.
 -- insert into public.couple_footprints (couple_id, created_by, title, note, latitude, longitude)
 -- values ('<COUPLE_AB_UUID>', '<USER_A_UUID>', '只记录地点名', '坐标可为空', null, null); -- as User A, expect success
+-- select * from public.claim_creation_footprint_reward('<COUPLE_AB_UUID>', '<USER_A_FOOTPRINT_ID>'); -- as User A, expect basic_food_count +1 and treat_balance +10
+-- select * from public.claim_creation_footprint_reward('<COUPLE_CD_UUID>', '<USER_A_FOOTPRINT_ID>'); -- as User A, expect active_couple_not_found
 -- update public.couple_footprints
 -- set title = '作者更新地点名'
 -- where id = '<USER_A_FOOTPRINT_ID>'; -- as User A, expect success
@@ -102,8 +105,8 @@
 -- where id = '<USER_A_FOOTPRINT_ID>'; -- as User B, expect RLS failure
 
 -- 19. Selecting a pet updates the shared creation space only for active members.
--- select * from public.choose_creation_pet('<COUPLE_AB_UUID>', 'silver_tabby', '银纹'); -- as User A, expect success and pet_key/pet_species update
--- select * from public.choose_creation_pet('<COUPLE_CD_UUID>', 'silver_tabby', '银纹'); -- as User A, expect active_couple_not_found
+-- select * from public.choose_creation_pet('<COUPLE_AB_UUID>', 'silver_tabby', '迪灵'); -- as User A, expect success and pet_key/pet_species compatibility update
+-- select * from public.choose_creation_pet('<COUPLE_CD_UUID>', 'silver_tabby', '迪灵'); -- as User A, expect active_couple_not_found
 
 -- 20. Buying food must consume shared rewards and increase the correct inventory bucket.
 -- select * from public.buy_creation_food('<COUPLE_AB_UUID>', 'basic', 1); -- as User A, expect success when treat_balance is sufficient
@@ -116,6 +119,60 @@
 -- select * from public.feed_creation_pet('<COUPLE_CD_UUID>', 'basic'); -- as User A, expect active_couple_not_found
 
 -- 22. Puzzle rewards should be claimable only once per puzzle per day.
--- select * from public.claim_creation_game_reward('<COUPLE_AB_UUID>', 'shadow-window', true); -- as User A, expect success and treat_balance increase
+-- select * from public.claim_creation_game_reward('<COUPLE_AB_UUID>', 'shadow-window', true); -- as User A, expect success, premium_food_count +1 and treat_balance +15
 -- select * from public.claim_creation_game_reward('<COUPLE_AB_UUID>', 'shadow-window', true); -- as User A, expect puzzle_reward_already_claimed_today
 -- select * from public.claim_creation_game_reward('<COUPLE_CD_UUID>', 'shadow-window', true); -- as User A, expect active_couple_not_found
+
+-- 23. Word-plan pet compatibility views inherit active-couple visibility.
+-- select * from public.pets where couple_id = '<COUPLE_AB_UUID>'; -- as User A, expect A+B shared pet row
+-- select * from public.pets where couple_id = '<COUPLE_CD_UUID>'; -- as User A, expect 0
+-- select * from public.pet_events where couple_id = '<COUPLE_AB_UUID>'; -- as User A, expect A+B pet action events
+-- select * from public.pet_events where couple_id = '<COUPLE_CD_UUID>'; -- as User A, expect 0
+
+-- 24. AI pet memories and generation logs are visible only inside the active couple.
+-- select * from public.pet_memories where couple_id = '<COUPLE_AB_UUID>'; -- as User A, expect A+B rows
+-- select * from public.pet_memories where couple_id = '<COUPLE_CD_UUID>'; -- as User A, expect 0
+-- select * from public.pet_ai_generations where couple_id = '<COUPLE_AB_UUID>'; -- as User A, expect A+B rows
+-- select * from public.pet_ai_generations where couple_id = '<COUPLE_CD_UUID>'; -- as User A, expect 0
+
+-- 25. AI context is low-sensitive and respects the 7-day memory window.
+-- select public.prepare_pet_ai_context('<COUPLE_AB_UUID>', 'pet'); -- as User A, expect no messages/letters/checkin bodies/photos/coordinates
+-- Insert or prepare one short memory older than 7 days and one core memory older than 7 days.
+-- select public.archive_expired_pet_memories(); -- expect expired short memories archived only
+-- select public.prepare_pet_ai_context('<COUPLE_AB_UUID>', 'pet') -> 'memories'; -- expect old short memory absent and old core memory present
+
+-- 26. AI pet decisions must go through server validation.
+-- select * from public.apply_pet_ai_decision(
+--   '<COUPLE_AB_UUID>',
+--   'pet',
+--   '{"action":"happy","mood":"它轻轻贴近你","bubble":"再摸摸也可以","state_delta":{"affection":3,"comfort":3},"memory":{"should_write":true,"memory_type":"care_summary","memory_scope":"core","importance":50,"summary":"一次普通摸摸"},"rig_cue":{"gaze":"user","blink":"slow","tail":"soft","pose":"sit"}}'::jsonb,
+--   '{"model":"test","fallback_used":false,"duration_ms":10,"input_summary":{"trigger_type":"pet"}}'::jsonb
+-- ); -- as User A, expect success; memory is downgraded to short because core rules are not met
+-- select * from public.apply_pet_ai_decision('<COUPLE_CD_UUID>', 'pet', '{}'::jsonb, '{}'::jsonb); -- as User A, expect active_couple_not_found
+
+-- 27. Users can manually promote or demote their active-couple pet memory.
+-- select * from public.toggle_pet_memory_core('<PET_MEMORY_ID>', true); -- as User A, expect memory_scope core, importance >= 95
+-- select * from public.toggle_pet_memory_core('<PET_MEMORY_ID>', false); -- as User A, expect memory_scope short and expires_at restored
+
+-- 28. Global pet world RPCs validate active couple membership and surface allowlists.
+-- select * from public.apply_pet_world_decision(
+--   '<COUPLE_AB_UUID>',
+--   '{"intent":"wander","target_surface":"home","mood":"calm","animation":"walk","bubble":"","memory_policy":{"should_write":false,"importance":0,"summary":""}}'::jsonb,
+--   '{"source":"rls_acceptance"}'::jsonb
+-- ); -- as User A, expect success and one pet_world_events decision row
+-- select * from public.apply_pet_world_decision(
+--   '<COUPLE_AB_UUID>',
+--   '{"intent":"wander","target_surface":"profile","mood":"calm","animation":"walk","bubble":"","memory_policy":{"should_write":false,"importance":0,"summary":""}}'::jsonb,
+--   '{}'::jsonb
+-- ); -- as User A, expect unsupported_surface
+-- select * from public.find_creation_pet('<COUPLE_AB_UUID>', 'memory'); -- as User A, expect success, pet_hidden false, current_action happy, affection +4, boredom -8, comfort +5, and found event metadata.state_delta
+-- select * from public.find_creation_pet('<COUPLE_AB_UUID>', 'settings'); -- as User A, expect unsupported_surface
+-- select * from public.mark_pet_surface_seen('<COUPLE_AB_UUID>', 'share'); -- as User A, expect success, surface_seen event, and pet_world_surface unchanged
+-- select * from public.mark_pet_surface_seen('<COUPLE_AB_UUID>', 'profile'); -- as User A, expect unsupported_surface
+-- select * from public.summon_creation_pet('<COUPLE_AB_UUID>', 'share'); -- as User A, expect success, current_action happy, affection +1, boredom -3, and summon event metadata.state_delta on share
+-- select * from public.summon_creation_pet('<COUPLE_AB_UUID>', 'settings'); -- as User A, expect unsupported_surface
+-- select * from public.apply_pet_world_decision(
+--   '<COUPLE_CD_UUID>',
+--   '{"intent":"wander","target_surface":"home","mood":"calm","animation":"walk","bubble":"","memory_policy":{"should_write":false,"importance":0,"summary":""}}'::jsonb,
+--   '{}'::jsonb
+-- ); -- as User A, expect active_couple_not_found

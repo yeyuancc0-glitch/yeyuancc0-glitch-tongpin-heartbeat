@@ -12,7 +12,8 @@ html,body,#root{
 }
 html,body{
   touch-action:pan-x pan-y;
-  overscroll-behavior:none;
+  overscroll-behavior-x:none;
+  overscroll-behavior-y:auto;
 }
 body{
   margin:0;
@@ -24,6 +25,9 @@ body::-webkit-scrollbar,
   width:0;
   height:0;
   display:none;
+}
+textarea[placeholder*="把今天想说的话写在这里"] {
+  line-height: 30px !important;
 }
 `;
 const preventPageZoomScript = `

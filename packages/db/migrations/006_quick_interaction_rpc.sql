@@ -51,7 +51,7 @@ begin
     partner_user_id,
     current_user_id,
     'message',
-    'TA 投递了一点心情',
+    'TA 向你投递了一点心情',
     left(clean_label, 32)
   )
   returning id into created_notification_id;
