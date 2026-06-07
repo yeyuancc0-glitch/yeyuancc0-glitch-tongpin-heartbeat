@@ -3,9 +3,9 @@ export type PetWorldSurface =
   | "share"
   | "memory"
   | "creation_hub"
-  | "pet_room"
-  | "footprints"
-  | "playground";
+  | "pet_room";
+
+export type LegacyPetWorldSurface = PetWorldSurface | "footprints" | "playground";
 
 export const petWorldAllowedSurfaces = [
   "home",
@@ -13,13 +13,18 @@ export const petWorldAllowedSurfaces = [
   "memory",
   "creation_hub",
   "pet_room",
-  "footprints",
-  "playground",
 ] as const satisfies readonly PetWorldSurface[];
 
-export const defaultPetWorldSurface: PetWorldSurface = "home";
+export const petWorldLegacySurfaces = [
+  ...petWorldAllowedSurfaces,
+  "footprints",
+  "playground",
+] as const satisfies readonly LegacyPetWorldSurface[];
+
+export const defaultPetWorldSurface: PetWorldSurface = "pet_room";
 
 const petWorldAllowedSurfaceSet = new Set<string>(petWorldAllowedSurfaces);
+const petWorldLegacySurfaceSet = new Set<string>(petWorldLegacySurfaces);
 
 export type PetWorldRouteState = {
   surface: PetWorldSurface;
@@ -29,6 +34,20 @@ export type PetWorldRouteState = {
 
 export function isPetWorldSurface(surface: string | null | undefined): surface is PetWorldSurface {
   return typeof surface === "string" && petWorldAllowedSurfaceSet.has(surface);
+}
+
+export function isLegacyPetWorldSurface(surface: string | null | undefined): surface is LegacyPetWorldSurface {
+  return typeof surface === "string" && petWorldLegacySurfaceSet.has(surface);
+}
+
+export function normalizePetWorldSurface(surface: string | null | undefined, fallback: PetWorldSurface = defaultPetWorldSurface): PetWorldSurface {
+  if (isPetWorldSurface(surface)) {
+    return surface;
+  }
+  if (surface === "footprints" || surface === "playground") {
+    return "pet_room";
+  }
+  return fallback;
 }
 
 export function isPetWorldAllowed(surface: string | null | undefined): surface is PetWorldSurface {
@@ -47,14 +66,11 @@ export function petWorldSurfaceForAppState(input: {
   }
 
   if (input.subPage === "creation") {
-    if (input.townView === "footprints") {
-      return { surface: "footprints" as const, disabled: false };
-    }
-    if (input.townView === "playground") {
-      return { surface: "playground" as const, disabled: false };
-    }
     if (input.townView === "pet") {
       return { surface: "pet_room" as const, disabled: false };
+    }
+    if (input.townView === "footprints" || input.townView === "playground") {
+      return { surface: "creation_hub" as const, disabled: true, reason: "creation_utility_surface" };
     }
     return { surface: "creation_hub" as const, disabled: false };
   }

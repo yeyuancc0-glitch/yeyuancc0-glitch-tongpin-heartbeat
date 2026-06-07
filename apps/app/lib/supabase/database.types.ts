@@ -285,7 +285,7 @@ export type CreationAction = {
 export type PetMemory = {
   id: string;
   couple_id: string;
-  memory_type: "preference" | "care_summary" | "footprint" | "online_together" | "milestone";
+  memory_type: "preference" | "care_summary" | "event" | "footprint" | "online_together" | "milestone";
   memory_scope: "short" | "core";
   importance: number;
   summary: string;
@@ -964,6 +964,12 @@ export type Database = {
         };
         Returns: PetMemory[];
       };
+      archive_pet_memory: {
+        Args: {
+          memory_id: string;
+        };
+        Returns: PetMemory[];
+      };
       apply_pet_world_decision: {
         Args: {
           target_couple_id: string;
@@ -982,6 +988,7 @@ export type Database = {
       summon_creation_pet: {
         Args: {
           target_couple_id: string;
+          surface?: string;
         };
         Returns: CreationSpace[];
       };

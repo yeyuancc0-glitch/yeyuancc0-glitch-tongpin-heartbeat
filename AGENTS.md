@@ -85,6 +85,19 @@
 - 首页“写情书 / 写一封信”入口必须融合在恋爱天数主卡内部，位于开始日期下方，作为首屏可见入口；来信页可保留回复/空状态入口，但不能作为唯一入口。
 - 首页“共创空间”入口使用右下角悬浮圆形按钮，样式参考记忆页添加事件入口；不要改成首页大卡片或新增底部 tab。
 - 共创空间首版是首页子页，包含小屋、轻量足迹记录和小游戏占位；双人小游戏在玩法确定前只保留入口，不创建房间、对局或积分等表。
+- Live2D 情侣云宠分步实施路线保存在根目录 `PLAN.md`；第一版只保证 Expo Web 的 Live2D 云宠体验，不做静态 PNG / 轻动画降级，原生 iOS / Android 稳定验证前不开放云宠。
+- Live2D 小猫模型源文件来自根目录 `LittleCat_Model/`，Web 静态运行资源放在 `apps/app/public/live2d/little-cat/`；Cubism Core 本地文件放在 `apps/app/public/live2d/core/live2dcubismcore.min.js`，不要依赖运行时 CDN。
+- Live2D Web 渲染使用 `pixi.js`、`pixi-live2d-display/cubism4` 和 `live2dcubismcore`；`Live2DCanvas` 需先设置 `window.PIXI` 再动态导入 Cubism4 插件。
+- Live2D 小窝主舞台布局必须按模型 `getLocalBounds()` 包围盒显式对齐，不要只依赖 anchor；同一房间页避免同时挂多个 LittleCat canvas，防止主舞台 ready 但视觉透明或不可见。
+- Step 4-7 阶段 Live2D 云宠已接入首页全局层、`pet_world_surface` 页面位置分离、分享页送信场景和记忆页看照片/记忆场景；不要恢复旧 3D `PetWorldCanvas` / 全局 3D 漫游层。
+- Live2D 云宠位置以 `creation_spaces.pet_world_surface` 为准；用户当前页面和宠物真实页面必须分离，宠物不在当前主 tab 时只显示轻量状态，不自动切换用户页面。
+- Live2D 云宠在 `home` / `pet_room` / `creation_hub` 时视为“在家”，不要显示“宠物不在当前页”的离开提示；共创空间内小猫本体必须只在 `pet_world_surface` 对应的真实子页显示，避免 Hub、小窝、足迹页同时出现多个本体。
+- Live2D Step 0-7 不把 `footprints` / `playground` 作为小猫本体位置；这两个共创子页只保留足迹和小游戏功能，旧 `pet_world_surface` 值必须归一到 `pet_room`。
+- Live2D 云宠离开当前主 tab 时的轻量状态可以提供“回小窝”显式召回，召回使用 `summon_creation_pet(couple_id, 'pet_room')`，不能通过进入页面或 `mark_pet_surface_seen` 偷偷改变真实位置。
+- Live2D 送信、照片和记忆事件只允许写入低敏 world decision（如 `target_surface`、`intent`、`animation`、`prop` 和短句），不要把信件正文、留言正文、胶囊正文、照片内容、caption 或精确坐标放入宠物上下文。
+- `pet-ai-brain` 的 `world.target_surface` 白名单只允许 `home` / `share` / `memory` / `creation_hub` / `pet_room`；不要再让 AI 输出 `footprints` / `playground`。
+- `pet-ai-brain` 的 Step 8 输出是小猫表现导演协议，不是聊天助手：`world` 必须包含 `target_surface`、`intent`、`animation`、`expression`、`symbol`、`sound_cue`、`speech`、`prop`、`state_delta` 和 `memory_policy`；`speech` 普通互动 8-22 个汉字，重要场景最多 28 个汉字，不输出长篇聊天、关系建议、催促或隐私正文复述。
+- Step 9 云宠记忆只允许低敏白名单事项：第一次领养、第一次命名、第一次送信、纪念日事件、最近常去记忆页、常摸摸或常喂食；禁止保存留言正文、信件正文、胶囊正文、照片内容、caption 和精确坐标。写入统一走 `memory_policy` / `insert_pet_memory_if_allowed` 的阈值、去重和 7 天短期过期规则；用户删除记忆走 `archive_pet_memory(memory_id)`，取消核心记忆走 `toggle_pet_memory_core(memory_id, false)`。
 - 共创空间页面本地状态不要被较旧的父级缓存直接覆盖，必须优先保留 `updated_at` 更新更晚的共享状态。
 - 共创小镇视觉插画资源位于 `apps/app/assets/creation-town/`；`cloud-cabin.png`、`footprints.png`、`playground.png` 和 `cabin-interior.png` 用于小镇 Hub、足迹页、游乐场页和小屋背景。
 - 足迹记录使用 `couple_footprints`，允许坐标为空；只记录地点名和备注也必须可用，且足迹可沉淀到记忆页“日常”。
@@ -106,6 +119,7 @@
 - 共创空间 schema 放在 `packages/db/migrations/008_v02_creation_space.sql`。
 - 共创空间足迹/解谜反哺生态 RPC 放在 `packages/db/migrations/018_creation_reward_ecosystem.sql`。
 - 当前 Supabase 项目 `lrwzvxcuchfkchtkqdfs` 已应用 `018_creation_reward_ecosystem.sql`，并确认 `claim_creation_footprint_reward(uuid, uuid)` 与 `claim_creation_game_reward(uuid, text, boolean)` 存在。
+- Live2D 小猫 surface 约束与旧值归一化放在 `packages/db/migrations/026_live2d_pet_surface_scope.sql`；当前 Supabase 项目 `lrwzvxcuchfkchtkqdfs` 已应用，`creation_spaces_normalize_pet_world_surface` 触发器会把旧 `footprints` / `playground` 写入归一为 `pet_room`。
 - 当前 Supabase 项目 `lrwzvxcuchfkchtkqdfs` 已按顺序应用 `001_v01a_schema.sql` 到 `004_v01b_schema.sql`，并验证 V0.1B 表、RPC、private bucket 和 RLS 存在。
 - RLS policy 放在 `packages/db/policies`。
 - 事务性绑定逻辑使用 Postgres RPC，不允许前端直接创建 `couples` 和 `couple_members`。

@@ -1,6 +1,6 @@
 import type { CreationSpace } from "@/lib/supabase/database.types";
 import type { PetWorldAnimation, PetWorldDecision, PetWorldIntent, PetWorldMood } from "@/features/pet/services/petAiBrain";
-import type { PetWorldSurface } from "./petWorldRoutes";
+import { normalizePetWorldSurface, type PetWorldSurface } from "./petWorldRoutes";
 
 type RuleDecisionInput = {
   space: CreationSpace | null;
@@ -28,12 +28,18 @@ function baseDecision(input: {
   animation: PetWorldAnimation;
   bubble: string;
 }): PetWorldDecision {
+  const speech = input.bubble.slice(0, 28);
   return {
     intent: input.intent,
     target_surface: input.surface,
     mood: input.mood,
     animation: input.animation,
-    bubble: input.bubble.slice(0, 28),
+    expression: input.mood,
+    symbol: "none",
+    sound_cue: "none",
+    speech,
+    prop: "none",
+    bubble: speech,
     memory_policy: { should_write: false, importance: 0, summary: "" },
   };
 }
@@ -58,7 +64,7 @@ export function resolvePetWorldRuleDecision({
   if (hidden) {
     return baseDecision({
       intent: "hide",
-      surface: space.pet_world_surface ?? surface,
+      surface: normalizePetWorldSurface(space.pet_world_surface, surface),
       mood: "curious",
       animation: "hide",
       bubble: "我先躲一下。",
@@ -139,7 +145,7 @@ export function resolvePetWorldRuleDecision({
   if (space.boredom > 72 && minutesFromPlay > 90) {
     return baseDecision({
       intent: "play",
-      surface: "playground",
+      surface: "pet_room",
       mood: "curious",
       animation: "play",
       bubble: "想去玩一会儿。",
@@ -199,7 +205,7 @@ export function resolvePetWorldRuleDecision({
   if (space.current_action === "play") {
     return baseDecision({
       intent: "play",
-      surface: "playground",
+      surface: "pet_room",
       mood: "excited",
       animation: "hop",
       bubble: "再玩一下。",

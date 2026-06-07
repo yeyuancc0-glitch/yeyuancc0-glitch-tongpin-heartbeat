@@ -1,6 +1,7 @@
 import { supabase } from "@/lib/supabase/client";
 import type { CreationSpace, Json } from "@/lib/supabase/database.types";
 import type { PetWorldDecision } from "@/features/pet/services/petAiBrain";
+import type { PetWorldSurface } from "@/features/pet-world/logic/petWorldRoutes";
 
 export type { PetWorldDecision };
 
@@ -31,6 +32,17 @@ export async function applyPetWorldDecision(targetCoupleId: string, decision: Pe
 
 export async function markPetSurfaceSeen(targetCoupleId: string, surface: string) {
   const { data, error } = await supabase.rpc("mark_pet_surface_seen", {
+    target_couple_id: targetCoupleId,
+    surface,
+  }).maybeSingle();
+  if (error) {
+    throw error;
+  }
+  return data as CreationSpace | null;
+}
+
+export async function summonPetToSurface(targetCoupleId: string, surface: PetWorldSurface) {
+  const { data, error } = await supabase.rpc("summon_creation_pet", {
     target_couple_id: targetCoupleId,
     surface,
   }).maybeSingle();

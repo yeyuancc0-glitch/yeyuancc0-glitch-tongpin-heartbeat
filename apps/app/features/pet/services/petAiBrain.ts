@@ -2,9 +2,12 @@ import { supabase } from "@/lib/supabase/client";
 import type { CreationSpace, Json } from "@/lib/supabase/database.types";
 
 export type PetAiAction = CreationSpace["current_action"];
-export type PetWorldSurface = "home" | "share" | "memory" | "creation_hub" | "pet_room" | "footprints" | "playground";
+export type PetWorldSurface = "home" | "share" | "memory" | "creation_hub" | "pet_room";
 export type PetWorldIntent = "wander" | "hide" | "seek_attention" | "inspect_memory" | "visit_partner" | "return_home" | "rest" | "play" | "ask_food" | "comfort_user";
 export type PetWorldMood = "happy" | "curious" | "sleepy" | "lonely" | "excited" | "calm" | "hungry";
+export type PetWorldExpression = PetWorldMood | "soft" | "shy";
+export type PetWorldSymbol = "none" | "heart" | "sparkle" | "letter" | "photo" | "memory" | "food" | "sleep";
+export type PetWorldSoundCue = "none" | "soft_chime" | "purr" | "tap" | "letter" | "photo";
 export type PetWorldAnimation =
   | "idle"
   | "walk"
@@ -49,10 +52,11 @@ export type PetAiDecision = {
   };
   memory?: {
     should_write: boolean;
-    memory_type: "preference" | "care_summary" | "footprint" | "online_together" | "milestone";
+    memory_type: "preference" | "care_summary" | "event" | "footprint" | "online_together" | "milestone";
     memory_scope: "short" | "core";
     importance: number;
     summary: string;
+    dedupe_key?: string;
   };
   rig_cue?: PetRigCue;
   world?: PetWorldDecision;
@@ -63,11 +67,19 @@ export type PetWorldDecision = {
   target_surface: PetWorldSurface;
   mood: PetWorldMood;
   animation: PetWorldAnimation;
+  expression: PetWorldExpression;
+  symbol: PetWorldSymbol;
+  sound_cue: PetWorldSoundCue;
+  speech: string;
+  prop?: "letter" | "photo" | "memory" | "none";
   bubble: string;
   memory_policy: {
     should_write: boolean;
+    memory_type?: "preference" | "care_summary" | "event" | "footprint" | "online_together" | "milestone";
+    memory_scope?: "short" | "core";
     importance: number;
     summary: string;
+    dedupe_key?: string;
   };
   rig_cue?: PetRigCue;
   state_delta?: {

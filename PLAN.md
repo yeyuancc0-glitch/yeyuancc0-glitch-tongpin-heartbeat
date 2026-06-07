@@ -1,448 +1,282 @@
-# 情侣双人应用 MVP 规划
-
-## 1. 产品定位
-
-核心价值：为一对情侣提供私密、轻量、长期沉淀的共同空间，重点不是聊天，而是记录关系、制造仪式感、形成持续互动。
-
-目标用户：已建立恋爱关系、希望记录日常和纪念日的情侣，尤其适合异地情侣、热恋情侣、重视仪式感的伴侣。
-
-差异点：
-- 相比普通日历：增加双方关系、互动和情绪记忆。
-- 相比聊天软件：避免重要回忆被聊天流淹没。
-- 相比情侣空间：第一版不做公开社交，优先做双人私密闭环。
-
-## 2. MVP 阶段范围
-
-### V0.1A：Web MVP 核心闭环
-
-只做：
-- 注册 / 登录
-- profiles 用户资料
-- 创建情侣邀请码
-- 接受邀请码并建立情侣关系
-- 情侣首页
-- 恋爱天数 / 纪念日倒计时
-- 今日打卡
-- 留言板基础版
-- 基础情侣日历事件
-- 基础 Row Level Security 权限控制
-
-不做：
-- 相册上传
-- 未来信
-- 情绪状态增强
-- 复杂情侣任务
-- 原生推送通知
-- AI 助手
-- 高级主题
-- 订阅支付
-- 完整审核后台
-
-### V0.1B：Web MVP 增强版
-
-加入：
-- 相册上传
-- 未来信
-- 情绪状态增强
-- 站内通知
-- 基础内容删除
-- 举报 / 拉黑入口
-- 账号注销流程设计与最小实现
-- 隐私政策、用户协议草案
-
-### V0.2：移动端内测版
-
-加入：
-- iOS / Android 真机适配
-- Expo Push Notifications
-- APNs / FCM 配置
-- 邀请链接 Deep Link
-- TestFlight / Google Play Internal Testing
-- 移动端权限说明
-- 崩溃与行为埋点
-
-### V1.0：应用商店上架版
-
-加入：
-- App 内账号删除入口
-- 举报 / 屏蔽 / 内容处理流程
-- 数据安全说明
-- 完整隐私政策与用户协议
-- 应用商店审核素材
-- 内容处理与用户支持流程
-- 基础运营后台或 Supabase 后台操作手册
-
-## 3. V0.1A 用户流程
-
-注册登录：用户打开 Web → 注册 / 登录 → 创建 profiles → 进入未绑定状态。
-
-创建邀请：用户 A 点击“邀请另一半” → 生成 `pair_invites.code` → 展示邀请码和邀请链接。
-
-接受邀请：用户 B 输入邀请码 → 系统检查邀请码有效 → 检查 A 和 B 都没有 active couple → 事务创建 `couples` 和 `couple_members` → 邀请状态改为 accepted。
-
-日常使用：双方进入情侣首页 → 查看恋爱天数 / 纪念日倒计时 → 今日打卡 → 留言 → 添加基础日历事件。
-
-解绑：V0.1A 先设计数据状态，不做复杂删除流程；解绑后 couple 状态变为 ended，双方不能继续写入该 couple 数据。
-
-## 4. 信息架构
-
-页面：
-- 登录 / 注册页
-- 个人资料页
-- 未绑定首页
-- 创建邀请码页
-- 输入邀请码页
-- 情侣首页
-- 今日打卡页或首页内模块
-- 留言板页或首页内模块
-- 情侣日历页
-- 设置页
-- 关系解绑页
-
-情侣首页模块：
-- 双方头像与昵称
-- 恋爱天数
-- 下一个纪念日倒计时
-- 今日打卡状态
-- 最新留言
-- 最近日历事件
-- 快捷操作入口
-
-## 5. 推荐技术路线
-
-推荐技术栈：
-- Expo
-- React Native
-- TypeScript
-- Expo Router
-- Supabase
-- NativeWind 或 Tamagui
-
-阶段策略：
-- 第一阶段优先使用 Expo Web 做 Web MVP。
-- 第一阶段不拆 Next.js，除非后续明确需要 SEO、官网、投放落地页或服务端渲染。
-- 原生推送、App Store、Google Play 能力放到 V0.2 之后。
-- 不引入复杂后端、微服务、Kubernetes、自建鉴权。
-- Supabase 负责 Auth、Postgres、RLS、Storage、Edge Functions / RPC。
-
-UI 选择：
-- 若追求简单和速度，使用 NativeWind。
-- 若需要更强跨端组件体系和主题能力，使用 Tamagui。
-- V0.1A 默认选 NativeWind，减少学习和集成成本。
-
-## 6. 数据库设计
-
-所有业务表使用 `uuid` 主键，时间字段使用 `timestamptz`，默认开启 RLS。
-
-### profiles
-
-替代 `public.users`，避免和 `auth.users` 混淆。
-
-字段：
-- `id uuid primary key references auth.users(id)`
-- `display_name text`
-- `avatar_url text`
-- `birthdate date nullable`
-- `created_at timestamptz`
-- `updated_at timestamptz`
-
-权限：
-- 用户可读写自己的 profile。
-- 情侣关系成立后，双方可读取对方基础 profile。
-
-### pair_invites
-
-字段：
-- `id uuid primary key`
-- `code text unique not null`
-- `created_by uuid references profiles(id)`
-- `accepted_by uuid nullable references profiles(id)`
-- `status text check in ('pending','accepted','expired','cancelled')`
-- `expires_at timestamptz`
-- `created_at timestamptz`
-- `accepted_at timestamptz nullable`
-
-权限：
-- 创建者可读取和取消自己的 pending 邀请。
-- 登录用户可通过 code 校验 pending 邀请。
-- 接受邀请必须走事务函数，不允许前端直接拼接写入 couples / couple_members。
-
-### couples
-
-字段：
-- `id uuid primary key`
-- `started_at date not null`
-- `anniversary_date date nullable`
-- `status text check in ('active','ended')`
-- `created_by uuid references profiles(id)`
-- `created_at timestamptz`
-- `ended_at timestamptz nullable`
-
-权限：
-- active member 可读。
-- 只能通过绑定事务创建。
-- 解绑后禁止继续写入关联业务数据。
-
-### couple_members
-
-字段：
-- `id uuid primary key`
-- `couple_id uuid references couples(id)`
-- `user_id uuid references profiles(id)`
-- `role text default 'member'`
-- `joined_at timestamptz`
-- `left_at timestamptz nullable`
-
-权限：
-- 用户可读取自己所属 couple 的成员关系。
-- active couple 判断以 `left_at is null` 且 `couples.status = 'active'` 为准。
-
-### checkins
-
-字段：
-- `id uuid primary key`
-- `couple_id uuid references couples(id)`
-- `user_id uuid references profiles(id)`
-- `checkin_date date`
-- `content text nullable`
-- `created_at timestamptz`
-- `updated_at timestamptz`
-
-权限：
-- couple active member 可读。
-- 用户只能为自己的 active couple 创建打卡。
-- 作者可更新 / 删除自己的打卡。
-
-### messages
-
-字段：
-- `id uuid primary key`
-- `couple_id uuid references couples(id)`
-- `sender_id uuid references profiles(id)`
-- `body text not null`
-- `created_at timestamptz`
-- `updated_at timestamptz`
-- `deleted_at timestamptz nullable`
-
-权限：
-- couple active member 可读。
-- sender 只能在自己的 active couple 下创建留言。
-- message 作者可以删除自己的留言。
-- 非作者不能删除对方留言，除非后续明确加入双方共同管理规则。
-
-### calendar_events
-
-字段：
-- `id uuid primary key`
-- `couple_id uuid references couples(id)`
-- `created_by uuid references profiles(id)`
-- `title text not null`
-- `event_date date not null`
-- `type text check in ('anniversary','date','todo','other')`
-- `created_at timestamptz`
-- `updated_at timestamptz`
-- `deleted_at timestamptz nullable`
-
-权限：
-- couple active member 可读。
-- active member 可创建自己 couple 下的事件。
-- V0.1A 默认双方都可编辑 / 删除事件，后续可细分作者权限。
-
-### 后续表
-
-V0.1B / V0.2 再加入：
-- `future_letters`
-- `media_files`
-- `mood_status`
-- `notifications`
-- `reports`
-- `blocks`
-
-这些表仍必须以 `couple_id` 或 `user_id` 做权限边界。
-
-## 7. 情侣邀请事务流程
-
-不在创建邀请时提前创建空 couple。
-
-流程：
-1. 用户 A 创建 `pair_invites`，状态为 `pending`。
-2. 用户 B 输入邀请码。
-3. 系统校验邀请码存在、未过期、状态为 `pending`。
-4. 系统校验 `created_by != auth.uid()`。
-5. 系统校验 A 当前没有 active couple。
-6. 系统校验 B 当前没有 active couple。
-7. 使用数据库事务创建 `couples`。
-8. 插入两条 `couple_members`：A 和 B。
-9. 更新 `pair_invites.accepted_by`、`accepted_at`、`status = 'accepted'`。
-10. 返回新 couple 信息。
-
-实现要求：
-- 使用 Supabase RPC 或 Edge Function 执行事务。
-- 前端不能直接创建 couples 和 couple_members。
-- 并发接受同一个邀请码时，只能成功一次。
-- 同一用户不能同时存在两个 active couple。
-
-## 8. RLS 权限设计与验收测试
-
-RLS 原则：
-- 未登录用户不能读取任何情侣数据。
-- 所有情侣业务数据必须带 `couple_id`。
-- 读写权限统一判断当前用户是否为该 couple 的 active member。
-- 写入时必须校验传入 `couple_id` 属于当前用户。
-- Storage 必须使用私有 bucket 或受控访问策略。
-
-验收测试：
-- 未登录用户不能读取任何情侣数据。
-- 用户只能读取自己所属 couple 的数据。
-- 用户不能读取其他情侣的 `checkins` / `messages` / `calendar_events`。
-- 用户只能创建自己 `couple_id` 下的数据。
-- 解绑后不能继续写入原 couple 数据。
-- message 作者可以删除自己的留言。
-- 非作者不能删除对方留言，除非规则明确允许。
-- `future_letters` 未到 `unlock_at` 时，接收方不可读。
-- `media_files` 必须校验 couple member 权限。
-- Storage 文件必须使用私有 bucket 或受控访问策略。
-
-测试方式：
-- 准备用户 A/B/C/D，其中 A+B 是情侣，C+D 是另一对情侣。
-- 使用 Supabase SQL 测试、RPC 测试或集成测试分别以不同用户 session 执行查询和写入。
-- 所有越权查询应返回空结果或权限错误。
-- 所有越权写入、更新、删除应失败。
-
-## 9. 通知策略
-
-V0.1A：
-- 默认不做通知，或只做非常轻量的站内提示。
-- 不接入 Expo Push Notifications。
-- 不配置 APNs / FCM。
-
-V0.1B：
-- 可加入站内通知表 `notifications`。
-- 用于留言、打卡、日历事件提醒。
-
-V0.2：
-- 接入 Expo Push Notifications。
-- 配置 APNs / FCM。
-- 支持移动端推送权限申请、token 管理和失败重试。
-
-## 10. 合规功能阶段规划
-
-V0.1A：
-- 基础隐私边界。
-- 基础数据删除能力预留。
-- 基础关系解绑设计。
-
-V0.1B / V0.2：
-- 举报。
-- 拉黑。
-- 账号注销。
-- 内容删除。
-- 隐私政策。
-- 用户协议。
-
-V1.0：
-- 完整应用商店审核准备。
-- App 内账号删除入口。
-- 举报 / 屏蔽 / 内容处理流程。
-- 数据安全说明。
-- App Review / Google Play 测试账号和审核说明。
-
-## 11. MVP 验证指标
-
-- 注册完成率：判断注册流程是否过长或有技术阻塞。
-- 邀请发送率：判断用户是否理解产品核心是“双人绑定”。
-- 情侣绑定成功率：判断邀请码流程是否顺畅。
-- 绑定后首日打卡率：判断首页和打卡是否形成首次互动。
-- 绑定后首日留言率：判断留言板是否有真实使用价值。
-- 双方互动率：判断是否只有一方在用，还是双方都参与。
-- D1 留存：判断首日体验是否足够清晰。
-- D7 留存：判断产品是否有持续关系价值。
-- 每对情侣 7 天内产生的 checkin 数量：判断日常打卡频率。
-- 每对情侣 7 天内产生的 message 数量：判断留言板是否替代或补充聊天。
-
-建议 V0.1A 不追求大规模增长，重点验证“绑定成功后是否愿意连续 7 天产生内容”。
-
-## 12. 推荐目录结构
-
-```text
-apps/
-  app/
-    app/
-    components/
-    features/
-      auth/
-      profile/
-      pairing/
-      home/
-      checkins/
-      messages/
-      calendar/
-    lib/
-      supabase/
-      navigation/
-      dates/
-    styles/
-packages/
-  db/
-    migrations/
-    policies/
-    tests/
-  shared/
-    types/
-    constants/
-supabase/
-  functions/
-docs/
-  product/
-  compliance/
-PLAN.md
-AGENTS.md
-```
-
-初期可以只保留：
-- `apps/app`
-- `packages/db`
-- `docs`
-- `PLAN.md`
-- `AGENTS.md`
-
-等复用需求明确后再拆更细。
-
-## 13. 第一周开发计划
-
-Day 1：初始化 Expo + TypeScript + Expo Router + Supabase 项目，建立基础目录结构。
-
-Day 2：建立 Supabase schema：`profiles`、`pair_invites`、`couples`、`couple_members`，并开启 RLS。
-
-Day 3：实现注册、登录、session 管理、路由保护。
-
-Day 4：实现邀请码创建、邀请码输入、情侣绑定事务。
-
-Day 5：实现情侣首页，展示双方资料、恋爱天数、纪念日倒计时。
-
-Day 6：实现今日打卡和留言板基础 CRUD。
-
-Day 7：补齐 RLS policy、RLS 测试、基础 UI 修正、部署 Web 预览版。
-
-## 14. 风险与规避
-
-产品风险：功能过多导致 MVP 失焦。规避：V0.1A 只验证注册、绑定、日常互动、纪念日四件事。
-
-技术风险：跨端 UI 在 Web 和原生表现不一致。规避：优先使用 Expo 兼容组件，复杂平台能力后置到 V0.2。
-
-权限风险：情侣数据越权访问。规避：所有业务表启用 RLS，所有情侣数据必须带 `couple_id`，并做 RLS 验收测试。
-
-审核风险：UGC、账号删除、举报能力不足。规避：V0.1A 预留数据结构，V0.1B / V0.2 补齐，V1.0 完整实现。
-
-隐私风险：情侣内容高度敏感。规避：最小化采集、私有 Storage、删除能力、解绑状态、禁止公开内容。
-
-成本风险：图片和推送过早引入成本。规避：相册和原生推送不进 V0.1A。
-
-## 15. 默认假设
-
-- 一个用户同一时间只能有一个 active couple。
-- V0.1A 不做公开社区和陌生人匹配。
-- V0.1A 不做图片上传和未来信。
-- V0.1A 不做原生推送。
-- V0.1A 使用 Expo Web 验证产品闭环。
-- 后续进入实现阶段时，先创建并维护 `AGENTS.md`，再创建 `PLAN.md`。
+# Live2D 情侣云宠分步实施路线
+
+## Summary
+
+按“先跑通 Live2D 核心体验，再接 Supabase 状态，再接全局漫游，最后接 AI 和记忆”的顺序做。第一版只做一只 Live2D 小猫，不做静态 PNG / 轻动画降级，不新增服务器，继续使用 Supabase Edge Function + 外部模型 API。具体请参考开源项目https://github.com/t41372/Open-LLM-VTuber
+
+## Step 0：准备与边界确认
+
+目标：避免一上来就把 AI、数据库、Live2D、页面联动全部混在一起。
+
+- 确认 `LittleCat_Model` 授权是否允许公开使用。
+- 确认模型文件能被 Web 端加载：`model3.json`、`moc3`、texture、physics。
+- 固定第一版范围：一只小猫、小窝、首页、分享页、记忆页、亲昵短句、AI 记忆。
+- 暂不做：多宠物切换、商城、完整图鉴、原生端 Live2D、支付、复杂装饰。
+
+验收：明确模型可用，第一版范围不再扩散。
+
+## Step 1：Live2D Web 最小 POC
+
+目标：先证明 Live2D 小猫能在 Expo Web 里稳定显示。
+
+- 引入 Live2D Web 渲染依赖。
+- 将小猫模型放到 Web 可访问资源目录。
+- 做一个最小测试组件，只加载模型并显示 idle。
+- 验证呼吸、眨眼、基础 physics 正常。
+- 不接 Supabase，不接 AI，不接业务页面。
+
+验收：
+
+- Web 页面能看到 Live2D 小猫。
+- 刷新后模型能稳定加载。
+- 浏览器控制台无关键资源加载错误。
+
+## Step 2：小窝 Live2D 舞台
+
+目标：先把宠物核心体验放进小窝，而不是一开始就全局乱跑。
+
+- 实现 `PetStage`。
+- 支持 idle、摸摸、喂食、清洁、睡觉几个基础动作。
+- 支持亲昵短句气泡，但先用本地固定文案。
+- 支持基础状态展示：亲密度、饱足、清爽度、精力。
+- 小窝里用户可以点击或长按小猫触发摸摸。
+
+示例短句：
+
+- `手别停嘛，再摸摸`
+- `吃饱啦，想贴贴你`
+- `小窝香香的，我喜欢`
+- `我想靠着你睡会儿`
+
+验收：
+
+- 小窝内 Live2D 可互动。
+- 摸摸、喂食、清洁、睡觉都有可见反馈。
+- 没有 AI 时也能完整使用。
+
+## Step 3：接入现有 Supabase 宠物状态
+
+目标：让小猫变成情侣共享状态，而不是本地玩具。
+
+- 复用现有 `creation_spaces`。
+- 摸摸、喂食、清洁继续走现有 RPC。
+- 前端根据 Supabase 返回状态驱动 Live2D 动作。
+- 两个用户看到同一个宠物状态。
+- 保持 RLS：只能访问 active couple 的宠物数据。
+
+验收：
+
+- A 喂食后，B 刷新能看到饱足/状态变化。
+- 权限仍受 active couple 限制。
+- API 失败时界面不崩。
+
+## Step 4：首页全局宠物层
+
+目标：让小猫第一次“住进 App”，但只先做首页。
+
+- 实现 `GlobalPetLayer` 的首页版本。
+- 小猫可以出现在恋爱天数主卡附近、写信入口附近、共创空间入口附近。
+- 支持拖动，避免遮挡内容。
+- 支持短句和符号气泡。
+- 暂时不做跨页面自主漫游，只在首页出现。
+
+验收：
+
+- 首页能看到 Live2D 小猫。
+- 小猫不会挡住主要按钮。
+- 拖动后短时间不自动归位。
+- 底部导航、输入框、首页滚动不受影响。
+
+## Step 5：宠物位置与用户页面分离
+
+目标：实现方案里的核心概念：用户页面和宠物位置不是一回事。
+
+- 使用 `pet_world_surface` 表示宠物真实所在页面。
+- 当前用户在首页时，宠物可以处于 `share` 或 `memory`。
+- 如果宠物不在当前页面，当前页面只显示轻量状态，不强制召回。
+- 首页显示类似：`小猫在记忆页看照片`、`小猫叼着信跑去分享页啦`。
+- 不自动切换用户页面。
+
+验收：
+
+- 宠物位置变化不会让用户页面跳转。
+- 用户进入宠物所在页面时，才自然遇见它。
+- 宠物不在当前页时不会硬显示在当前页。
+
+## Step 6：分享页送信场景
+
+目标：先做最有情侣感的核心事件。
+
+- 分享页支持小猫叼信出现。
+- 对方写信或胶囊信后，宠物可移动到分享页或首页入口附近。
+- 小猫只负责送达和提示，例如：`我叼着信来找你啦`。
+- 点开后显示伴侣原文。
+- 小猫不能替伴侣生成、改写、发送内容。
+
+验收：
+
+- 来信事件能触发宠物送信表现。
+- 小猫短句不包含信件正文。
+- 点开信件看到的是伴侣原始内容。
+
+## Step 7：记忆页看照片场景
+
+目标：让宠物参与回忆，但不读取隐私内容。
+
+- 新照片、新记忆、纪念日可吸引小猫去记忆页。
+- 小猫在记忆卡或照片旁探头、趴下、留下爪印或 `📷✨`。
+- 可说短句：`这张我想多看一会儿`。
+- AI 或规则只读取低敏事件摘要，不读取照片内容、留言正文、胶囊正文。
+
+验收：
+
+- 上传照片后，小猫可去记忆页。
+- 记忆页小猫表现安静，不干扰浏览。
+- 数据上下文不包含隐私正文。
+
+## Step 8：AI 导演协议
+
+目标：让 AI 控制“小猫怎么表现”，而不是做聊天助手。
+
+- 修改 `pet-ai-brain` 输出结构化 JSON。
+- 输出字段：
+  - `target_surface`
+  - `intent`
+  - `animation`
+  - `expression`
+  - `symbol`
+  - `sound_cue`
+  - `speech`
+  - `prop`
+  - `state_delta`
+  - `memory_policy`
+- `speech` 规则：
+  - 普通互动 8-22 个汉字。
+  - 重要场景最多 28 个汉字。
+  - 亲昵、撒娇、贴贴，但不长篇。
+- API 超时、额度超限、key 缺失时走规则 fallback，Live2D 仍正常表现。
+
+验收：
+
+- AI 输出必须是 JSON。
+- 不出现长篇聊天、关系建议、催促、隐私正文复述。
+- fallback 时小猫仍能动、能互动。
+
+## Step 9：AI 记忆管理
+
+目标：让小猫有自己的长期感，但不变成隐私收集器。
+
+- 扩展 `pet_memories` 使用方式。
+- 记忆类型：
+  - 短期记忆
+  - 核心记忆
+  - 偏好记忆
+  - 事件记忆
+- 允许保存：
+  - 第一次领养
+  - 第一次命名
+  - 第一次送信
+  - 纪念日事件
+  - 最近常去记忆页
+  - 用户常摸摸或常喂食
+- 禁止保存：
+  - 留言正文
+  - 信件正文
+  - 胶囊正文
+  - 照片内容
+  - 精确坐标
+
+验收：
+
+- 小猫记忆列表能在小窝展示。
+- 短期记忆会过期。
+- 核心记忆写入有阈值，不会频繁产生。
+- 用户能删除或取消核心记忆。
+
+## Step 10：自主漫游完整规则
+
+目标：把首页、分享页、记忆页、小窝串成一个小世界。
+
+- 规则优先，AI 辅助。
+- 高频场景走规则：
+  - 普通页面切换
+  - 连续摸摸
+  - 连续喂食
+  - 普通刷新
+- 低频仪式感场景走 AI：
+  - 来信
+  - 新照片
+  - 今日胶囊
+  - 纪念日
+  - 两人同时在线
+  - 第一次事件
+- 宠物可以离开、回来、藏一会儿、回窝休息。
+- 但不制造“找宠物”压力，不催用户回来。
+
+验收：
+
+- 宠物能自主切换 `pet_world_surface`。
+- 用户不会被自动跳页。
+- 一天内 AI 调用次数受控。
+
+## Step 11：用户控制设置
+
+目标：宠物可爱，但必须可控。
+
+- 增加设置：
+  - 显示/隐藏宠物
+  - 关闭声音
+  - 关闭自主漫游
+  - 调整大小
+  - 重置位置
+  - 减少动画强度，但仍使用 Live2D
+- 设置优先影响当前用户体验。
+- 情侣共享状态仍保留，不因某一方隐藏宠物而删除。
+
+验收：
+
+- 关闭显示后当前用户不再看到宠物。
+- 关闭漫游后宠物只留在当前页面或小窝。
+- 调整大小和重置位置即时生效。
+
+## Step 12：多宠物预留，不开放切换
+
+目标：代码结构先支持未来多宠物，但第一版不让用户切。
+
+- 建立 `pet_catalog` 配置。
+- 配置内容：
+  - `pet_key`
+  - Live2D 模型路径
+  - 支持动作
+  - 支持表情
+  - 声音 cue
+  - 默认体型
+  - 偏好页面
+- 第一版只注册小猫。
+- 不做宠物商城、不做图鉴、不做多宠物领养 UI。
+
+验收：
+
+- 小猫不被硬编码到所有逻辑里。
+- 未来新增小狗/小兔时不需要重写 AI 和世界状态。
+
+## Final Verification
+
+- `npm run typecheck`
+- `npm run build:web`
+- RLS 验收：宠物状态、宠物事件、AI 记录、宠物记忆只能 active couple 访问。
+- 浏览器验收：
+  - 小窝 Live2D 正常。
+  - 首页宠物正常。
+  - 分享页送信正常。
+  - 记忆页看照片正常。
+  - AI 失败时 fallback 正常。
+  - 设置项生效。
+
+## Assumptions
+
+- 第一版只保证 Expo Web 的 Live2D 云宠体验。
+- 不做静态 PNG / 轻动画降级。
+- 原生 iOS / Android 需要单独验证 Live2D 方案，稳定前不开放云宠。
+- 不新增独立服务器。
+- 小猫可以说亲昵短句，但不是 AI 聊天助手。

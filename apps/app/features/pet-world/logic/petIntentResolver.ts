@@ -1,11 +1,14 @@
 import type { CreationSpace } from "@/lib/supabase/database.types";
-import { defaultPetWorldSurface, isPetWorldSurface, type PetWorldSurface } from "./petWorldRoutes";
+import { normalizePetWorldSurface, type PetWorldSurface } from "./petWorldRoutes";
 import { resolvePetWorldRuleDecision } from "./petWorldRules";
-import type { PetWorldAnimation, PetWorldDecision, PetWorldIntent, PetWorldMood } from "@/features/pet/services/petAiBrain";
+import type { PetWorldAnimation, PetWorldDecision, PetWorldExpression, PetWorldIntent, PetWorldMood, PetWorldSoundCue, PetWorldSymbol } from "@/features/pet/services/petAiBrain";
 
 const allowedIntents: PetWorldIntent[] = ["wander", "hide", "seek_attention", "inspect_memory", "visit_partner", "return_home", "rest", "play", "ask_food", "comfort_user"];
 const allowedAnimations: PetWorldAnimation[] = ["idle", "walk", "run", "hop", "float", "eat", "pet", "clean", "play", "sleep", "sad", "happy", "curious", "hide", "peek", "found", "summon", "return_home", "inspect", "visit_partner"];
 const allowedMoods: PetWorldMood[] = ["happy", "curious", "sleepy", "lonely", "excited", "calm", "hungry"];
+const allowedExpressions: PetWorldExpression[] = [...allowedMoods, "soft", "shy"];
+const allowedSymbols: PetWorldSymbol[] = ["none", "heart", "sparkle", "letter", "photo", "memory", "food", "sleep"];
+const allowedSoundCues: PetWorldSoundCue[] = ["none", "soft_chime", "purr", "tap", "letter", "photo"];
 
 function normalizeWorldMood(mood: string | null | undefined): PetWorldMood {
   if (allowedMoods.includes(mood as PetWorldMood)) {
@@ -22,8 +25,20 @@ function normalizeWorldAnimation(animation: unknown, fallbackValue: PetWorldAnim
   return typeof animation === "string" && allowedAnimations.includes(animation as PetWorldAnimation) ? animation as PetWorldAnimation : fallbackValue;
 }
 
+function normalizeWorldExpression(expression: unknown, fallbackValue: PetWorldExpression): PetWorldExpression {
+  return typeof expression === "string" && allowedExpressions.includes(expression as PetWorldExpression) ? expression as PetWorldExpression : fallbackValue;
+}
+
+function normalizeWorldSymbol(symbol: unknown, fallbackValue: PetWorldSymbol): PetWorldSymbol {
+  return typeof symbol === "string" && allowedSymbols.includes(symbol as PetWorldSymbol) ? symbol as PetWorldSymbol : fallbackValue;
+}
+
+function normalizeWorldSoundCue(soundCue: unknown, fallbackValue: PetWorldSoundCue): PetWorldSoundCue {
+  return typeof soundCue === "string" && allowedSoundCues.includes(soundCue as PetWorldSoundCue) ? soundCue as PetWorldSoundCue : fallbackValue;
+}
+
 function normalizeWorldSurface(surface: unknown, fallbackValue: PetWorldSurface): PetWorldSurface {
-  return typeof surface === "string" && isPetWorldSurface(surface) ? surface : fallbackValue;
+  return normalizePetWorldSurface(typeof surface === "string" ? surface : null, fallbackValue);
 }
 
 function safeBubble(value: unknown, fallbackValue: string) {
@@ -43,7 +58,7 @@ export function petWorldDecisionFromSpace(input: {
   surface: PetWorldSurface;
   partnerOnline?: boolean;
 }): PetWorldDecision {
-  const autonomousSurface = input.space?.pet_world_surface ?? defaultPetWorldSurface;
+  const autonomousSurface = normalizePetWorldSurface(input.space?.pet_world_surface);
   const fallback = resolvePetWorldDecision({
     space: input.space,
     surface: autonomousSurface,
@@ -66,17 +81,28 @@ export function petWorldDecisionFromSpace(input: {
   const persistedTargetSurface = normalizeWorldSurface(world.target_surface, autonomousSurface);
   const targetSurface = persistedTargetSurface === autonomousSurface ? persistedTargetSurface : autonomousSurface;
   const mood = normalizeWorldMood(typeof world.mood === "string" ? world.mood : space.pet_world_mood);
+  const speech = safeBubble(world.speech ?? world.bubble, space.last_ai_bubble ?? fallback.speech);
+  const memoryPolicy = world.memory_policy && typeof world.memory_policy === "object" && !Array.isArray(world.memory_policy)
+    ? world.memory_policy as PetWorldDecision["memory_policy"]
+    : fallback.memory_policy;
   return {
     intent,
     target_surface: targetSurface,
     mood,
     animation: persistentWorldAnimation(animation, intent),
-    bubble: safeBubble(world.bubble, space.last_ai_bubble ?? fallback.bubble),
+    expression: normalizeWorldExpression(world.expression, fallback.expression),
+    symbol: normalizeWorldSymbol(world.symbol, fallback.symbol),
+    sound_cue: normalizeWorldSoundCue(world.sound_cue, fallback.sound_cue),
+    speech,
+    prop: world.prop === "letter" || world.prop === "photo" || world.prop === "memory" || world.prop === "none" ? world.prop : fallback.prop,
+    bubble: speech,
     memory_policy: {
-      should_write: false,
-      importance: 0,
-      summary: "",
-      ...(world.memory_policy && typeof world.memory_policy === "object" && !Array.isArray(world.memory_policy) ? world.memory_policy : {}),
+      should_write: Boolean(memoryPolicy.should_write),
+      memory_type: memoryPolicy.memory_type,
+      memory_scope: memoryPolicy.memory_scope,
+      importance: Number.isFinite(Number(memoryPolicy.importance)) ? Number(memoryPolicy.importance) : 0,
+      summary: typeof memoryPolicy.summary === "string" ? memoryPolicy.summary.slice(0, 60) : "",
+      dedupe_key: typeof memoryPolicy.dedupe_key === "string" ? memoryPolicy.dedupe_key.slice(0, 80) : undefined,
     },
   };
 }

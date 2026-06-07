@@ -1,11 +1,15 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.84.0";
 
 type PetAiAction = "idle" | "walk" | "eat" | "pet" | "clean" | "play" | "sleep" | "sad" | "happy";
-type MemoryType = "preference" | "care_summary" | "footprint" | "online_together" | "milestone";
+type MemoryType = "preference" | "care_summary" | "event" | "footprint" | "online_together" | "milestone";
 type MemoryScope = "short" | "core";
-type PetWorldSurface = "home" | "share" | "memory" | "creation_hub" | "pet_room" | "footprints" | "playground";
+type PetWorldSurface = "home" | "share" | "memory" | "creation_hub" | "pet_room";
 type PetWorldIntent = "wander" | "hide" | "seek_attention" | "inspect_memory" | "visit_partner" | "return_home" | "rest" | "play" | "ask_food" | "comfort_user";
 type PetWorldMood = "happy" | "curious" | "sleepy" | "lonely" | "excited" | "calm" | "hungry";
+type PetWorldExpression = PetWorldMood | "soft" | "shy";
+type PetWorldSymbol = "none" | "heart" | "sparkle" | "letter" | "photo" | "memory" | "food" | "sleep";
+type PetWorldSoundCue = "none" | "soft_chime" | "purr" | "tap" | "letter" | "photo";
+type PetWorldProp = "none" | "letter" | "photo" | "memory";
 type PetWorldAnimation = "idle" | "walk" | "run" | "hop" | "float" | "eat" | "pet" | "clean" | "play" | "sleep" | "sad" | "happy" | "curious" | "hide" | "peek" | "found" | "summon" | "return_home" | "inspect" | "visit_partner";
 
 type PetAiDecision = {
@@ -27,6 +31,7 @@ type PetAiDecision = {
     memory_scope: MemoryScope;
     importance: number;
     summary: string;
+    dedupe_key?: string;
   };
   rig_cue: {
     gaze: "user" | "bowl" | "toy" | "partner" | "none";
@@ -39,11 +44,28 @@ type PetAiDecision = {
     target_surface: PetWorldSurface;
     mood: PetWorldMood;
     animation: PetWorldAnimation;
+    expression: PetWorldExpression;
+    symbol: PetWorldSymbol;
+    sound_cue: PetWorldSoundCue;
+    speech: string;
+    prop: PetWorldProp;
     bubble: string;
+    state_delta: {
+      fullness: number;
+      cleanliness: number;
+      affection: number;
+      energy: number;
+      boredom: number;
+      comfort: number;
+      growth_points: number;
+    };
     memory_policy: {
       should_write: boolean;
+      memory_type: MemoryType;
+      memory_scope: MemoryScope;
       importance: number;
       summary: string;
+      dedupe_key?: string;
     };
   };
 };
@@ -62,6 +84,7 @@ const siliconFlowBaseUrl = Deno.env.get("SILICONFLOW_BASE_URL") ?? "https://api.
 const siliconFlowModel = Deno.env.get("SILICONFLOW_PET_MODEL") ?? "deepseek-ai/DeepSeek-V4-Flash";
 const dailyLimit = parseInt(Deno.env.get("PET_AI_DAILY_LIMIT") ?? "40", 10);
 const timeoutMs = parseInt(Deno.env.get("PET_AI_TIMEOUT_MS") ?? "4500", 10);
+const allowedWorldSurfaces = ["home", "share", "memory", "creation_hub", "pet_room"] as const;
 
 if (!supabaseUrl || !serviceRoleKey || !anonKey) {
   throw new Error("Missing SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, or SUPABASE_ANON_KEY.");
@@ -167,6 +190,7 @@ Deno.serve(async (request) => {
         model: siliconFlowModel,
         fallback_used: false,
         duration_ms: durationMs,
+        trigger: triggerType,
         source: "edge_ai_success",
         input_summary: inputSummary,
       },
@@ -216,18 +240,20 @@ async function requestSiliconFlowDecision({
             role: "system",
             content: [
               "只输出严格 JSON，不要 Markdown，不要解释。",
-              "你就是情侣 App 里这只奶油白 Q 版心愿精灵“迪灵”本身，不是旁白、助手或系统。mood 和 bubble 都必须像迪灵亲口对用户说。",
-              "迪灵形象固定：奶油白圆润身体、大蓝眼、浅蓝三瓣头冠、垂耳月牙光、黄色爱心肚纹、蓝色卷尾和小爪。语气是原创轻奇幻小精灵第一人称。",
-              "不要根据 pet_species 改成猫或狗。禁止使用汪、喵、小猫、小狗、猫咪、狗狗、云猫、云狗、奶霜、银纹、小金、柚柚。",
-              "bubble 7-16 个汉字，mood 12-28 个汉字。语气亲近、短、口语化，像小精灵贴近用户，不要堆形容词。",
+              "你是情侣 App 里的 Live2D 小猫“迪灵”，只做小猫表现导演，不做聊天助手、关系建议师或系统说明。",
+              "必须输出 action、mood、bubble、state_delta、memory、rig_cue、world；world 必须包含 target_surface、intent、animation、expression、symbol、sound_cue、speech、prop、state_delta、memory_policy。",
+              "speech 是迪灵亲口说的一句中文短句：普通互动 8-22 个汉字，来信/纪念日等重要场景最多 28 个汉字；亲昵、撒娇、贴贴，但不要长篇聊天。",
+              "不要输出关系建议、催促用户回来、要求用户做事、解释 AI、解释 JSON、解释数据库。",
+              "禁止复述或猜测留言正文、信件正文、胶囊正文、照片内容、caption、精确坐标。只能用低敏事件摘要。",
+              "不要根据 pet_species 改成狗或别的宠物。禁止使用汪、小狗、狗狗、云狗、奶霜、银纹、小金、柚柚。",
+              "bubble 为 speech 的兼容副本；mood 12-28 个汉字。语气亲近、短、口语化，不要堆形容词。",
               "禁止写“它/云宠/宠物正在/小狗正在/小猫正在/正在生成/正在思考/我还在叼这句话”。",
               "trigger_type=clean 表示用户在打扫小屋、窝垫、饭碗或地面，不是给宠物洗澡。clean 时禁止写洗澡、擦澡、刚擦完澡、毛发、毛茸茸、棉花糖、地板能照镜子、小风扇、亮晶晶。",
               "不要使用夸张比喻或生硬拟人，例如棉花糖、小风扇、照镜子、闪闪发光、亮晶晶。宁可简单说“小窝干净啦”。",
               "好例子：clean -> “小窝干净啦，我想靠近你”；pet -> “摸摸头好舒服”；feed -> “我吃饱啦，想靠近你”。",
-              "状态变化要轻微。高频喂养、抚摸、清洁不要写 core 记忆。",
-              "只使用低敏上下文，不索要或推断留言、信件、胶囊正文、照片或精确坐标。",
-              "world 只表达全局宠物行为意图：想去哪、想做什么、用哪个动画和一句气泡。不要输出坐标、DOM、用户资料或数据库字段。",
-              "world.target_surface 必须从白名单选择；隐私页、设置页、登录页、信件正文、图片全屏和输入状态都不能作为目标。",
+              "状态变化要轻微。高频喂养、抚摸、清洁默认 memory_policy.should_write=false，不能写 core 记忆。",
+              "memory_policy 只允许这些低敏记忆：第一次领养、第一次命名、第一次送信、纪念日事件、最近常去记忆页、用户常摸摸或常喂食。其他场景默认不写。",
+              "world.target_surface 只能从 home/share/memory/creation_hub/pet_room 选择；不能输出 footprints/playground，也不能输出隐私页、设置页、登录页、信件正文、图片全屏和输入状态。",
               "localHint.surface 只是用户当前所在页面，不代表迪灵必须过去。除非 trigger_type 明确是 summon/find/found，否则不要因为用户切页就把 world.target_surface 改成 localHint.surface。",
             ].join("\n"),
           },
@@ -299,6 +325,7 @@ async function fallback(userClient: ReturnType<typeof createClient>, coupleId: s
     generation_meta: {
       fallback_used: true,
       error_code: errorCode,
+      trigger: triggerType,
       source: "edge_fallback",
     },
   }).maybeSingle();
@@ -317,6 +344,28 @@ async function fallback(userClient: ReturnType<typeof createClient>, coupleId: s
       action: enumValue((space as { current_action?: unknown } | null)?.current_action, ["idle", "walk", "eat", "pet", "clean", "play", "sleep", "sad", "happy"], "idle"),
       mood: typeof (space as { pet_mood?: unknown } | null)?.pet_mood === "string" ? (space as { pet_mood: string }).pet_mood : fallbackWorld.bubble,
       bubble: fallbackWorld.bubble,
+      state_delta: {
+        fullness: 0,
+        cleanliness: 0,
+        affection: 0,
+        energy: 0,
+        boredom: 0,
+        comfort: 0,
+        growth_points: 0,
+      },
+      memory: {
+        should_write: false,
+        memory_type: "care_summary",
+        memory_scope: "short",
+        importance: 0,
+        summary: "",
+      },
+      rig_cue: {
+        gaze: "none",
+        blink: "normal",
+        tail: "soft",
+        pose: "stand",
+      },
       world: fallbackWorld,
     },
     fallback: true,
@@ -374,10 +423,11 @@ function normalizeDecision(
     },
     memory: {
       should_write: valueToBoolean(memory.should_write),
-      memory_type: enumValue(memory.memory_type, ["preference", "care_summary", "footprint", "online_together", "milestone"], "care_summary"),
+      memory_type: enumValue(memory.memory_type, ["preference", "care_summary", "event", "footprint", "online_together", "milestone"], "care_summary"),
       memory_scope: enumValue(memory.memory_scope, ["short", "core"], "short"),
       importance: clampNumber(memory.importance, 0, 100, 0),
       summary: clampText(memory.summary, 60, ""),
+      dedupe_key: typeof memory.dedupe_key === "string" ? memory.dedupe_key.slice(0, 80) : undefined,
     },
     rig_cue: {
       gaze: enumValue(rigCue.gaze, ["user", "bowl", "toy", "partner", "none"], "none"),
@@ -402,8 +452,8 @@ function normalizeWorldDecision(
   const world = rawWorld && typeof rawWorld === "object" && !Array.isArray(rawWorld)
     ? rawWorld as Record<string, unknown>
     : {};
-  const localSurface = enumValue(localHint.surface, ["home", "share", "memory", "creation_hub", "pet_room", "footprints", "playground"], "home");
-  const currentPetSurface = enumValue(compactSpace.pet_world_surface, ["home", "share", "memory", "creation_hub", "pet_room", "footprints", "playground"], localSurface);
+  const localSurface = normalizeWorldSurface(localHint.surface, "home");
+  const currentPetSurface = normalizeWorldSurface(compactSpace.pet_world_surface, localSurface);
   const fullness = clampNumber(compactSpace.fullness, 0, 100, 60);
   const energy = clampNumber(compactSpace.energy, 0, 100, 60);
   const partnerOnline = localHint.partner_online === true;
@@ -424,7 +474,7 @@ function normalizeWorldDecision(
     : directUserSurfaceTriggers
       ? localSurface
       : currentPetSurface;
-  const requestedSurface = enumValue(world.target_surface, ["home", "share", "memory", "creation_hub", "pet_room", "footprints", "playground"], fallbackSurface);
+  const requestedSurface = normalizeWorldSurface(world.target_surface, fallbackSurface);
   const surfaceMovesAllowed = directUserSurfaceTriggers || world.intent === "hide" || world.intent === "return_home" || world.intent === "ask_food" || world.intent === "play" || world.intent === "inspect_memory" || world.intent === "visit_partner";
   const targetSurface: PetWorldSurface = !surfaceMovesAllowed && requestedSurface === localSurface && localSurface !== currentPetSurface
     ? currentPetSurface
@@ -447,16 +497,40 @@ function normalizeWorldDecision(
       : partnerOnline
         ? "excited"
         : "calm";
+  const intent = enumValue(world.intent, ["wander", "hide", "seek_attention", "inspect_memory", "visit_partner", "return_home", "rest", "play", "ask_food", "comfort_user"], fallbackIntent);
+  const mood = enumValue(world.mood, ["happy", "curious", "sleepy", "lonely", "excited", "calm", "hungry"], fallbackMood);
+  const animation = enumValue(world.animation, ["idle", "walk", "run", "hop", "float", "eat", "pet", "clean", "play", "sleep", "sad", "happy", "curious", "hide", "peek", "found", "summon", "return_home", "inspect", "visit_partner"], fallbackAnimation);
+  const speech = normalizePetSpeech(clampText(world.speech ?? world.bubble, importantTrigger(triggerType) ? 28 : 22, roomDecision.bubble), triggerType, roomDecision.action, "speech");
+  const memoryPolicy = world.memory_policy && typeof world.memory_policy === "object" && !Array.isArray(world.memory_policy)
+    ? world.memory_policy as Record<string, unknown>
+    : {};
   return {
-    intent: enumValue(world.intent, ["wander", "hide", "seek_attention", "inspect_memory", "visit_partner", "return_home", "rest", "play", "ask_food", "comfort_user"], fallbackIntent),
+    intent,
     target_surface: targetSurface,
-    mood: enumValue(world.mood, ["happy", "curious", "sleepy", "lonely", "excited", "calm", "hungry"], fallbackMood),
-    animation: enumValue(world.animation, ["idle", "walk", "run", "hop", "float", "eat", "pet", "clean", "play", "sleep", "sad", "happy", "curious", "hide", "peek", "found", "summon", "return_home", "inspect", "visit_partner"], fallbackAnimation),
-    bubble: normalizePetSpeech(clampText(world.bubble, 24, roomDecision.bubble), triggerType, roomDecision.action, "bubble"),
+    mood,
+    animation,
+    expression: enumValue(world.expression, ["happy", "curious", "sleepy", "lonely", "excited", "calm", "hungry", "soft", "shy"], mood),
+    symbol: enumValue(world.symbol, ["none", "heart", "sparkle", "letter", "photo", "memory", "food", "sleep"], symbolForTrigger(triggerType, intent)),
+    sound_cue: enumValue(world.sound_cue, ["none", "soft_chime", "purr", "tap", "letter", "photo"], soundCueForTrigger(triggerType, intent)),
+    speech,
+    prop: enumValue(world.prop, ["none", "letter", "photo", "memory"], propForTrigger(triggerType, intent)),
+    bubble: speech,
+    state_delta: {
+      fullness: 0,
+      cleanliness: 0,
+      affection: 0,
+      energy: 0,
+      boredom: 0,
+      comfort: 0,
+      growth_points: 0,
+    },
     memory_policy: {
-      should_write: false,
-      importance: 0,
-      summary: "",
+      should_write: valueToBoolean(memoryPolicy.should_write),
+      memory_type: enumValue(memoryPolicy.memory_type, ["preference", "care_summary", "event", "footprint", "online_together", "milestone"], "event"),
+      memory_scope: enumValue(memoryPolicy.memory_scope, ["short", "core"], "short"),
+      importance: clampNumber(memoryPolicy.importance, 0, 100, 0),
+      summary: clampText(memoryPolicy.summary, 60, ""),
+      dedupe_key: typeof memoryPolicy.dedupe_key === "string" ? memoryPolicy.dedupe_key.slice(0, 80) : undefined,
     },
   };
 }
@@ -465,9 +539,48 @@ function enumValue<T extends string>(value: unknown, allowed: readonly T[], fall
   return typeof value === "string" && (allowed as readonly string[]).includes(value) ? value as T : fallbackValue;
 }
 
+function normalizeWorldSurface(value: unknown, fallbackValue: PetWorldSurface): PetWorldSurface {
+  if (typeof value === "string" && (allowedWorldSurfaces as readonly string[]).includes(value)) {
+    return value as PetWorldSurface;
+  }
+  if (value === "footprints" || value === "playground") {
+    return "pet_room";
+  }
+  return fallbackValue;
+}
+
 function clampText(value: unknown, maxLength: number, fallbackValue: string) {
   const text = typeof value === "string" ? value.trim() : "";
   return (text || fallbackValue).slice(0, maxLength);
+}
+
+function importantTrigger(triggerType: string) {
+  return /letter|anniversary|first|memory_anniversary/.test(triggerType);
+}
+
+function symbolForTrigger(triggerType: string, intent: PetWorldIntent): PetWorldSymbol {
+  if (triggerType.includes("letter")) return "letter";
+  if (triggerType.includes("photo")) return "photo";
+  if (triggerType.includes("memory")) return "memory";
+  if (triggerType.includes("feed")) return "food";
+  if (intent === "rest") return "sleep";
+  if (intent === "seek_attention" || intent === "comfort_user") return "heart";
+  return "sparkle";
+}
+
+function soundCueForTrigger(triggerType: string, intent: PetWorldIntent): PetWorldSoundCue {
+  if (triggerType.includes("letter")) return "letter";
+  if (triggerType.includes("photo")) return "photo";
+  if (triggerType.includes("pet")) return "purr";
+  if (intent === "seek_attention" || intent === "comfort_user") return "soft_chime";
+  return "none";
+}
+
+function propForTrigger(triggerType: string, intent: PetWorldIntent): PetWorldProp {
+  if (triggerType.includes("letter")) return "letter";
+  if (triggerType.includes("photo")) return "photo";
+  if (triggerType.includes("memory") || intent === "inspect_memory") return "memory";
+  return "none";
 }
 
 function clampNumber(value: unknown, min: number, max: number, fallbackValue: number) {
@@ -486,7 +599,7 @@ function normalizePetSpeech(
   value: string,
   triggerType: string,
   action: PetAiAction,
-  field: "mood" | "bubble",
+  field: "mood" | "bubble" | "speech",
 ) {
   const fallbackValue = naturalFallbackLine(triggerType, action, field);
   const withoutRobotTone = value
@@ -508,7 +621,7 @@ function normalizePetSpeech(
     return fallbackValue;
   }
   const next = clean || fallbackValue;
-  return next.slice(0, field === "mood" ? 34 : 24);
+  return next.slice(0, field === "mood" ? 34 : importantTrigger(triggerType) ? 28 : 22);
 }
 
 function shouldReplaceWithNaturalFallback(value: string, triggerType: string, action: PetAiAction) {
@@ -530,7 +643,7 @@ function shouldReplaceWithNaturalFallback(value: string, triggerType: string, ac
 function naturalFallbackLine(
   triggerType: string,
   action: PetAiAction,
-  field: "mood" | "bubble",
+  field: "mood" | "bubble" | "speech",
 ) {
   const lines: Record<string, string> = {
     feed: field === "mood" ? "我吃饱啦，想靠近你" : "我吃饱啦",
@@ -557,7 +670,7 @@ function sanitizeTrigger(value: unknown) {
 
 function sanitizeLocalHint(value: unknown): Record<string, unknown> {
   const raw = value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
-  const surface = enumValue(raw.surface, ["home", "share", "memory", "creation_hub", "pet_room", "footprints", "playground"], "home");
+  const surface = normalizeWorldSurface(raw.surface, "home");
   return {
     surface,
     partner_online: raw.partner_online === true,
@@ -637,10 +750,11 @@ const outputSchemaHint = {
   },
   memory: {
     should_write: false,
-    memory_type: "preference | care_summary | footprint | online_together | milestone",
+    memory_type: "preference | care_summary | event | footprint | online_together | milestone",
     memory_scope: "short | core",
     importance: 0,
     summary: "不超过 60 字",
+    dedupe_key: "可选，低敏去重键",
   },
   rig_cue: {
     gaze: "user | bowl | toy | partner | none",
@@ -650,14 +764,31 @@ const outputSchemaHint = {
   },
   world: {
     intent: "wander | hide | seek_attention | inspect_memory | visit_partner | return_home | rest | play | ask_food | comfort_user",
-    target_surface: "home | share | memory | creation_hub | pet_room | footprints | playground",
+    target_surface: "home | share | memory | creation_hub | pet_room",
     mood: "happy | curious | sleepy | lonely | excited | calm | hungry",
     animation: "idle | walk | run | hop | float | eat | pet | clean | play | sleep | sad | happy | curious | hide | peek | found | summon | return_home | inspect | visit_partner",
-    bubble: "不超过 24 字",
+    expression: "happy | curious | sleepy | lonely | excited | calm | hungry | soft | shy",
+    symbol: "none | heart | sparkle | letter | photo | memory | food | sleep",
+    sound_cue: "none | soft_chime | purr | tap | letter | photo",
+    speech: "普通 8-22 个汉字，重要场景最多 28 个汉字",
+    prop: "none | letter | photo | memory",
+    bubble: "speech 的兼容副本",
+    state_delta: {
+      fullness: 0,
+      cleanliness: 0,
+      affection: 0,
+      energy: 0,
+      boredom: 0,
+      comfort: 0,
+      growth_points: 0,
+    },
     memory_policy: {
       should_write: false,
+      memory_type: "preference | care_summary | event | footprint | online_together | milestone",
+      memory_scope: "short | core",
       importance: 0,
       summary: "不超过 60 字",
+      dedupe_key: "可选，低敏去重键",
     },
   },
 };
