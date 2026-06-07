@@ -268,6 +268,7 @@ export type CreationSpace = {
   pet_last_seen_at: string | null;
   pet_last_found_at: string | null;
   pet_last_surface_changed_at: string | null;
+  pet_sleep_started_at: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -276,7 +277,7 @@ export type CreationAction = {
   id: string;
   couple_id: string;
   actor_id: string;
-  action_type: "feed" | "pet" | "clean" | "play" | "rename" | "decorate" | "choose_pet" | "buy_food" | "game_reward" | "ai_brain" | "memory_update" | "footprint_add" | "footprint_update" | "footprint_delete";
+  action_type: "feed" | "pet" | "clean" | "play" | "sleep" | "rename" | "decorate" | "choose_pet" | "buy_food" | "game_reward" | "ai_brain" | "memory_update" | "footprint_add" | "footprint_update" | "footprint_delete";
   action_label: string;
   metadata: Json;
   created_at: string;
@@ -653,6 +654,7 @@ export type Database = {
           pet_last_seen_at?: string | null;
           pet_last_found_at?: string | null;
           pet_last_surface_changed_at?: string | null;
+          pet_sleep_started_at?: string | null;
           created_at?: string;
           updated_at?: string;
         };
@@ -877,7 +879,7 @@ export type Database = {
       interact_creation_pet: {
         Args: {
           target_couple_id: string;
-          interaction_type: "feed" | "pet" | "clean" | "play";
+          interaction_type: "feed" | "pet" | "clean" | "play" | "sleep";
         };
         Returns: CreationSpace[];
       };
@@ -901,6 +903,12 @@ export type Database = {
         Args: {
           target_couple_id: string;
           food_type: "basic" | "premium";
+        };
+        Returns: CreationSpace[];
+      };
+      settle_creation_pet_sleep: {
+        Args: {
+          target_couple_id: string;
         };
         Returns: CreationSpace[];
       };

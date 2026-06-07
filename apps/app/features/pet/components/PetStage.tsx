@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Animated, Platform, Pressable, StyleSheet, Text, View, type StyleProp, type ViewStyle } from "react-native";
-import { Heart, Moon, Sparkles, Utensils } from "lucide-react-native";
+import { Gamepad2, Moon, Sparkles, Utensils } from "lucide-react-native";
 
 import { BouncyPressable } from "@/motion/BouncyPressable";
 import { haptics } from "@/motion/haptics";
 import { motionTokens } from "@/motion/tokens";
 import { colors } from "@/styles/theme";
+import { activeLive2DPet, type Live2DPetConfig } from "@/features/pet/live2dCatalog";
 import type { PetRigCue } from "@/features/pet/services/petAiBrain";
+import { isDirectPetAction, petAnimalLine, petHumanLine, sanitizeDirectPetText } from "@/features/pet-world/logic/petExpression";
 import { Live2DCanvas } from "./Live2DCanvas";
 
 export type CreationLivePetAction = "idle" | "walk" | "eat" | "pet" | "clean" | "play" | "sleep" | "sad" | "happy";
@@ -21,6 +23,7 @@ export type PetStageMode = "home" | "room";
 
 export type PetStageProps = {
   petKey?: string;
+  petConfig?: Live2DPetConfig;
   petName?: string;
   petTitle?: string;
   petTrait?: string;
@@ -30,57 +33,83 @@ export type PetStageProps = {
   energy?: number;
   reaction?: CreationPetStageReaction | null;
   rigCue?: PetRigCue | null;
+  sizeScale?: number;
+  reducedMotion?: boolean;
   scene?: "card" | "overlay";
   mode?: PetStageMode;
   style?: StyleProp<ViewStyle>;
   onTapPet?: () => void;
   onStrokePet?: () => void;
   onOpenRoom?: () => void;
+  onPlayPet?: () => void;
   onSleepPet?: () => void;
 };
 
 const localLines: Record<CreationLivePetAction, string> = {
-  idle: "我在小窝里等你",
-  walk: "我慢慢走过来啦",
-  eat: "吃饱啦，想贴贴你",
-  pet: "手别停嘛，再摸摸",
-  clean: "小窝香香的，我喜欢",
-  play: "还想和你玩一会儿",
-  sleep: "我想靠着你睡会儿",
-  sad: "想要你陪陪我",
-  happy: "今天也贴着你们",
+  idle: "喵",
+  walk: "喵",
+  eat: "饭饭",
+  pet: "摸头，舒服",
+  clean: "干净啦",
+  play: "再追一下",
+  sleep: "困困",
+  sad: "喵呜",
+  happy: "咕噜",
 };
 
 export function PetStage({
   petName = "小猫",
   petTitle = "Live2D 小猫",
   petTrait = "共享小窝伙伴",
+  petConfig = activeLive2DPet,
   fullness = 62,
   cleanliness = 64,
   affection = 68,
   energy = 72,
   reaction,
   rigCue,
+  sizeScale = petConfig.defaultScale,
+  reducedMotion = false,
   scene = "card",
   mode = "room",
   style,
   onTapPet,
   onStrokePet,
   onOpenRoom,
+  onPlayPet,
   onSleepPet,
 }: PetStageProps) {
   const [localReaction, setLocalReaction] = useState<CreationPetStageReaction | null>(null);
+  const [heldAction, setHeldAction] = useState<CreationLivePetAction | null>(null);
+  const [bubbleVisible, setBubbleVisible] = useState(false);
+  const [expiredReactionId, setExpiredReactionId] = useState<number | null>(null);
   const [loadState, setLoadState] = useState<"loading" | "ready" | "error">("loading");
   const pulse = useRef(new Animated.Value(0)).current;
-  const activeReaction = localReaction ?? reaction;
-  const action = activeReaction?.action ?? actionFromState({ fullness, cleanliness, energy });
-  const bubble = activeReaction?.message || localLines[action];
+  const effectiveReaction = reaction && reaction.id !== expiredReactionId ? reaction : null;
+  const activeReaction = localReaction ?? effectiveReaction;
+  const fallbackAction = heldAction ?? actionFromState({ fullness, cleanliness, energy });
+  const action = activeReaction?.action ?? fallbackAction;
+  const bubble = activeReaction
+    ? sanitizeDirectPetText(activeReaction.message, activeReaction.action)
+    : isDirectPetAction(action)
+      ? petHumanLine(action)
+      : petAnimalLine({ action });
   const compact = mode === "home";
+
+  function holdSleep() {
+    setHeldAction("sleep");
+  }
+
+  function releaseSleepHold() {
+    setHeldAction(null);
+  }
 
   useEffect(() => {
     if (!activeReaction) {
+      setBubbleVisible(false);
       return undefined;
     }
+    setBubbleVisible(true);
     pulse.setValue(0);
     Animated.sequence([
       Animated.timing(pulse, {
@@ -94,12 +123,28 @@ export function PetStage({
         useNativeDriver: false,
       }),
     ]).start();
+    const bubbleTimeout = setTimeout(() => setBubbleVisible(false), 2600);
     if (activeReaction === localReaction) {
-      const timeout = setTimeout(() => setLocalReaction(null), 2600);
-      return () => clearTimeout(timeout);
+      const localTimeout = setTimeout(() => setLocalReaction(null), 2600);
+      return () => {
+        clearTimeout(bubbleTimeout);
+        clearTimeout(localTimeout);
+      };
     }
-    return undefined;
+    return () => clearTimeout(bubbleTimeout);
   }, [activeReaction, localReaction, pulse]);
+
+  useEffect(() => {
+    if (!reaction) {
+      return;
+    }
+    setExpiredReactionId(null);
+    if (reaction.action !== "sleep") {
+      releaseSleepHold();
+      return undefined;
+    }
+    holdSleep();
+  }, [reaction?.action, reaction?.id]);
 
   const stageScale = pulse.interpolate({ inputRange: [0, 1], outputRange: [1, 1.035] });
   const meterValues = useMemo(
@@ -114,6 +159,14 @@ export function PetStage({
 
   function triggerLocal(actionType: CreationLivePetAction, message = localLines[actionType]) {
     haptics.play("light");
+    if (actionType === "sleep") {
+      holdSleep();
+    } else {
+      releaseSleepHold();
+      if (effectiveReaction?.action === "sleep") {
+        setExpiredReactionId(effectiveReaction.id);
+      }
+    }
     setLocalReaction({ id: Date.now(), action: actionType, message });
   }
 
@@ -123,7 +176,7 @@ export function PetStage({
   }
 
   function handleLongPress() {
-    triggerLocal("pet", "手别停嘛，再摸摸");
+    triggerLocal("pet", "摸头，舒服");
     onStrokePet?.();
   }
 
@@ -132,9 +185,14 @@ export function PetStage({
     onSleepPet?.();
   }
 
+  function handlePlay() {
+    triggerLocal("play");
+    onPlayPet?.();
+  }
+
   return (
     <View style={[scene === "overlay" ? styles.overlayStage : styles.cardStage, style]}>
-      <View pointerEvents="none" style={styles.skyGlow} />
+      {scene === "card" ? <View pointerEvents="none" style={styles.skyGlow} /> : null}
       <Pressable
         accessibilityRole="button"
         accessibilityLabel={`抚摸${petName}`}
@@ -144,13 +202,24 @@ export function PetStage({
         style={styles.live2dHitArea}
       >
         <Animated.View style={[styles.live2dLift, { transform: [{ scale: stageScale }] }]}>
-          <Live2DCanvas action={action} rigCue={rigCue} compact={compact} onLoadStateChange={setLoadState} />
+          <Live2DCanvas
+            petConfig={petConfig}
+            action={action}
+            actionKey={activeReaction?.id ?? action}
+            rigCue={rigCue}
+            compact={compact}
+            sizeScale={sizeScale}
+            reducedMotion={reducedMotion}
+            onLoadStateChange={setLoadState}
+          />
         </Animated.View>
       </Pressable>
 
-      <View pointerEvents="none" style={[styles.bubble, compact ? styles.bubbleCompact : null]}>
-        <Text style={styles.bubbleText}>{bubble}</Text>
-      </View>
+      {bubbleVisible ? (
+        <View pointerEvents="none" style={[styles.bubble, compact ? styles.bubbleCompact : null]}>
+          <Text style={styles.bubbleText}>{bubble}</Text>
+        </View>
+      ) : null}
 
       {scene === "card" ? (
         <View style={styles.infoPanel}>
@@ -170,8 +239,8 @@ export function PetStage({
             ))}
           </View>
           <View style={styles.actionRow}>
-            <StageActionButton label="摸摸" icon={<Heart color={colors.accentDark} size={15} />} onPress={handleTap} />
-            <StageActionButton label="喂食反馈" icon={<Utensils color={colors.accentDark} size={15} />} onPress={() => triggerLocal("eat")} />
+            <StageActionButton label="喂食反馈" icon={<Utensils color={colors.accentDark} size={15} />} onPress={() => triggerLocal("eat", petHumanLine("feed"))} />
+            <StageActionButton label="陪玩" icon={<Gamepad2 color={colors.accentDark} size={15} />} onPress={handlePlay} />
             <StageActionButton label="哄睡" icon={<Moon color={colors.accentDark} size={15} />} onPress={handleSleep} />
           </View>
           {onOpenRoom ? (

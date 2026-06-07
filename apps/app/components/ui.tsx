@@ -266,6 +266,8 @@ export function AppScroll({ children }: PropsWithChildren) {
     transform: [{ translateY: rubberBand.value }],
   }));
   const refreshText = refreshing ? "正在刷新" : pullState === "ready" ? "松开刷新" : "下拉刷新";
+  const scrollContentWebProps =
+    Platform.OS === "web" ? ({ dataSet: { appScrollContent: "true" } } as Record<string, unknown>) : {};
 
   return (
     <RefreshContext.Provider value={setRefreshHandler}>
@@ -298,7 +300,10 @@ export function AppScroll({ children }: PropsWithChildren) {
             <Text style={styles.pullRefreshText}>{refreshText}</Text>
           </View>
         ) : null}
-        <Reanimated.View style={scrollMotionStyle}>
+        <Reanimated.View
+          {...scrollContentWebProps}
+          style={[scrollMotionStyle, styles.scrollMotionContent]}
+        >
           <ScrollContext.Provider value={scrollY}>{children}</ScrollContext.Provider>
         </Reanimated.View>
       </ScrollView>
@@ -488,6 +493,10 @@ const styles = StyleSheet.create({
   scrollContent: {
     backgroundColor: "transparent",
     flexGrow: 1,
+  },
+  scrollMotionContent: {
+    position: "relative",
+    overflow: "visible",
   },
   pullRefreshIndicator: {
     position: "absolute",

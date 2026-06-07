@@ -6,7 +6,33 @@
 			"LittleCat.2048/texture_00.png"
 		],
 		"Physics": "LittleCat.physics3.json",
-		"DisplayInfo": "LittleCat.cdi3.json"
+		"DisplayInfo": "LittleCat.cdi3.json",
+		"Motions": {
+			"Walk": [
+				{ "File": "motions/walk.motion3.json", "FadeInTime": 0.12, "FadeOutTime": 0.18 }
+			],
+			"Pet": [
+				{ "File": "motions/paw-reach.motion3.json", "FadeInTime": 0.08, "FadeOutTime": 0.22 }
+			],
+			"Sleep": [
+				{ "File": "motions/lie-down.motion3.json", "FadeInTime": 0.2, "FadeOutTime": 0.28 }
+			],
+			"Eat": [
+				{ "File": "motions/eat.motion3.json", "FadeInTime": 0.08, "FadeOutTime": 0.18 }
+			],
+			"Clean": [
+				{ "File": "motions/clean-shake.motion3.json", "FadeInTime": 0.06, "FadeOutTime": 0.18 }
+			],
+			"Play": [
+				{ "File": "motions/pounce-play.motion3.json", "FadeInTime": 0.08, "FadeOutTime": 0.18 }
+			],
+			"Happy": [
+				{ "File": "motions/happy-wag.motion3.json", "FadeInTime": 0.1, "FadeOutTime": 0.2 }
+			],
+			"Sad": [
+				{ "File": "motions/sad-crouch.motion3.json", "FadeInTime": 0.18, "FadeOutTime": 0.24 }
+			]
+		}
 	},
 	"Groups": [
 		{

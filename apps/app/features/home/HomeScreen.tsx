@@ -22,6 +22,7 @@ import {
   Compass,
   Gamepad2,
   Gift,
+  Home,
   ImagePlus,
   Heart,
   Info,
@@ -37,34 +38,31 @@ import {
   LogOut,
   MessageCircle,
   Shield,
+  SlidersHorizontal,
+  Volume2,
+  VolumeX,
   Trash2,
   UserRound,
   UsersRound,
 } from "lucide-react-native";
 
 import { PetStage, type CreationLivePetAction, type CreationPetStageReaction } from "@/features/pet/components/PetStage";
+import { activeLive2DPet } from "@/features/pet/live2dCatalog";
 import { usePetRealtime } from "@/features/pet/hooks/usePetRealtime";
-import { invokePetAiBrain, petRigCueFromJson, type PetRigCue } from "@/features/pet/services/petAiBrain";
+import { petRigCueFromJson, type PetRigCue } from "@/features/pet/services/petAiBrain";
+import { petSizeScale, usePetUserSettings, type PetUserSettings, type PetUserSize } from "@/features/pet/userPetSettings";
 import { GlobalPetLayer } from "@/features/pet-world/components/GlobalPetLayer";
+import { usePetWorldRoaming } from "@/features/pet-world/hooks/usePetWorldRoaming";
+import { isDirectPetAction, petAnimalLine, petHumanLine, sanitizeDirectPetText, sanitizePassivePetText } from "@/features/pet-world/logic/petExpression";
 import { normalizePetWorldSurface, petWorldSurfaceForAppState, type PetWorldSurface } from "@/features/pet-world/logic/petWorldRoutes";
-import { applyPetWorldDecision, markPetSurfaceSeen, summonPetToSurface } from "@/features/pet-world/services/petWorldApi";
+import { markPetSurfaceSeen, summonPetToSurface } from "@/features/pet-world/services/petWorldApi";
+import { applyPetRitualDecision } from "@/features/pet-world/services/petWorldRituals";
 import { flushPushNotifications } from "@/lib/notifications/pushDelivery";
 
 const glassDockStyle = {
   backdropFilter: "blur(14px) saturate(1.2) contrast(1.02)",
   WebkitBackdropFilter: "blur(14px) saturate(1.2) contrast(1.02)",
 } as never;
-
-const petWorldStatusPortalStyle = {
-  position: "fixed",
-  left: 0,
-  right: 0,
-  bottom: "calc(82px + env(safe-area-inset-bottom))",
-  display: "flex",
-  justifyContent: "center",
-  pointerEvents: "none",
-  zIndex: 50,
-} satisfies CSSProperties;
 
 function petAnchorProps(name: string, role = name) {
   if (Platform.OS !== "web") {
@@ -188,7 +186,7 @@ const creationTownAssets = {
   playgroundConcept: require("@/assets/creation-town/playground-concept.png") as ImageSourcePropType,
 };
 
-type SettingPage = "profile" | "couple" | "notifications" | "privacy" | "relationship" | "feedback" | "about";
+type SettingPage = "profile" | "couple" | "pet" | "notifications" | "privacy" | "relationship" | "feedback" | "about";
 type SubPage = "main" | "messages" | "addEvent" | "writeLetter" | "letterInbox" | "creation" | SettingPage;
 type QuickInteractionItem = { id: string; label: string; tone: string; icon?: ImageSourcePropType };
 type NotificationPreferenceToggleKey =
@@ -235,14 +233,14 @@ type PhotoPreviewState = {
 const maxQuickInteractionCards = 8;
 const maxMemoryPhotos = 10;
 const todayCapsulePhotoLimit = 3;
-const dilingCompatPetKey: CreationPetKey = "silver_tabby";
+const dilingCompatPetKey: CreationPetKey = activeLive2DPet.compatPetKey;
 type PetSpeciesCompat = CreationSpace["pet_species"];
 const dilingPetOption = {
   key: dilingCompatPetKey,
-  name: "小猫",
-  title: "Live2D 小猫",
-  description: "LittleCat 模型驱动的共享小猫，第一版先住在小窝里陪你们互动。",
-  trait: "唯一共享小猫",
+  name: activeLive2DPet.name,
+  title: activeLive2DPet.title,
+  description: activeLive2DPet.description,
+  trait: activeLive2DPet.trait,
 } satisfies {
   key: CreationPetKey;
   name: string;
@@ -396,6 +394,7 @@ export function HomeScreen() {
   const { user, signOut } = useAuth();
   const { showToast } = useToast();
   const { data, loading, reload } = useCoupleData(user?.id);
+  const { settings: petUserSettings, setSettings: setPetUserSettings } = usePetUserSettings(user?.id);
   useAppPullToRefresh(reload);
   const [activeTab, setActiveTab] = useState<BottomTabKey>("home");
   const [subPage, setSubPage] = useState<SubPage>("main");
@@ -412,7 +411,6 @@ export function HomeScreen() {
   const [creationTownView, setCreationTownView] = useState<CreationTownView>("hub");
   const [localTodayInteractionCount, setLocalTodayInteractionCount] = useState(0);
   const [realtimePetReaction, setRealtimePetReaction] = useState<CreationPetStageReaction | null>(null);
-  const [summoningPetHome, setSummoningPetHome] = useState(false);
   const lastSeenPetSurfaceRef = useRef<string | null>(null);
   const petEventHandlerRef = useRef<(event: { action: CreationLivePetAction; message: string }) => void>(() => {});
   const { partnerOnline: petRoomPartnerOnline, broadcastPetEvent } = usePetRealtime({
@@ -516,18 +514,21 @@ export function HomeScreen() {
   const realPetSurface = normalizePetWorldSurface(data.creationSpace?.pet_world_surface);
   const visibleGlobalPetSurface = visiblePetSurfaceFor(currentPetSurface);
   const petVisibleOnCurrentSurface =
+    petUserSettings.visible &&
     subPage === "main" &&
     !currentPetRoute.disabled &&
     visibleGlobalPetSurface !== null &&
-    visibleGlobalPetSurface === visiblePetSurfaceFor(realPetSurface) &&
+    currentPetSurface === realPetSurface &&
     !data.creationSpace?.pet_hidden;
-  const petAwayFromCurrentSurface =
-    subPage === "main" &&
-    !currentPetRoute.disabled &&
-    Boolean(data.creationSpace) &&
-    visiblePetSurfaceFor(currentPetSurface) !== null &&
-    !isPetAtHomeSurface(realPetSurface) &&
-    visiblePetSurfaceFor(realPetSurface) !== visiblePetSurfaceFor(currentPetSurface);
+  usePetWorldRoaming({
+    coupleId: data.couple?.id,
+    creationSpace: data.creationSpace,
+    creationActions: data.creationActions,
+    currentSurface: currentPetSurface,
+    disabled: !petUserSettings.autonomousRoamingEnabled || subPage !== "main" || currentPetRoute.disabled,
+    partnerOnline: petRoomPartnerOnline,
+    onChanged: reload,
+  });
 
   useEffect(() => {
     if (!data.couple?.id || !data.creationSpace || subPage !== "main" || currentPetRoute.disabled || currentPetSurface !== realPetSurface) {
@@ -607,22 +608,6 @@ export function HomeScreen() {
 
     if (window.confirm("解绑后双方不能继续写入当前情侣空间。确定解绑吗？")) {
       await submitEndCouple();
-    }
-  }
-
-  async function summonPetHome() {
-    if (!data.couple?.id || summoningPetHome) {
-      return;
-    }
-    setSummoningPetHome(true);
-    try {
-      await summonPetToSurface(data.couple.id, "pet_room");
-      showToast({ title: "小猫回小窝了", message: "之后可以在共创空间的小窝里找到它。", tone: "success" });
-      reload();
-    } catch (error) {
-      showToast({ title: "召回失败", message: error instanceof Error ? error.message : "请稍后再试。", tone: "error" });
-    } finally {
-      setSummoningPetHome(false);
     }
   }
 
@@ -861,6 +846,7 @@ export function HomeScreen() {
         partnerOnline={petRoomPartnerOnline}
         realtimeReaction={realtimePetReaction}
         onBroadcastPetEvent={broadcastPetEvent}
+        petUserSettings={petUserSettings}
         townView={creationTownView}
         onTownViewChange={setCreationTownView}
         onBack={() => setSubPage("main")}
@@ -882,6 +868,8 @@ export function HomeScreen() {
         coupleId={coupleId}
         partnerId={partner?.user_id}
         notifications={data.notifications}
+        petUserSettings={petUserSettings}
+        onChangePetUserSettings={setPetUserSettings}
         onChanged={reload}
         onOpenLetters={() => setSubPage("letterInbox")}
       />
@@ -962,6 +950,7 @@ export function HomeScreen() {
         creationActions={data.creationActions}
         partnerOnline={petRoomPartnerOnline}
         realtimeReaction={realtimePetReaction}
+        petUserSettings={petUserSettings}
         onOpenCreation={() => setSubPage("creation")}
       />
     );
@@ -1025,16 +1014,8 @@ export function HomeScreen() {
         creationSpace={data.creationSpace}
         realtimeReaction={realtimePetReaction}
         onOpenCreation={() => setSubPage("creation")}
+        userSettings={petUserSettings}
       />
-      {petAwayFromCurrentSurface ? (
-        <PetWorldStatusToast
-          creationSpace={data.creationSpace!}
-          currentSurface={currentPetSurface}
-          realSurface={realPetSurface}
-          summoning={summoningPetHome}
-          onSummonHome={summonPetHome}
-        />
-      ) : null}
       {pendingMoodPopup ? (
         <MoodNotificationPopup
           notification={pendingMoodPopup}
@@ -1126,6 +1107,7 @@ function CoupleHomePage({
   creationActions,
   partnerOnline,
   realtimeReaction,
+  petUserSettings,
   onOpenCreation,
 }: {
   me: { name: string; initial: string; avatarUrl?: string | null };
@@ -1162,6 +1144,7 @@ function CoupleHomePage({
   creationActions: CreationAction[];
   partnerOnline: boolean;
   realtimeReaction: CreationPetStageReaction | null;
+  petUserSettings: PetUserSettings;
   onOpenCreation: () => void;
 }) {
   const { playQuickInteractionFlight } = useMotion();
@@ -1306,7 +1289,7 @@ function CoupleHomePage({
 
       <PhotoAlbumCard mediaFiles={mediaFiles} onUploadPhoto={onUploadPhoto} onPhotoFiles={onPhotoFiles} onPreviewPhoto={onPreviewPhoto} onDeletePhoto={onDeletePhoto} />
 
-      {creationSpace ? (
+      {creationSpace && petUserSettings.visible ? (
         <HomePetCard
           creationSpace={creationSpace}
           creationActions={creationActions}
@@ -1352,7 +1335,7 @@ function HomePetCard({
         </View>
         <View style={styles.homePetSummaryCopy}>
           <Text style={styles.homePetSummaryName}>{petDisplayName}</Text>
-          <Text style={styles.homePetSummaryBubble}>{reaction?.message || safeStoredBubble || "我在首页陪你们。拖动我也可以。"}</Text>
+          <Text style={styles.homePetSummaryBubble}>{reaction?.message || safeStoredBubble || "喵"}</Text>
         </View>
         <View style={styles.homePetSummaryStats}>
           <Text style={styles.homePetSummaryStat}>亲密 {Math.round(creationSpace.affection)}</Text>
@@ -1362,61 +1345,6 @@ function HomePetCard({
     </Card>
     </View>
   );
-}
-
-function PetWorldStatusToast({
-  creationSpace,
-  currentSurface,
-  realSurface,
-  summoning,
-  onSummonHome,
-}: {
-  creationSpace: CreationSpace;
-  currentSurface: PetWorldSurface;
-  realSurface: PetWorldSurface;
-  summoning: boolean;
-  onSummonHome: () => void;
-}) {
-  const message = petWorldAwayLine(realSurface, creationSpace.last_ai_bubble);
-  const toast = (
-    <View pointerEvents="box-none" style={Platform.OS === "web" ? undefined : styles.petWorldStatusDock}>
-      <View style={styles.petWorldStatusPill}>
-        <View style={styles.petWorldStatusIcon}>
-          <Sparkles color={colors.accentDark} size={15} strokeWidth={2.6} />
-        </View>
-        <View style={styles.petWorldStatusCopy}>
-          <Text style={styles.petWorldStatusTitle}>{petWorldSurfaceLabel(realSurface)}</Text>
-          <Text style={styles.petWorldStatusText}>{message}</Text>
-        </View>
-        <Text style={styles.petWorldStatusMeta}>{petWorldSurfaceShortLabel(currentSurface)}</Text>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="召回小猫到小窝"
-          disabled={summoning}
-          onPress={onSummonHome}
-          style={({ pressed }) => [styles.petWorldSummonButton, pressed ? styles.petWorldSummonButtonPressed : null, summoning ? styles.petWorldSummonButtonDisabled : null]}
-        >
-          <Text style={styles.petWorldSummonText}>{summoning ? "召回中" : "回小窝"}</Text>
-        </Pressable>
-      </View>
-    </View>
-  );
-
-  if (Platform.OS === "web" && typeof document !== "undefined") {
-    return createPortal(
-      <div
-        style={petWorldStatusPortalStyle}
-        data-pet-world-status="away"
-        data-current-surface={currentSurface}
-        data-real-surface={realSurface}
-      >
-        {toast}
-      </div>,
-      document.body,
-    ) as ReactNode;
-  }
-
-  return toast;
 }
 
 function LoveLetterEntryCard({ partnerName, onPress }: { partnerName: string; onPress: () => void }) {
@@ -1783,7 +1711,7 @@ function TodayStoryPage({
         Animated.spring(saveCardScale, { toValue: 1, friction: 5, tension: 170, useNativeDriver: false }),
       ]).start();
       setContent("");
-      void movePetForMemoryEvent(coupleId, "memory").catch((moveError) => {
+      void movePetForMemoryEvent(coupleId, "today_capsule").catch((moveError) => {
         console.warn("Pet memory capsule sync failed:", moveError instanceof Error ? moveError.message : moveError);
       });
       showToast({ title: mineToday ? "今天的胶囊已更新" : "今天的胶囊已存好", message: "这句话已经放进你们的记忆里。", tone: "success" });
@@ -2342,7 +2270,7 @@ function PetMemoryCueCard({ prop }: { prop: "photo" | "memory" | "letter" | "non
         </View>
         <View style={styles.petMemoryCueCopy}>
           <Text style={styles.petMemoryCueTitle}>{isPhoto ? "小猫在照片旁停下了" : "小猫在记忆页慢慢看"}</Text>
-          <Text style={styles.petMemoryCueText}>{isPhoto ? "这张我想多看一会儿。" : "这段记忆我想多看一会儿。"}</Text>
+          <Text style={styles.petMemoryCueText}>{isPhoto ? "小爪按住照片，轻轻咕噜。" : "尾巴慢慢晃了晃。"}</Text>
         </View>
       </Card>
     </View>
@@ -2565,6 +2493,7 @@ function CreationSpacePage({
   partnerOnline,
   realtimeReaction,
   onBroadcastPetEvent,
+  petUserSettings,
   townView,
   onTownViewChange,
   onBack,
@@ -2580,6 +2509,7 @@ function CreationSpacePage({
   partnerOnline: boolean;
   realtimeReaction: CreationPetStageReaction | null;
   onBroadcastPetEvent: (event: { action: CreationLivePetAction; message: string }) => Promise<void>;
+  petUserSettings: PetUserSettings;
   townView: CreationTownView;
   onTownViewChange: (view: CreationTownView) => void;
   onBack: () => void;
@@ -2597,7 +2527,8 @@ function CreationSpacePage({
   const [decorThree, setDecorThree] = useState(activeSpace?.decor_slot_3 ?? "胶囊花窗");
   const [homeBusy, setHomeBusy] = useState(false);
   const [dilingSyncing, setDilingSyncing] = useState(false);
-  const [petBusy, setPetBusy] = useState<CreationFoodType | "pet" | "clean" | null>(null);
+  const [petBusy, setPetBusy] = useState<CreationFoodType | "pet" | "clean" | "play" | "sleep" | null>(null);
+  const [petSummoning, setPetSummoning] = useState(false);
   const [petReaction, setPetReaction] = useState<CreationPetStageReaction | null>(null);
   const [rigCue, setRigCue] = useState<PetRigCue | null>(petRigCueFromJson(activeSpace?.last_rig_cue));
   const [storeBusy, setStoreBusy] = useState<CreationFoodType | null>(null);
@@ -2619,6 +2550,18 @@ function CreationSpacePage({
   const [assetPulse, setAssetPulse] = useState<CreationRewardKind | null>(null);
   const islandFloat = useRef(new Animated.Value(0)).current;
   const rewardFloat = useRef(new Animated.Value(0)).current;
+  const currentTownSurface = townViewToPetSurface(townView);
+  const petStageScale = petSizeScale(petUserSettings.size);
+  const petStageVisible = petUserSettings.visible;
+  const { applyRuleRoam } = usePetWorldRoaming({
+    coupleId,
+    creationSpace: activeSpace,
+    creationActions,
+    currentSurface: currentTownSurface,
+    disabled: !petUserSettings.autonomousRoamingEnabled,
+    partnerOnline,
+    onChanged,
+  });
 
   useEffect(() => {
     if (!creationSpace) {
@@ -2742,7 +2685,7 @@ function CreationSpacePage({
     setPetName(nextName);
     setSpace(data ?? null);
     if (data) {
-      triggerLocalPetReaction(data.current_action || "happy", data.last_ai_bubble || "我住进小窝啦");
+      triggerLocalPetReaction(data.current_action || "happy", sanitizePassivePetText(data.last_ai_bubble) || "喵");
     }
     onChanged();
   }
@@ -2759,14 +2702,18 @@ function CreationSpacePage({
       return;
     }
     setSpace(data ?? null);
-    triggerLocalPetReaction("eat", "我吃到啦");
-    void requestPetDirector(`feed_${foodType}`, data ?? activeSpace, "eat", "我吃到啦");
+    triggerLocalPetReaction("eat", petHumanLine("feed"));
+    void applyRuleRoam("feed", data ?? activeSpace);
     showRewardFlash("feed", "投喂仪式完成", `${creationFoodLabel(foodType)}轻轻落进饭碗，${petDisplayName} 吃到啦。`);
-    showToast({ title: `已喂${creationFoodLabel(foodType)}`, message: "等它抬头回应你。", tone: "success" });
+    showToast({
+      title: `已喂${creationFoodLabel(foodType)}`,
+      message: activeSpace?.pet_sleep_started_at ? "刚才的睡眠已按时长结算，再加上这份口粮。" : "等它抬头回应你。",
+      tone: "success",
+    });
     onChanged();
   }
 
-  async function interactPet(type: "pet" | "clean") {
+  async function interactPet(type: "pet" | "clean" | "play" | "sleep") {
     if (petBusy) {
       return;
     }
@@ -2779,37 +2726,61 @@ function CreationSpacePage({
     }
     setSpace(data ?? null);
     triggerLocalPetReaction(type, immediatePetLine(type));
-    void requestPetDirector(type, data ?? activeSpace, type, immediatePetLine(type));
-    showToast({ title: petActionToastTitle(type), message: type === "clean" ? "它会把这理解成打扫小窝。" : "它会抬头回应你。", tone: "success" });
+    void applyRuleRoam(type, data ?? activeSpace);
+    showToast({
+      title: petActionToastTitle(type),
+      message:
+        type === "clean" ? "它会把这理解成打扫小窝。"
+        : type === "play" ? "它会把这理解成陪它玩。"
+        : type === "sleep" ? "睡满 5 分钟可恢复 18 点精力，中途叫醒会按时长结算。"
+        : activeSpace?.pet_sleep_started_at ? "刚才的睡眠已按时长结算。"
+        : "它会抬头回应你。",
+      tone: "success",
+    });
     onChanged();
   }
 
-  function sleepPet() {
-    triggerLocalPetReaction("sleep", immediatePetLine("sleep"));
-    showToast({ title: "已哄它休息", message: "睡觉先作为本地小窝动作，不改共享状态。", tone: "success" });
-  }
-
-  async function requestPetDirector(triggerType: string, baseSpace: CreationSpace | null, fallbackAction: CreationLivePetAction, fallbackMessage: string) {
-    if (!baseSpace) {
+  async function sleepPet() {
+    if (petBusy) {
       return;
     }
+    if (!activeSpace?.pet_sleep_started_at) {
+      void interactPet("sleep");
+      return;
+    }
+    setPetBusy("sleep");
+    const { data, error } = await supabase.rpc("settle_creation_pet_sleep", { target_couple_id: coupleId }).maybeSingle();
+    setPetBusy(null);
+    if (error) {
+      showToast({ title: "结算休息失败", message: error.message, tone: "error" });
+      return;
+    }
+    setSpace(data ?? null);
+    triggerLocalPetReaction("sleep", petHumanLine("sleep"));
+    const stillSleeping = Boolean(data?.pet_sleep_started_at);
+    showToast({
+      title: stillSleeping ? "还没睡够" : "休息已结算",
+      message: stillSleeping ? "睡满 5 分钟后再结算，才能恢复 18 点精力。" : "睡满一觉已恢复 18 点精力。",
+      tone: stillSleeping ? "info" : "success",
+    });
+    onChanged();
+  }
+
+  async function summonPetRoom() {
+    if (petSummoning) {
+      return;
+    }
+    setPetSummoning(true);
     try {
-      const result = await invokePetAiBrain({
-        coupleId,
-        triggerType,
-        localHint: {
-          surface: currentTownSurface,
-          partner_online: partnerOnline,
-        },
-      });
-      const nextSpace = result.space ?? baseSpace;
-      setSpace((current) => chooseNewerSpace(current ?? baseSpace, nextSpace));
-      setRigCue(petRigCueFromJson(nextSpace.last_rig_cue ?? result.decision?.rig_cue ?? null));
-      const worldSpeech = result.decision?.world?.speech || result.decision?.world?.bubble;
-      triggerLocalPetReaction(result.decision?.action ?? nextSpace.current_action ?? fallbackAction, worldSpeech || result.decision?.bubble || nextSpace.last_ai_bubble || fallbackMessage);
+      const data = await summonPetToSurface(coupleId, "pet_room");
+      setSpace(data ?? activeSpace ?? null);
+      triggerLocalPetReaction("pet", petHumanLine("summon"));
+      showToast({ title: "小猫回小窝了", message: "现在可以在小窝里和它互动。", tone: "success" });
       onChanged();
     } catch (error) {
-      console.warn("Pet director fallback used:", error instanceof Error ? error.message : error);
+      showToast({ title: "召回失败", message: error instanceof Error ? error.message : "请稍后再试。", tone: "error" });
+    } finally {
+      setPetSummoning(false);
     }
   }
 
@@ -2886,7 +2857,7 @@ function CreationSpacePage({
     }
     setSpace(data ?? null);
     showRewardFlash("puzzle", "解谜通关，赏金入仓", `获得鲜食粮 +1 份、心愿星糖 +15 点，快去投喂 ${petDisplayName}。`);
-    triggerLocalPetReaction("happy", "赚到加餐啦");
+    triggerLocalPetReaction("happy", "咕噜");
     showToast({ title: "赏金入仓", message: "鲜食粮和心愿星糖已放进共享粮仓。", tone: "success" });
     onChanged();
   }
@@ -3011,7 +2982,7 @@ function CreationSpacePage({
         await writeCreationAction("footprint_add", `记录了足迹「${footprintTitle.trim()}」`);
       }
       showRewardFlash("footprint", "爱的养分已入仓", "日常粮 +1 份、心愿星糖 +10 点，已经飞进共享小粮仓。");
-      triggerLocalPetReaction("happy", "我记住这个地方啦");
+      triggerLocalPetReaction("happy", "🐾");
       showToast({ title: "足迹已点亮", message: "它也会沉淀到记忆页，并化作小家的养分。", tone: "success" });
     }
     resetFootprintForm();
@@ -3082,8 +3053,9 @@ function CreationSpacePage({
   const cleanButtonLabel = petBusy === "clean" ? "清洁中" : "清洁小屋";
   const totalFoodCount = basicFoodCount + premiumFoodCount;
   const realPetSurface = normalizePetWorldSurface(activeSpace?.pet_world_surface);
-  const currentTownSurface = townViewToPetSurface(townView);
-  const petOnCurrentTownSurface = !activeSpace?.pet_hidden && realPetSurface === currentTownSurface;
+  const petOnCurrentTownSurface = petStageVisible && !activeSpace?.pet_hidden && realPetSurface === currentTownSurface;
+  const petSleeping = Boolean(activeSpace?.pet_sleep_started_at);
+  const sleepButtonLabel = petBusy === "sleep" ? "休息中" : petSleeping ? "结算休息" : "哄睡";
   const rewardLift = rewardFloat.interpolate({ inputRange: [0, 1], outputRange: [18, 0] });
   const rewardOpacity = rewardFloat.interpolate({ inputRange: [0, 0.12, 0.85, 1], outputRange: [0, 1, 1, 0] });
   const petIslandLift = islandFloat.interpolate({ inputRange: [0, 1], outputRange: [0, -4] });
@@ -3154,6 +3126,7 @@ function CreationSpacePage({
               <View style={styles.creationHubDilingMask} />
               <View style={styles.creationHubDilingGlow}>
                 <PetStage
+                  petConfig={activeLive2DPet}
                   petName={petDisplayName}
                   petTitle={dilingPetOption.title}
                   petTrait={dilingPetOption.trait}
@@ -3163,6 +3136,8 @@ function CreationSpacePage({
                   energy={activeSpace?.energy ?? 72}
                   reaction={latestPetReaction}
                   rigCue={rigCue}
+                  sizeScale={petStageScale}
+                  reducedMotion={petUserSettings.reducedMotion}
                   scene="overlay"
                   mode="home"
                 />
@@ -3174,7 +3149,7 @@ function CreationSpacePage({
               <View {...petSafeActionProps()} style={styles.creationHubPetLabel}>
                 <Text style={styles.creationHubLabelTitle}>小猫小窝</Text>
                 <Text style={styles.creationHubLabelBadge}>进入 Live2D 小窝</Text>
-                <Text style={styles.creationHubLabelText}>先在这里照顾 LittleCat</Text>
+                <Text style={styles.creationHubLabelText}>先在这里照顾 {activeLive2DPet.label}</Text>
               </View>
             </Pressable>
           </Animated.View>
@@ -3213,29 +3188,63 @@ function CreationSpacePage({
               <CreationMeter label="亲密" value={activeSpace?.affection ?? 68} color="#E69CB2" />
               <CreationMeter label="精力" value={activeSpace?.energy ?? 72} color="#8EA77D" />
             </View>
+            {petSleeping ? (
+              <View style={styles.creationSleepNotice}>
+                <Moon color={colors.accentDark} size={15} strokeWidth={2.5} />
+                <Text style={styles.creationSleepNoticeText}>睡满 5 分钟恢复 18 点精力；中途被叫醒会按时长结算。</Text>
+              </View>
+            ) : null}
             <View {...petAnchorProps("pet-room-stage", "pet-stage")} style={styles.creationCabinStageWrap}>
               <Image source={creationTownAssets.cabinInterior} style={styles.creationCabinInteriorImage} resizeMode="cover" />
               {petOnCurrentTownSurface ? (
-              <View style={styles.creationCabinPetStage}>
-                <PetStage
-                  petKey={dilingPetOption.key}
-                  petName={petDisplayName}
-                  petTitle={dilingPetOption.title}
-                  petTrait={dilingPetOption.trait}
-                  fullness={activeSpace?.fullness ?? 62}
-                  cleanliness={activeSpace?.cleanliness ?? 64}
-                  affection={activeSpace?.affection ?? 68}
-                  energy={activeSpace?.energy ?? 72}
-                  reaction={latestPetReaction}
-                  rigCue={rigCue}
-                  scene="overlay"
-                  mode="room"
-                  onTapPet={() => void interactPet("pet")}
-                  onStrokePet={() => void interactPet("pet")}
-                  onSleepPet={sleepPet}
-                />
-              </View>
-              ) : null}
+                <View style={styles.creationCabinPetStage}>
+                  <PetStage
+                    petKey={dilingPetOption.key}
+                    petConfig={activeLive2DPet}
+                    petName={petDisplayName}
+                    petTitle={dilingPetOption.title}
+                    petTrait={dilingPetOption.trait}
+                    fullness={activeSpace?.fullness ?? 62}
+                    cleanliness={activeSpace?.cleanliness ?? 64}
+                    affection={activeSpace?.affection ?? 68}
+                    energy={activeSpace?.energy ?? 72}
+                    reaction={latestPetReaction}
+                    rigCue={rigCue}
+                    sizeScale={petStageScale}
+                    reducedMotion={petUserSettings.reducedMotion}
+                    scene="overlay"
+                    mode="room"
+                    onTapPet={() => void interactPet("pet")}
+                    onStrokePet={() => void interactPet("pet")}
+                    onPlayPet={() => void interactPet("play")}
+                    onSleepPet={sleepPet}
+                  />
+                </View>
+              ) : (
+                <View style={styles.creationCabinSummonStage}>
+                  <View style={styles.creationCabinSummonPanel}>
+                    <View style={styles.creationCabinSummonIcon}>
+                      <Home color={colors.accentDark} size={23} strokeWidth={2.5} />
+                    </View>
+                    <Text style={styles.creationCabinSummonTitle}>小猫不在小窝</Text>
+                    <Text style={styles.creationCabinSummonText}>{petAwaySurfaceLine(realPetSurface)}</Text>
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel="召回小猫到小窝"
+                      disabled={petSummoning}
+                      onPress={() => void summonPetRoom()}
+                      style={({ pressed }) => [
+                        styles.creationCabinSummonButton,
+                        pressed ? styles.creationCabinSummonButtonPressed : null,
+                        petSummoning ? styles.creationCabinSummonButtonDisabled : null,
+                      ]}
+                    >
+                      <Home color="#fff" size={17} strokeWidth={2.6} />
+                      <Text style={styles.creationCabinSummonButtonText}>{petSummoning ? "召回中" : "召回小猫"}</Text>
+                    </Pressable>
+                  </View>
+                </View>
+              )}
               <Pressable accessibilityRole="button" accessibilityLabel="打开共享粮仓" onPress={() => setGranaryOpen((open) => !open)} style={styles.creationGranaryButton}>
                 <ShoppingBag color={colors.accentDark} size={20} strokeWidth={2.5} />
               <Text style={styles.creationGranaryButtonText}>{totalFoodCount}</Text>
@@ -3276,9 +3285,9 @@ function CreationSpacePage({
               </View>
             ) : null}
             <View style={styles.creationActionRow}>
-              <SecondaryButton label={petBusy === "pet" ? "抚摸中" : "抚摸"} active={petBusy === "pet"} loading={petBusy === "pet"} onPress={() => void interactPet("pet")} icon={<Heart color={colors.accentDark} size={16} />} />
               <SecondaryButton label={cleanButtonLabel} active={petBusy === "clean"} loading={petBusy === "clean"} onPress={() => void interactPet("clean")} icon={<ImagePlus color={colors.accentDark} size={16} />} />
-              <SecondaryButton label="哄睡" onPress={sleepPet} icon={<Moon color={colors.accentDark} size={16} />} />
+              <SecondaryButton label={petBusy === "play" ? "陪玩中" : "陪玩"} active={petBusy === "play"} loading={petBusy === "play"} onPress={() => void interactPet("play")} icon={<Gamepad2 color={colors.accentDark} size={16} />} />
+              <SecondaryButton label={sleepButtonLabel} active={petBusy === "sleep" || petSleeping} loading={petBusy === "sleep"} onPress={() => void sleepPet()} icon={<Moon color={colors.accentDark} size={16} />} />
             </View>
           </Card>
 
@@ -3370,6 +3379,7 @@ function CreationSpacePage({
             {petOnCurrentTownSurface ? (
               <View pointerEvents="none" style={styles.creationJourneyPetStage}>
                 <PetStage
+                  petConfig={activeLive2DPet}
                   petName={petDisplayName}
                   petTitle={dilingPetOption.title}
                   petTrait={dilingPetOption.trait}
@@ -3379,6 +3389,8 @@ function CreationSpacePage({
                   energy={activeSpace?.energy ?? 72}
                   reaction={latestPetReaction}
                   rigCue={rigCue}
+                  sizeScale={petStageScale}
+                  reducedMotion={petUserSettings.reducedMotion}
                   scene="overlay"
                   mode="home"
                 />
@@ -3485,6 +3497,7 @@ function CreationSpacePage({
             {petOnCurrentTownSurface ? (
               <View pointerEvents="none" style={styles.creationPuzzlePetStage}>
                 <PetStage
+                  petConfig={activeLive2DPet}
                   petName={petDisplayName}
                   petTitle={dilingPetOption.title}
                   petTrait={dilingPetOption.trait}
@@ -3494,6 +3507,8 @@ function CreationSpacePage({
                   energy={activeSpace?.energy ?? 72}
                   reaction={latestPetReaction}
                   rigCue={rigCue}
+                  sizeScale={petStageScale}
+                  reducedMotion={petUserSettings.reducedMotion}
                   scene="overlay"
                   mode="home"
                 />
@@ -4447,6 +4462,7 @@ function MePage({
   const settings: Array<{ label: string; page: SettingPage; icon: ReactNode }> = [
     { label: "个人资料", page: "profile", icon: <UserRound color={colors.accentDark} size={17} /> },
     { label: "情侣资料", page: "couple", icon: <UsersRound color={colors.accentDark} size={17} /> },
+    { label: "云宠设置", page: "pet", icon: <SlidersHorizontal color={colors.accentDark} size={17} /> },
     { label: "通知设置", page: "notifications", icon: <Bell color={colors.accentDark} size={17} /> },
     { label: "隐私设置", page: "privacy", icon: <Lock color={colors.accentDark} size={17} /> },
     { label: "关系设置", page: "relationship", icon: <Heart color={colors.accentDark} size={17} /> },
@@ -4487,6 +4503,8 @@ function SettingsDetailPage({
   coupleId,
   partnerId,
   notifications,
+  petUserSettings,
+  onChangePetUserSettings,
   onChanged,
   onOpenLetters,
 }: {
@@ -4502,6 +4520,8 @@ function SettingsDetailPage({
   coupleId: string;
   partnerId?: string;
   notifications: Notification[];
+  petUserSettings: PetUserSettings;
+  onChangePetUserSettings: (next: Partial<PetUserSettings> | ((current: PetUserSettings) => PetUserSettings)) => void;
   onChanged: () => void;
   onOpenLetters: () => void;
 }) {
@@ -4515,6 +4535,7 @@ function SettingsDetailPage({
   const titles: Record<SettingPage, string> = {
     profile: "个人资料",
     couple: "情侣资料",
+    pet: "云宠设置",
     notifications: "通知设置",
     privacy: "隐私设置",
     relationship: "关系设置",
@@ -4541,6 +4562,9 @@ function SettingsDetailPage({
           <InfoRow label="当前关系" value="恋爱中" />
           <InfoRow label="同频天数" value={`${loveDays} 天`} />
         </Card>
+      ) : null}
+      {page === "pet" ? (
+        <PetUserSettingsPanel settings={petUserSettings} onChange={onChangePetUserSettings} />
       ) : null}
       {page === "notifications" ? (
         <NotificationSettingsPanel notifications={notifications} onChanged={onChanged} onOpenLetters={onOpenLetters} />
@@ -4671,6 +4695,7 @@ function settingSubtitle(page: SettingPage) {
   const subtitles: Record<SettingPage, string> = {
     profile: "管理你展示给 TA 的资料。",
     couple: "查看你们的情侣空间信息。",
+    pet: "控制当前设备上的 Live2D 云宠体验。",
     notifications: "管理站内通知和系统推送。",
     privacy: "控制关系数据和个人状态边界。",
     relationship: "管理当前情侣关系。",
@@ -4698,6 +4723,63 @@ function ToggleRow({
         <View style={[styles.switchThumb, enabled ? styles.switchThumbActive : null]} />
       </View>
     </Pressable>
+  );
+}
+
+function PetUserSettingsPanel({
+  settings,
+  onChange,
+}: {
+  settings: PetUserSettings;
+  onChange: (next: Partial<PetUserSettings> | ((current: PetUserSettings) => PetUserSettings)) => void;
+}) {
+  const { showToast } = useToast();
+  const sizeOptions: Array<{ size: PetUserSize; label: string }> = [
+    { size: "small", label: "小" },
+    { size: "medium", label: "中" },
+    { size: "large", label: "大" },
+  ];
+
+  function resetPosition() {
+    onChange((current) => ({ ...current, positionResetAt: Date.now() }));
+    showToast({ title: "位置已重置", message: "全局小猫会回到当前页面的默认锚点。", tone: "success" });
+  }
+
+  return (
+    <View style={styles.stack}>
+      <Card>
+        <View style={styles.sectionHeader}>
+          <Text style={styles.sectionTitle}>当前设备体验</Text>
+          {settings.soundEnabled ? <Volume2 color={colors.accentDark} size={18} /> : <VolumeX color={colors.accentDark} size={18} />}
+        </View>
+        <ToggleRow label="显示 Live2D 云宠" enabled={settings.visible} onPress={() => onChange({ visible: !settings.visible })} />
+        <ToggleRow label="播放声音提示" enabled={settings.soundEnabled} onPress={() => onChange({ soundEnabled: !settings.soundEnabled })} />
+        <ToggleRow label="允许自主漫游" enabled={settings.autonomousRoamingEnabled} onPress={() => onChange({ autonomousRoamingEnabled: !settings.autonomousRoamingEnabled })} />
+        <ToggleRow label="减少动画强度" enabled={settings.reducedMotion} onPress={() => onChange({ reducedMotion: !settings.reducedMotion })} />
+        <InfoRow label="共享状态" value="不会因本机隐藏而删除" />
+      </Card>
+      <Card>
+        <Text style={styles.sectionTitle}>云宠大小</Text>
+        <View style={styles.petSizeSegment}>
+          {sizeOptions.map((option) => {
+            const active = settings.size === option.size;
+            return (
+              <Pressable
+                key={option.size}
+                accessibilityRole="button"
+                accessibilityState={{ selected: active }}
+                onPress={() => onChange({ size: option.size })}
+                style={[styles.petSizeOption, active ? styles.petSizeOptionActive : null]}
+              >
+                <Text style={[styles.petSizeOptionText, active ? styles.petSizeOptionTextActive : null]}>{option.label}</Text>
+              </Pressable>
+            );
+          })}
+        </View>
+        <SecondaryButton label="重置全局小猫位置" onPress={resetPosition} icon={<SlidersHorizontal color={colors.accentDark} size={16} />} />
+        <InlineNotice tone="info">这些设置只影响当前登录用户和当前设备；情侣共享的小猫状态、记忆和位置仍保留。</InlineNotice>
+      </Card>
+    </View>
   );
 }
 
@@ -5357,6 +5439,13 @@ function townViewToPetSurface(view: CreationTownView): PetWorldSurface {
   return "creation_hub";
 }
 
+function petAwaySurfaceLine(surface: PetWorldSurface) {
+  if (surface === "home" || surface === "creation_hub") return "它现在在首页附近晃尾巴。";
+  if (surface === "share") return "它现在在分享页叼着小东西。";
+  if (surface === "memory") return "它现在在记忆页慢慢看。";
+  return "它现在跑去别处探头。";
+}
+
 function petWorldPropFromDecision(value: CreationSpace["last_world_decision"] | null | undefined) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return null;
@@ -5366,45 +5455,15 @@ function petWorldPropFromDecision(value: CreationSpace["last_world_decision"] | 
   return world.prop === "letter" || world.prop === "photo" || world.prop === "memory" || world.prop === "none" ? world.prop : null;
 }
 
-function petWorldSurfaceLabel(surface: PetWorldSurface) {
-  if (surface === "share") return "小猫在分享页";
-  if (surface === "memory") return "小猫在记忆页";
-  if (surface === "creation_hub") return "小猫在共创小镇";
-  if (surface === "pet_room") return "小猫在小窝";
-  return "小猫在首页";
-}
-
-function petWorldSurfaceShortLabel(surface: PetWorldSurface) {
-  if (surface === "share") return "分享页";
-  if (surface === "memory") return "记忆页";
-  if (surface === "creation_hub") return "共创";
-  if (surface === "pet_room") return "小窝";
-  return "首页";
-}
-
-function petWorldAwayLine(surface: PetWorldSurface, bubble?: string | null) {
-  if (surface === "memory") return "小猫在记忆页看照片。";
-  if (surface === "share") return "小猫叼着一点心情跑去分享页啦。";
-  if (surface === "creation_hub") return "小猫回共创小镇转转了。";
-  if (surface === "pet_room") return "小猫在小窝里歇一会儿。";
-  return sanitizeStoredPetWorldBubble(bubble) || "小猫正在首页附近等你。";
-}
-
-function sanitizeStoredPetWorldBubble(bubble?: string | null) {
-  const text = bubble?.trim();
-  if (!text) {
-    return null;
-  }
-  if (/(足迹页|足迹|游乐场|心情乐园|小游戏|跑去|去看看|去看)/.test(text)) {
-    return null;
-  }
-  return text.slice(0, 24);
-}
-
 async function movePetForLetterDelivery(coupleId: string, mode: "now" | "later") {
-  await applyPetWorldDecision(
+  await applyPetRitualDecision({
     coupleId,
-    {
+    triggerType: "letter_delivery",
+    localHint: {
+      surface: "share",
+      partner_online: false,
+    },
+    fallbackDecision: {
       intent: "visit_partner",
       target_surface: "share",
       mood: "happy",
@@ -5412,9 +5471,9 @@ async function movePetForLetterDelivery(coupleId: string, mode: "now" | "later")
       expression: "happy",
       symbol: "letter",
       sound_cue: "letter",
-      speech: mode === "now" ? "我叼着信来找你啦" : "我把信先送到分享页",
+      speech: petAnimalLine({ triggerType: "letter_delivery", prop: "letter" }),
       prop: "letter",
-      bubble: mode === "now" ? "我叼着信来找你啦" : "我把信先送到分享页",
+      bubble: petAnimalLine({ triggerType: "letter_delivery", prop: "letter" }),
       state_delta: {
         affection: mode === "now" ? 1 : 0,
       },
@@ -5433,19 +5492,25 @@ async function movePetForLetterDelivery(coupleId: string, mode: "now" | "later")
         pose: "bounce",
       },
     },
-    {
-      trigger: "letter_delivery",
+    fallbackMeta: {
       source: "write_letter",
       privacy: "letter_body_not_included",
     },
-  );
+  });
 }
 
-async function movePetForMemoryEvent(coupleId: string, kind: "photo" | "memory" | "anniversary") {
+async function movePetForMemoryEvent(coupleId: string, kind: "photo" | "memory" | "anniversary" | "today_capsule") {
   const isPhoto = kind === "photo";
-  await applyPetWorldDecision(
+  const isTodayCapsule = kind === "today_capsule";
+  const triggerType = kind === "anniversary" ? "memory_anniversary" : isPhoto ? "memory_photo" : isTodayCapsule ? "today_capsule" : "memory_event";
+  await applyPetRitualDecision({
     coupleId,
-    {
+    triggerType,
+    localHint: {
+      surface: "memory",
+      partner_online: false,
+    },
+    fallbackDecision: {
       intent: "inspect_memory",
       target_surface: "memory",
       mood: "curious",
@@ -5453,9 +5518,17 @@ async function movePetForMemoryEvent(coupleId: string, kind: "photo" | "memory" 
       expression: kind === "anniversary" ? "soft" : "curious",
       symbol: isPhoto ? "photo" : "memory",
       sound_cue: isPhoto ? "photo" : "soft_chime",
-      speech: isPhoto ? "这张我想多看一会儿" : kind === "anniversary" ? "这个纪念日我陪你们记住" : "这段记忆我想多看一会儿",
+      speech: petAnimalLine({
+        triggerType,
+        prop: isPhoto ? "photo" : "memory",
+        symbol: isPhoto ? "photo" : "memory",
+      }),
       prop: isPhoto ? "photo" : "memory",
-      bubble: isPhoto ? "这张我想多看一会儿" : kind === "anniversary" ? "这个纪念日我陪你们记住" : "这段记忆我想多看一会儿",
+      bubble: petAnimalLine({
+        triggerType,
+        prop: isPhoto ? "photo" : "memory",
+        symbol: isPhoto ? "photo" : "memory",
+      }),
       state_delta: {
         affection: kind === "anniversary" ? 1 : 0,
       },
@@ -5476,12 +5549,11 @@ async function movePetForMemoryEvent(coupleId: string, kind: "photo" | "memory" 
         pose: "sit",
       },
     },
-    {
-      trigger: kind === "anniversary" ? "memory_anniversary" : isPhoto ? "memory_photo" : "memory_event",
+    fallbackMeta: {
       source: "memory_surface_trigger",
       privacy: "body_caption_photo_content_not_included",
     },
-  );
+  });
 }
 
 function chooseNewerSpace(current: CreationSpace | null, incoming: CreationSpace | null) {
@@ -5495,19 +5567,18 @@ function chooseNewerSpace(current: CreationSpace | null, incoming: CreationSpace
 }
 
 function reactionFromSpace(space: CreationSpace | null): CreationPetStageReaction | null {
-  if (!space || space.current_action === "idle" || space.current_action === "walk") {
+  if (!space || !isDirectPetAction(space.current_action)) {
     return null;
   }
-  const rawBubble = shouldUseStoredPetBubble(space) ? space.last_ai_bubble : null;
   return {
     id: new Date(space.updated_at || space.last_ai_response_at || space.last_interaction_at || space.created_at).getTime(),
     action: space.current_action,
-    message: naturalPetMessage(rawBubble || space.pet_mood, space.pet_species, "idle", space.current_action),
+    message: naturalPetMessage(space.last_ai_bubble || space.pet_mood, space.pet_species, "idle", space.current_action),
   };
 }
 
 function shouldUseStoredPetBubble(space: CreationSpace) {
-  const bubble = sanitizeStoredPetWorldBubble(space.last_ai_bubble);
+  const bubble = sanitizePassivePetText(space.last_ai_bubble);
   if (!bubble) {
     return false;
   }
@@ -5527,11 +5598,7 @@ function triggerToAction(triggerType: string): CreationLivePetAction {
 }
 
 function immediatePetLine(action: CreationLivePetAction) {
-  if (action === "eat") return "我吃到啦";
-  if (action === "pet") return "再摸摸我";
-  if (action === "clean") return "小窝干净啦";
-  if (action === "play") return "还想玩";
-  return "我在这里呀";
+  return isDirectPetAction(action) ? petHumanLine(action) : petAnimalLine({ action });
 }
 
 function naturalPetMessage(
@@ -5542,6 +5609,9 @@ function naturalPetMessage(
 ) {
   void legacySpecies;
   const fallback = immediatePetLine(triggerToAction(triggerType) === "idle" ? action : triggerToAction(triggerType));
+  if (!isDirectPetAction(action) && triggerToAction(triggerType) === "idle") {
+    return petAnimalLine({ action });
+  }
   const normalized = sanitizePetIdentityText(raw ?? "")
     .replace(/它/g, "我")
     .replace(/[汪喵]+[,，!！~～]*/g, "")
@@ -5553,8 +5623,8 @@ function naturalPetMessage(
     .trim();
   const badText = /AI|json|JSON|系统|模型|助手|生成|思考|处理中|请稍候|汪|喵|小猫|小狗|猫咪|狗狗|云猫|云狗|奶霜|银纹|小金|柚柚|棉花糖|小风扇|照镜子|亮晶晶|闪闪发光|叼这句话/.test(normalized);
   const cleanWrong = (triggerType === "clean" || action === "clean") && /洗澡|擦澡|洗完澡|擦完澡|刚擦完|毛发|毛茸茸|身上|澡/.test(normalized);
-  const next = !normalized || badText || cleanWrong ? fallback : normalized;
-  return next.slice(0, 24);
+  const next = !normalized || badText || cleanWrong ? fallback : sanitizeDirectPetText(normalized, triggerType === "idle" ? action : triggerType);
+  return next.slice(0, 8);
 }
 
 function sanitizePetIdentityText(text: string) {
@@ -5599,8 +5669,10 @@ function creationGameErrorMessage(message: string) {
   return message;
 }
 
-function petActionToastTitle(type: "pet" | "clean") {
+function petActionToastTitle(type: "pet" | "clean" | "play" | "sleep") {
   if (type === "pet") return "已摸摸迪灵";
+  if (type === "play") return "已陪迪灵玩";
+  if (type === "sleep") return "已哄迪灵休息";
   return "小屋已清洁";
 }
 
@@ -7518,6 +7590,77 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(255,255,255,0)",
     zIndex: 2,
   },
+  creationCabinSummonStage: {
+    position: "absolute",
+    left: 18,
+    right: 18,
+    top: 80,
+    bottom: 28,
+    zIndex: 2,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  creationCabinSummonPanel: {
+    width: "100%",
+    maxWidth: 285,
+    borderRadius: 28,
+    paddingHorizontal: 18,
+    paddingVertical: 18,
+    backgroundColor: "rgba(255,250,247,0.9)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.78)",
+    boxShadow: "0 18px 38px rgba(116,74,89,0.14), inset 0 1px 1px rgba(255,255,255,0.9)",
+    alignItems: "center",
+    gap: 9,
+  },
+  creationCabinSummonIcon: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: "rgba(255,255,255,0.76)",
+    borderWidth: 1,
+    borderColor: "rgba(184,95,123,0.12)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  creationCabinSummonTitle: {
+    color: colors.ink,
+    fontSize: 18,
+    lineHeight: 23,
+    fontWeight: "900",
+    textAlign: "center",
+  },
+  creationCabinSummonText: {
+    color: colors.muted,
+    fontSize: 13,
+    lineHeight: 19,
+    fontWeight: "700",
+    textAlign: "center",
+  },
+  creationCabinSummonButton: {
+    minHeight: 46,
+    borderRadius: 999,
+    paddingHorizontal: 18,
+    backgroundColor: colors.accent,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 7,
+    boxShadow: "0 13px 25px rgba(184,95,123,0.24)",
+  },
+  creationCabinSummonButtonPressed: {
+    transform: [{ translateY: 1 }],
+    opacity: 0.92,
+  },
+  creationCabinSummonButtonDisabled: {
+    opacity: 0.68,
+  },
+  creationCabinSummonButtonText: {
+    color: "#fff",
+    fontSize: 14,
+    lineHeight: 18,
+    fontWeight: "900",
+  },
   creationGranaryButton: {
     position: "absolute",
     right: 12,
@@ -7696,6 +7839,26 @@ const styles = StyleSheet.create({
     height: "100%",
     borderRadius: 999,
   },
+  creationSleepNotice: {
+    minHeight: 38,
+    borderRadius: 18,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    backgroundColor: "rgba(255,255,255,0.74)",
+    borderWidth: 1,
+    borderColor: "rgba(184,95,123,0.12)",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  creationSleepNoticeText: {
+    flex: 1,
+    minWidth: 0,
+    color: colors.muted,
+    fontSize: 12,
+    lineHeight: 17,
+    fontWeight: "800",
+  },
   creationResourceRow: {
     flexDirection: "row",
     flexWrap: "wrap",
@@ -7792,85 +7955,6 @@ const styles = StyleSheet.create({
   },
   homePetSummaryStat: {
     color: colors.accentDark,
-    fontSize: 11,
-    lineHeight: 14,
-    fontWeight: "900",
-  },
-  petWorldStatusDock: {
-    position: "fixed" as never,
-    left: 0,
-    right: 0,
-    bottom: "calc(82px + env(safe-area-inset-bottom))" as never,
-    alignItems: "center",
-    zIndex: 4,
-  },
-  petWorldStatusPill: {
-    width: "min(326px, calc(100vw - 44px))" as never,
-    minHeight: 54,
-    borderRadius: 24,
-    paddingHorizontal: 11,
-    paddingVertical: 9,
-    backgroundColor: "rgba(255,255,255,0.92)",
-    borderWidth: 1,
-    borderColor: "rgba(184,95,123,0.14)",
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 9,
-    boxShadow: "0 14px 28px rgba(82,61,66,0.12)",
-    pointerEvents: "auto" as never,
-  },
-  petWorldStatusIcon: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
-    backgroundColor: colors.accentSoft,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  petWorldStatusCopy: {
-    flex: 1,
-    minWidth: 0,
-  },
-  petWorldStatusTitle: {
-    color: colors.ink,
-    fontSize: 12,
-    lineHeight: 16,
-    fontWeight: "900",
-  },
-  petWorldStatusText: {
-    color: colors.muted,
-    fontSize: 11,
-    lineHeight: 15,
-    fontWeight: "800",
-  },
-  petWorldStatusMeta: {
-    color: colors.accentDark,
-    fontSize: 10,
-    lineHeight: 13,
-    fontWeight: "900",
-    paddingHorizontal: 8,
-    paddingVertical: 5,
-    borderRadius: 999,
-    backgroundColor: "rgba(255,231,239,0.86)",
-  },
-  petWorldSummonButton: {
-    minHeight: 32,
-    borderRadius: 999,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    backgroundColor: colors.accent,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  petWorldSummonButtonPressed: {
-    opacity: 0.86,
-    transform: [{ translateY: 1 }],
-  },
-  petWorldSummonButtonDisabled: {
-    opacity: 0.58,
-  },
-  petWorldSummonText: {
-    color: "#fff",
     fontSize: 11,
     lineHeight: 14,
     fontWeight: "900",
@@ -8774,6 +8858,36 @@ const styles = StyleSheet.create({
     fontSize: 14,
     lineHeight: 19,
     fontWeight: "800",
+  },
+  petSizeSegment: {
+    minHeight: 48,
+    borderRadius: 999,
+    padding: 4,
+    backgroundColor: "rgba(255,248,251,0.9)",
+    borderWidth: 1,
+    borderColor: "rgba(184,95,123,0.12)",
+    flexDirection: "row",
+    gap: 4,
+  },
+  petSizeOption: {
+    flex: 1,
+    minHeight: 40,
+    borderRadius: 999,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  petSizeOptionActive: {
+    backgroundColor: colors.accent,
+    boxShadow: "0 8px 18px rgba(184,95,123,0.18)",
+  },
+  petSizeOptionText: {
+    color: colors.muted,
+    fontSize: 14,
+    lineHeight: 18,
+    fontWeight: "900",
+  },
+  petSizeOptionTextActive: {
+    color: "#fff",
   },
   profileStatsGrid: {
     width: "100%",

@@ -82,7 +82,7 @@ const anonKey = Deno.env.get("SUPABASE_ANON_KEY");
 const siliconFlowApiKey = Deno.env.get("SILICONFLOW_API_KEY");
 const siliconFlowBaseUrl = Deno.env.get("SILICONFLOW_BASE_URL") ?? "https://api.siliconflow.cn/v1";
 const siliconFlowModel = Deno.env.get("SILICONFLOW_PET_MODEL") ?? "deepseek-ai/DeepSeek-V4-Flash";
-const dailyLimit = parseInt(Deno.env.get("PET_AI_DAILY_LIMIT") ?? "40", 10);
+const dailyLimit = parseInt(Deno.env.get("PET_AI_DAILY_LIMIT") ?? "12", 10);
 const timeoutMs = parseInt(Deno.env.get("PET_AI_TIMEOUT_MS") ?? "4500", 10);
 const allowedWorldSurfaces = ["home", "share", "memory", "creation_hub", "pet_room"] as const;
 
@@ -242,16 +242,20 @@ async function requestSiliconFlowDecision({
               "只输出严格 JSON，不要 Markdown，不要解释。",
               "你是情侣 App 里的 Live2D 小猫“迪灵”，只做小猫表现导演，不做聊天助手、关系建议师或系统说明。",
               "必须输出 action、mood、bubble、state_delta、memory、rig_cue、world；world 必须包含 target_surface、intent、animation、expression、symbol、sound_cue、speech、prop、state_delta、memory_policy。",
-              "speech 是迪灵亲口说的一句中文短句：普通互动 8-22 个汉字，来信/纪念日等重要场景最多 28 个汉字；亲昵、撒娇、贴贴，但不要长篇聊天。",
+              "两套表达：非用户主动互动时，迪灵是动物，只用动作、拟声、符号和道具表达；world.speech/bubble 只能是“喵”“喵呜”“呼噜”“咕噜”“...”这类极短动物表达。",
+              "只有 trigger_type 为 pet/stroke/tap/feed/clean/play/sleep/summon/find/found/drag/drop/memory_tap/prop_tap 等用户主动和小猫互动时，speech/bubble 才能是几个字的短人话。",
+              "主动互动短人话要像小猫刚会几个词：摸摸=“摸头，舒服”；喂食=“饭饭”；清洁=“干净啦”；陪玩=“再追一下”；哄睡=“困困”；找到/召回=“找到啦”。",
+              "来信、新照片、今日胶囊、纪念日、两人同时在线、自主漫游、页面切换、刷新、加载、同步，都不能说完整人话，只能拟声和符号/道具行为。",
               "不要输出关系建议、催促用户回来、要求用户做事、解释 AI、解释 JSON、解释数据库。",
               "禁止复述或猜测留言正文、信件正文、胶囊正文、照片内容、caption、精确坐标。只能用低敏事件摘要。",
               "不要根据 pet_species 改成狗或别的宠物。禁止使用汪、小狗、狗狗、云狗、奶霜、银纹、小金、柚柚。",
-              "bubble 为 speech 的兼容副本；mood 12-28 个汉字。语气亲近、短、口语化，不要堆形容词。",
+              "bubble 为 speech 的兼容副本；mood 是内部状态，不要写成用户可读聊天句。",
               "禁止写“它/云宠/宠物正在/小狗正在/小猫正在/正在生成/正在思考/我还在叼这句话”。",
               "trigger_type=clean 表示用户在打扫小屋、窝垫、饭碗或地面，不是给宠物洗澡。clean 时禁止写洗澡、擦澡、刚擦完澡、毛发、毛茸茸、棉花糖、地板能照镜子、小风扇、亮晶晶。",
               "不要使用夸张比喻或生硬拟人，例如棉花糖、小风扇、照镜子、闪闪发光、亮晶晶。宁可简单说“小窝干净啦”。",
-              "好例子：clean -> “小窝干净啦，我想靠近你”；pet -> “摸摸头好舒服”；feed -> “我吃饱啦，想靠近你”。",
+              "好例子：letter_delivery -> speech “喵呜”、symbol letter、prop letter；memory_photo -> speech “...”、symbol photo、prop photo；partner_online -> speech “咕噜”、symbol heart；pet -> “摸头，舒服”；feed -> “饭饭”。",
               "状态变化要轻微。高频喂养、抚摸、清洁默认 memory_policy.should_write=false，不能写 core 记忆。",
+              "高频场景如普通页面切换、刷新、连续抚摸、连续喂食主要由规则处理；你只在来信、新照片、今日胶囊、纪念日、两人同时在线、第一次事件等低频仪式感场景辅助导演。",
               "memory_policy 只允许这些低敏记忆：第一次领养、第一次命名、第一次送信、纪念日事件、最近常去记忆页、用户常摸摸或常喂食。其他场景默认不写。",
               "world.target_surface 只能从 home/share/memory/creation_hub/pet_room 选择；不能输出 footprints/playground，也不能输出隐私页、设置页、登录页、信件正文、图片全屏和输入状态。",
               "localHint.surface 只是用户当前所在页面，不代表迪灵必须过去。除非 trigger_type 明确是 summon/find/found，否则不要因为用户切页就把 world.target_surface 改成 localHint.surface。",
@@ -601,6 +605,12 @@ function normalizePetSpeech(
   action: PetAiAction,
   field: "mood" | "bubble" | "speech",
 ) {
+  if (field !== "mood") {
+    if (!isDirectPetInteractionTrigger(triggerType, action)) {
+      return animalExpressionLine(triggerType);
+    }
+    return sanitizeDirectPetSpeech(value, triggerType, action);
+  }
   const fallbackValue = naturalFallbackLine(triggerType, action, field);
   const withoutRobotTone = value
     .replace(/它/g, "我")
@@ -622,6 +632,34 @@ function normalizePetSpeech(
   }
   const next = clean || fallbackValue;
   return next.slice(0, field === "mood" ? 34 : importantTrigger(triggerType) ? 28 : 22);
+}
+
+function isDirectPetInteractionTrigger(triggerType: string, action: PetAiAction) {
+  return /^(pet|stroke|tap|feed|clean|play|sleep|summon|find|found|drag|drop|memory_tap|prop_tap)/.test(triggerType) ||
+    action === "eat" ||
+    action === "pet" ||
+    action === "clean" ||
+    action === "play" ||
+    action === "sleep";
+}
+
+function sanitizeDirectPetSpeech(value: string, triggerType: string, action: PetAiAction) {
+  const fallbackValue = naturalFallbackLine(triggerType, action, "speech");
+  const clean = value
+    .replace(/它/g, "")
+    .replace(/迪灵正在|宠物正在|云宠正在|小狗正在|狗狗正在|小猫正在|猫咪正在/g, "")
+    .replace(/云宠|小狗|狗狗|小猫|猫咪|云猫|云狗|奶霜|银纹|小金|柚柚/g, "")
+    .replace(/[汪喵]+[,，!！~～]*/g, "")
+    .replace(/[。；;!！~～]+/g, "")
+    .replace(/\s+/g, "")
+    .trim();
+  if (!clean || shouldReplaceWithNaturalFallback(clean, triggerType, action)) {
+    return fallbackValue;
+  }
+  if (/[我你他她它们]|分享页|记忆页|首页|小窝|胶囊|信|照片|陪你们|靠近|这里等|正在|帮你|替你|回来|过去|路过|看看/.test(clean)) {
+    return fallbackValue;
+  }
+  return clean.slice(0, 8);
 }
 
 function shouldReplaceWithNaturalFallback(value: string, triggerType: string, action: PetAiAction) {
@@ -646,17 +684,26 @@ function naturalFallbackLine(
   field: "mood" | "bubble" | "speech",
 ) {
   const lines: Record<string, string> = {
-    feed: field === "mood" ? "我吃饱啦，想靠近你" : "我吃饱啦",
-    pet: field === "mood" ? "摸摸头好舒服" : "再摸摸我",
-    clean: field === "mood" ? "小窝干净啦，我想靠近你" : "小窝干净啦",
-    play: field === "mood" ? "还想和你玩一会儿" : "还想玩",
-    sleep: field === "mood" ? "我想趴在你身边" : "我趴一会儿",
-    sad: field === "mood" ? "想让你陪陪我" : "陪陪我吧",
-    footprint: field === "mood" ? "我记住这个地方啦" : "我记住啦",
-    idle: field === "mood" ? "我在这里等你" : "我在这里呀",
+    feed: field === "mood" ? "happy" : "饭饭",
+    pet: field === "mood" ? "happy" : "摸头，舒服",
+    clean: field === "mood" ? "happy" : "干净啦",
+    play: field === "mood" ? "excited" : "再追一下",
+    sleep: field === "mood" ? "sleepy" : "困困",
+    sad: field === "mood" ? "lonely" : "喵呜",
+    footprint: field === "mood" ? "curious" : "咕噜",
+    idle: field === "mood" ? "calm" : animalExpressionLine(triggerType),
   };
   const key = triggerType.startsWith("feed") ? "feed" : triggerType === "footprint_add" ? "footprint" : action;
   return lines[key] ?? lines.idle;
+}
+
+function animalExpressionLine(triggerType: string) {
+  if (triggerType.includes("letter")) return "喵呜";
+  if (triggerType.includes("photo")) return "...";
+  if (triggerType.includes("memory") || triggerType.includes("capsule") || triggerType.includes("anniversary")) return "咕噜";
+  if (triggerType.includes("partner_online")) return "咕噜";
+  if (triggerType.includes("sleep") || triggerType.includes("rest")) return "呼噜";
+  return "喵";
 }
 
 function hasUrl(value: string) {
@@ -770,9 +817,9 @@ const outputSchemaHint = {
     expression: "happy | curious | sleepy | lonely | excited | calm | hungry | soft | shy",
     symbol: "none | heart | sparkle | letter | photo | memory | food | sleep",
     sound_cue: "none | soft_chime | purr | tap | letter | photo",
-    speech: "普通 8-22 个汉字，重要场景最多 28 个汉字",
+    speech: "非主动互动只能是 喵/喵呜/呼噜/咕噜/...；主动互动才是 2-8 字短人话",
     prop: "none | letter | photo | memory",
-    bubble: "speech 的兼容副本",
+    bubble: "speech 的兼容副本，同样遵守两套表达",
     state_delta: {
       fullness: 0,
       cleanliness: 0,

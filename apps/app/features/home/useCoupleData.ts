@@ -398,9 +398,10 @@ export function useCoupleData(userId?: string) {
       const hydratedMediaFiles = await Promise.all(
         mediaRows.map(async (file) => {
           const existingMediaUrl = signedMediaUrlById.get(file.id);
+          const existingSignedUrl = existingMediaUrl?.path === file.storage_path ? existingMediaUrl.signedUrl : null;
           return {
             ...file,
-            signedUrl: existingMediaUrl?.path === file.storage_path ? existingMediaUrl.signedUrl : await createSignedUrl(storageBuckets.coupleMedia, file.storage_path),
+            signedUrl: existingSignedUrl ?? await createSignedUrl(storageBuckets.coupleMedia, file.storage_path),
           };
         })
       );

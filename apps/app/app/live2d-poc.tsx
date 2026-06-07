@@ -1,15 +1,30 @@
+import { useEffect, useState } from "react";
 import { StyleSheet, Text, View } from "react-native";
 
+import type { CreationLivePetAction } from "@/features/pet/components/PetStage";
 import { Live2DCanvas } from "@/features/pet/components/Live2DCanvas";
+import { activeLive2DPet } from "@/features/pet/live2dCatalog";
 import { colors } from "@/styles/theme";
 
+const supportedActions: CreationLivePetAction[] = activeLive2DPet.supportedActions;
+
 export default function Live2DPocPage() {
+  const [action, setAction] = useState<CreationLivePetAction>("idle");
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    const value = new URLSearchParams(window.location.search).get("action") ?? "idle";
+    setAction(supportedActions.includes(value as CreationLivePetAction) ? value as CreationLivePetAction : "idle");
+  }, []);
+
   return (
     <View style={styles.page}>
       <View style={styles.stage} {...({ dataSet: { live2dPoc: "little-cat" } } as Record<string, unknown>)}>
-        <Live2DCanvas action="idle" />
+        <Live2DCanvas petConfig={activeLive2DPet} action={action} actionKey={action} />
       </View>
-      <Text style={styles.status}>LittleCat Live2D POC · idle / physics</Text>
+      <Text style={styles.status}>{activeLive2DPet.label} Live2D POC · {action} / physics</Text>
     </View>
   );
 }

@@ -1,4 +1,5 @@
 import type { CreationSpace } from "@/lib/supabase/database.types";
+import { sanitizePassivePetText } from "@/features/pet-world/logic/petExpression";
 import { normalizePetWorldSurface, type PetWorldSurface } from "./petWorldRoutes";
 import { resolvePetWorldRuleDecision } from "./petWorldRules";
 import type { PetWorldAnimation, PetWorldDecision, PetWorldExpression, PetWorldIntent, PetWorldMood, PetWorldSoundCue, PetWorldSymbol } from "@/features/pet/services/petAiBrain";
@@ -43,7 +44,7 @@ function normalizeWorldSurface(surface: unknown, fallbackValue: PetWorldSurface)
 
 function safeBubble(value: unknown, fallbackValue: string) {
   const text = typeof value === "string" ? value.trim().replace(/\s+/g, "") : "";
-  return (text || fallbackValue).slice(0, 28);
+  return (sanitizePassivePetText(text) || sanitizePassivePetText(fallbackValue) || "喵").slice(0, 8);
 }
 
 function persistentWorldAnimation(animation: PetWorldAnimation, intent: PetWorldIntent): PetWorldAnimation {
