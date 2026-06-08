@@ -1,4 +1,4 @@
-import type { CreationLivePetAction } from "@/features/pet/components/PetStage";
+import type { LivePetVisualAction } from "@/features/pet/components/PetStage";
 import type { PetRigCue } from "@/features/pet/services/petAiBrain";
 
 export type PetMotionProfile = {
@@ -23,7 +23,7 @@ const defaultProfile: PetMotionProfile = {
   actionTilt: "2deg",
 };
 
-export function motionProfileFor(action: CreationLivePetAction, rigCue?: PetRigCue | null): PetMotionProfile {
+export function motionProfileFor(action: LivePetVisualAction, rigCue?: PetRigCue | null): PetMotionProfile {
   const profile = { ...defaultProfile };
   if (action === "eat") {
     return withRigCue({
@@ -73,6 +73,18 @@ export function motionProfileFor(action: CreationLivePetAction, rigCue?: PetRigC
       actionScale: 1,
       actionLift: 2,
       actionTilt: "0deg",
+    }, rigCue);
+  }
+  if (action === "wake") {
+    return withRigCue({
+      ...profile,
+      breatheScaleY: 1.01,
+      breatheY: -2,
+      headLift: -4,
+      headTilt: 2,
+      actionScale: 1.06,
+      actionLift: -8,
+      actionTilt: "2deg",
     }, rigCue);
   }
   if (action === "sad") {

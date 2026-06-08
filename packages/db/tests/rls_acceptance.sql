@@ -105,8 +105,8 @@
 -- where id = '<USER_A_FOOTPRINT_ID>'; -- as User B, expect RLS failure
 
 -- 19. Selecting a pet updates the shared creation space only for active members.
--- select * from public.choose_creation_pet('<COUPLE_AB_UUID>', 'silver_tabby', '迪灵'); -- as User A, expect success and pet_key/pet_species compatibility update
--- select * from public.choose_creation_pet('<COUPLE_CD_UUID>', 'silver_tabby', '迪灵'); -- as User A, expect active_couple_not_found
+-- select * from public.choose_creation_pet('<COUPLE_AB_UUID>', 'silver_tabby', '云宠'); -- as User A, expect success and pet_key/pet_species compatibility update
+-- select * from public.choose_creation_pet('<COUPLE_CD_UUID>', 'silver_tabby', '云宠'); -- as User A, expect active_couple_not_found
 
 -- 20. Buying food must consume shared rewards and increase the correct inventory bucket.
 -- select * from public.buy_creation_food('<COUPLE_AB_UUID>', 'basic', 1); -- as User A, expect success when treat_balance is sufficient

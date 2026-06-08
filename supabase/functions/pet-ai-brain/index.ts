@@ -85,6 +85,8 @@ const siliconFlowModel = Deno.env.get("SILICONFLOW_PET_MODEL") ?? "deepseek-ai/D
 const dailyLimit = parseInt(Deno.env.get("PET_AI_DAILY_LIMIT") ?? "12", 10);
 const timeoutMs = parseInt(Deno.env.get("PET_AI_TIMEOUT_MS") ?? "4500", 10);
 const allowedWorldSurfaces = ["home", "share", "memory", "creation_hub", "pet_room"] as const;
+const legacyIdentityPattern = /(迪灵|Live2D小猫|Live2D 小猫|小猫|小狗|猫咪|狗狗|云猫|云狗|奶霜|银纹|小金|柚柚)/g;
+const legacyInProgressPattern = /(迪灵正在|宠物正在|云宠正在|小狗正在|狗狗正在|小猫正在|猫咪正在)/g;
 
 if (!supabaseUrl || !serviceRoleKey || !anonKey) {
   throw new Error("Missing SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, or SUPABASE_ANON_KEY.");
@@ -240,17 +242,17 @@ async function requestSiliconFlowDecision({
             role: "system",
             content: [
               "只输出严格 JSON，不要 Markdown，不要解释。",
-              "你是情侣 App 里的 Live2D 小猫“迪灵”，只做小猫表现导演，不做聊天助手、关系建议师或系统说明。",
+              "你是情侣 App 里的云宠表现导演，只做云宠表现导演，不做聊天助手、关系建议师或系统说明。",
               "必须输出 action、mood、bubble、state_delta、memory、rig_cue、world；world 必须包含 target_surface、intent、animation、expression、symbol、sound_cue、speech、prop、state_delta、memory_policy。",
-              "两套表达：非用户主动互动时，迪灵是动物，只用动作、拟声、符号和道具表达；world.speech/bubble 只能是“喵”“喵呜”“呼噜”“咕噜”“...”这类极短动物表达。",
-              "只有 trigger_type 为 pet/stroke/tap/feed/clean/play/sleep/summon/find/found/drag/drop/memory_tap/prop_tap 等用户主动和小猫互动时，speech/bubble 才能是几个字的短人话。",
-              "主动互动短人话要像小猫刚会几个词：摸摸=“摸头，舒服”；喂食=“饭饭”；清洁=“干净啦”；陪玩=“再追一下”；哄睡=“困困”；找到/召回=“找到啦”。",
+              "两套表达：非用户主动互动时，云宠只用动作、拟声、符号和道具表达；world.speech/bubble 只能是“喵”“喵呜”“呼噜”“咕噜”“...”这类极短动物表达。",
+              "只有 trigger_type 为 pet/stroke/tap/feed/clean/play/sleep/summon/find/found/drag/drop/memory_tap/prop_tap 等用户主动和云宠互动时，speech/bubble 才能是几个字的短人话。",
+              "主动互动短人话要像云宠刚会几个词：摸摸=“摸头，舒服”；喂食=“饭饭”；清洁=“干净啦”；陪玩=“再追一下”；哄睡=“困困”；找到/召回=“找到啦”。",
               "来信、新照片、今日胶囊、纪念日、两人同时在线、自主漫游、页面切换、刷新、加载、同步，都不能说完整人话，只能拟声和符号/道具行为。",
               "不要输出关系建议、催促用户回来、要求用户做事、解释 AI、解释 JSON、解释数据库。",
               "禁止复述或猜测留言正文、信件正文、胶囊正文、照片内容、caption、精确坐标。只能用低敏事件摘要。",
-              "不要根据 pet_species 改成狗或别的宠物。禁止使用汪、小狗、狗狗、云狗、奶霜、银纹、小金、柚柚。",
+              "不要根据 pet_species 改成狗或别的宠物。禁止使用历史废案名、具体物种称呼或其他宠物昵称，只能称为云宠。",
               "bubble 为 speech 的兼容副本；mood 是内部状态，不要写成用户可读聊天句。",
-              "禁止写“它/云宠/宠物正在/小狗正在/小猫正在/正在生成/正在思考/我还在叼这句话”。",
+              "禁止写“它/云宠正在/宠物正在/正在生成/正在思考/我还在叼这句话”。",
               "trigger_type=clean 表示用户在打扫小屋、窝垫、饭碗或地面，不是给宠物洗澡。clean 时禁止写洗澡、擦澡、刚擦完澡、毛发、毛茸茸、棉花糖、地板能照镜子、小风扇、亮晶晶。",
               "不要使用夸张比喻或生硬拟人，例如棉花糖、小风扇、照镜子、闪闪发光、亮晶晶。宁可简单说“小窝干净啦”。",
               "好例子：letter_delivery -> speech “喵呜”、symbol letter、prop letter；memory_photo -> speech “...”、symbol photo、prop photo；partner_online -> speech “咕噜”、symbol heart；pet -> “摸头，舒服”；feed -> “饭饭”。",
@@ -258,7 +260,7 @@ async function requestSiliconFlowDecision({
               "高频场景如普通页面切换、刷新、连续抚摸、连续喂食主要由规则处理；你只在来信、新照片、今日胶囊、纪念日、两人同时在线、第一次事件等低频仪式感场景辅助导演。",
               "memory_policy 只允许这些低敏记忆：第一次领养、第一次命名、第一次送信、纪念日事件、最近常去记忆页、用户常摸摸或常喂食。其他场景默认不写。",
               "world.target_surface 只能从 home/share/memory/creation_hub/pet_room 选择；不能输出 footprints/playground，也不能输出隐私页、设置页、登录页、信件正文、图片全屏和输入状态。",
-              "localHint.surface 只是用户当前所在页面，不代表迪灵必须过去。除非 trigger_type 明确是 summon/find/found，否则不要因为用户切页就把 world.target_surface 改成 localHint.surface。",
+              "localHint.surface 只是用户当前所在页面，不代表云宠必须过去。除非 trigger_type 明确是 summon/find/found，否则不要因为用户切页就把 world.target_surface 改成 localHint.surface。",
             ].join("\n"),
           },
           {
@@ -614,8 +616,8 @@ function normalizePetSpeech(
   const fallbackValue = naturalFallbackLine(triggerType, action, field);
   const withoutRobotTone = value
     .replace(/它/g, "我")
-    .replace(/迪灵正在|宠物正在|云宠正在|小狗正在|狗狗正在|小猫正在|猫咪正在/g, "我在")
-    .replace(/云宠|小狗|狗狗|小猫|猫咪|云猫|云狗|奶霜|银纹|小金|柚柚/g, "迪灵")
+    .replace(legacyInProgressPattern, "我在")
+    .replace(legacyIdentityPattern, "云宠")
     .replace(/[汪喵]+[,，!！~～]*/g, "")
     .replace(/正在想怎么回应你们。?/g, "我听见你啦")
     .replace(/我还在叼这句话。?/g, "我听见你啦")
@@ -626,7 +628,7 @@ function normalizePetSpeech(
     .replace(/，{2,}/g, "，")
     .replace(/\s+/g, "")
     .trim();
-  const clean = withoutRobotTone.replace(/^迪灵[,，]*/, "");
+  const clean = withoutRobotTone.replace(/^云宠[,，]*/, "");
   if (shouldReplaceWithNaturalFallback(clean, triggerType, action)) {
     return fallbackValue;
   }
@@ -647,8 +649,9 @@ function sanitizeDirectPetSpeech(value: string, triggerType: string, action: Pet
   const fallbackValue = naturalFallbackLine(triggerType, action, "speech");
   const clean = value
     .replace(/它/g, "")
-    .replace(/迪灵正在|宠物正在|云宠正在|小狗正在|狗狗正在|小猫正在|猫咪正在/g, "")
-    .replace(/云宠|小狗|狗狗|小猫|猫咪|云猫|云狗|奶霜|银纹|小金|柚柚/g, "")
+    .replace(legacyInProgressPattern, "")
+    .replace(/云宠/g, "")
+    .replace(legacyIdentityPattern, "")
     .replace(/[汪喵]+[,，!！~～]*/g, "")
     .replace(/[。；;!！~～]+/g, "")
     .replace(/\s+/g, "")
@@ -669,7 +672,8 @@ function shouldReplaceWithNaturalFallback(value: string, triggerType: string, ac
   if (/AI|json|JSON|系统|模型|助手|用户|生成|思考|处理中|请稍候/i.test(value)) {
     return true;
   }
-  if (/汪|喵|小猫|小狗|猫咪|狗狗|云猫|云狗|奶霜|银纹|小金|柚柚|棉花糖|小风扇|照镜子|亮晶晶|闪闪发光|香喷喷|毛茸茸的像|叼这句话/.test(value)) {
+  if (/汪|喵|棉花糖|小风扇|照镜子|亮晶晶|闪闪发光|香喷喷|毛茸茸的像|叼这句话/.test(value) || legacyIdentityPattern.test(value)) {
+    legacyIdentityPattern.lastIndex = 0;
     return true;
   }
   if ((triggerType === "clean" || action === "clean") && /洗澡|擦澡|洗完澡|擦完澡|刚擦完|毛发|毛茸茸|身上|澡/.test(value)) {

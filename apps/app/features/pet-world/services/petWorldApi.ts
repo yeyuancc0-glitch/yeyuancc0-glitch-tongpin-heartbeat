@@ -51,3 +51,35 @@ export async function summonPetToSurface(targetCoupleId: string, surface: PetWor
   }
   return data as CreationSpace | null;
 }
+
+export async function startPetSleep(targetCoupleId: string, sleepReason = "night_auto", sleepSurface?: PetWorldSurface) {
+  const { data, error } = await supabase.rpc("start_creation_pet_sleep", {
+    target_couple_id: targetCoupleId,
+    sleep_reason: sleepReason,
+    sleep_surface: sleepSurface,
+  }).maybeSingle();
+  if (error) {
+    throw error;
+  }
+  return data as CreationSpace | null;
+}
+
+export async function refreshPetSleep(targetCoupleId: string) {
+  const { data, error } = await supabase.rpc("refresh_creation_pet_sleep", {
+    target_couple_id: targetCoupleId,
+  }).maybeSingle();
+  if (error) {
+    throw error;
+  }
+  return data as CreationSpace | null;
+}
+
+export async function settlePetNightSleep(targetCoupleId: string) {
+  const { data, error } = await supabase.rpc("settle_creation_pet_night_sleep", {
+    target_couple_id: targetCoupleId,
+  }).maybeSingle();
+  if (error) {
+    throw error;
+  }
+  return data as CreationSpace | null;
+}

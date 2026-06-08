@@ -94,7 +94,7 @@ grant execute on function public.apply_pet_brain_fallback(uuid, text) to authent
 update public.creation_spaces
 set
   pet_name = case
-    when pet_name ~ '(奶霜|银纹|小金|柚柚|云猫|云狗|猫|狗)' then '迪灵'
+    when pet_name ~ '(迪灵|奶霜|银纹|小金|柚柚|云猫|云狗|猫|狗)' then '云宠'
     else pet_name
   end,
   pet_mood = case
@@ -122,6 +122,6 @@ where
   or last_world_decision::text ~ '(汪|喵|小猫|小狗|猫咪|狗狗|云猫|云狗|奶霜|银纹|小金|柚柚|洗澡|擦澡|洗完澡|擦完澡|刚擦完|毛茸茸|棉花糖|小风扇|照镜子|亮晶晶|闪闪发光|叼这句话)';
 
 update public.creation_actions
-set action_label = '迪灵回应了「小窝干净啦」'
+set action_label = '云宠回应了「小窝干净啦」'
 where action_type = 'ai_brain'
   and action_label ~ '(汪|喵|小猫|小狗|猫咪|狗狗|云猫|云狗|云宠|奶霜|银纹|小金|柚柚|洗澡|擦澡|洗完澡|擦完澡|刚擦完|毛茸茸|棉花糖|小风扇|照镜子|亮晶晶|闪闪发光|叼这句话)';

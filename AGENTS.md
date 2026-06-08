@@ -68,8 +68,10 @@
 - “胶囊”是品牌符号，优先使用半粉半奶油色的自定义 `CapsuleMark` 或同风格插画资源，不要再用 `💊` emoji 代表品牌胶囊。
 - 全局动效基础层位于 `apps/app/motion/`，通过 `MotionProvider`、`BouncyPressable`、`BreathingSkeleton`、`CrossFadeImage`、`MotionLayer`、`useErrorShake` 统一弹簧、骨架、图片淡入、投递飞行和错误抖动；根布局需保留 `GestureHandlerRootView` 与 `MotionProvider`。
 - Web 端纵向滚动必须保留 App 式边界回弹和顶部下拉刷新；不要把 `html, body` 的 `overscroll-behavior-y` 设为 `none`，下拉刷新入口统一通过 `AppScroll` / `useAppPullToRefresh` 维护。
+- `AppScroll` 的 Web 顶部/底部滚轮和触控板惯性回弹只使用浏览器 / RN Web 原生滚动；JS `rubberBand` 只用于真实触控下拉刷新，并按 `requestAnimationFrame` 合并位移更新，不要给滚轮 overscroll 写 `translateY` 或堆叠 release timer，避免快速拉到边界卡顿。
 - 触感反馈使用 `expo-haptics` 经 `apps/app/motion/haptics.ts` 封装；Web 或不支持设备必须静默降级，不能让触感失败阻塞交互。
 - 头像和相册使用 Supabase private Storage；数据库只保存 Storage path，前端展示时生成 signed URL，不能把 signed URL 写回数据库。
+- 头像与相册缩略图使用独立 Storage path：`profiles.avatar_thumbnail_url`、`media_files.thumbnail_storage_path`；列表/九宫格/记忆流优先展示缩略图，点开预览必须按需读取 `storage_path` 原图。Storage RLS 读取策略必须同时关联原图 path 与缩略图 path，不能上传无业务记录可关联的孤立缩略图。
 - 首页本地 dashboard / localStorage 缓存不要持久化 `avatar_signed_url` 或相册 `signedUrl`；只缓存 Storage path，刷新后后台重新签名，避免头像更新、对象删除或 URL 过期后继续显示失效链接。
 - 首页相册 signed URL 水合时只有非空且 path 匹配的 `signedUrl` 才能复用；缓存中被清空的 `signedUrl: null` 必须重新签名，否则拍立得时光墙会一直停在骨架图。
 - 首页快捷心情投递必须写入双方共享数据；当前实现复用 `messages` 表保存“投递了「...」”，不能只做本地 toast 假反馈。
@@ -84,47 +86,53 @@
 - 首页 dashboard 加载必须分阶段：首屏只阻塞 profiles 与 active couple 基础信息；留言、相册、心情、信件、通知和图片 signed URL 在后台补齐；无 active couple 时才查询 pending pair_invites。
 - 当前首页结构：此刻同频卡片内合并快捷心情投递；相册卡片位于此刻同频下方；留言板在首页一级界面直接提供输入框；首页不展示最近纪念日和今日胶囊卡片。
 - 首页“写情书 / 写一封信”入口必须融合在恋爱天数主卡内部，位于开始日期下方，作为首屏可见入口；来信页可保留回复/空状态入口，但不能作为唯一入口。
-- 首页“共创空间”入口使用右下角悬浮圆形按钮，样式参考记忆页添加事件入口；不要改成首页大卡片或新增底部 tab。
-- 共创空间首版是首页子页，包含小屋、轻量足迹记录和小游戏占位；双人小游戏在玩法确定前只保留入口，不创建房间、对局或积分等表。
-- Live2D 情侣云宠分步实施路线保存在根目录 `PLAN.md`；第一版只保证 Expo Web 的 Live2D 云宠体验，不做静态 PNG / 轻动画降级，原生 iOS / Android 稳定验证前不开放云宠。
-- Live2D 小猫模型源文件来自根目录 `LittleCat_Model/`，Web 静态运行资源放在 `apps/app/public/live2d/little-cat/`；Cubism Core 本地文件放在 `apps/app/public/live2d/core/live2dcubismcore.min.js`，不要依赖运行时 CDN。
-- Live2D Web 渲染使用 `pixi.js`、`pixi-live2d-display/cubism4` 和 `live2dcubismcore`；`Live2DCanvas` 需先设置 `window.PIXI` 再动态导入 Cubism4 插件。
-- Live2D 小猫自定义动作文件位于 `apps/app/public/live2d/little-cat/motions/`，源模型目录同步在 `LittleCat_Model/LittleCat_vts/motions/`；`LittleCat.model3.json` 注册 `Walk` / `Pet` / `Sleep` / `Eat` / `Clean` / `Play` / `Happy` / `Sad` motion groups。运行时 `Live2DCanvas` 先尝试 action motion，再保留参数驱动兜底；当前模型只有整体手臂参数（如 `ParamArms`），没有独立左右爪 rig。
-- Live2D 小猫睡觉动作要与气泡生命周期分离：哄睡后气泡可消失，但小猫应保持 `sleep` / `lie-down`，直到用户再次摸摸、喂食、清洁或陪玩；不要把 sleep 当成 2-3 秒临时反应后自动回 idle。
+- 首页“家园”入口使用右下角悬浮圆形按钮，样式参考记忆页添加事件入口；不要改成首页大卡片或新增底部 tab；底层仍复用 `creation_*` 命名。
+- 家园首版是首页子页，标题只保留“家园”，包含云宠小窝、我们的足迹和今日娱乐；双人小游戏在玩法确定前只保留入口，不创建房间、对局或积分等表。
+- 家园 Hub 是不可纵向滚动的中转入口页，内容需在首屏内完成入口呈现。
+- 云宠分步实施路线保存在根目录 `PLAN.md`；第一版只保证 Expo Web 的云宠体验，不做静态 PNG / 轻动画降级，原生 iOS / Android 稳定验证前不开放云宠。
+- 云宠模型源文件来自根目录 `LittleCat_Model/`，Web 静态运行资源放在 `apps/app/public/live2d/little-cat/`；Cubism Core 本地文件放在 `apps/app/public/live2d/core/live2dcubismcore.min.js`，不要依赖运行时 CDN。
+- Live2D Web 渲染使用 `pixi.js`、`pixi-live2d-display/cubism4` 和 `live2dcubismcore`；`Live2DCanvas` 必须先加载本地 Cubism Core，再用同步 `require("pixi.js")` / `require("pixi-live2d-display/cubism4")` 初始化并设置 `window.PIXI`。不要改回运行时动态 `import()`，Expo Web 静态导出会把 Pixi/Cubism4 拆成异步 chunk，可能导致 `Requiring unknown module` 后模型不加载。
+- 云宠自定义动作文件位于 `apps/app/public/live2d/little-cat/motions/`，源模型目录同步在 `LittleCat_Model/LittleCat_vts/motions/`；`LittleCat.model3.json` 注册 `Walk` / `Pet` / `Sleep` / `Eat` / `Clean` / `Play` / `Happy` / `Sad` motion groups。运行时 `Live2DCanvas` 先尝试 action motion，再保留参数驱动兜底；当前模型只有整体手臂参数（如 `ParamArms`），没有独立左右爪 rig。
+- 云宠睡觉动作要与气泡生命周期分离：哄睡后气泡可消失，但云宠应保持 `sleep` / `lie-down`，直到用户再次摸摸、喂食、清洁或陪玩；不要把 sleep 当成 2-3 秒临时反应后自动回 idle。
 - Live2D 云宠投喂精力恢复数值固定在数据库 RPC：`feed_creation_pet(..., 'basic')` 精力 +14、`feed_creation_pet(..., 'premium')` 精力 +24。哄睡不再立即加满精力，而是写入共享睡眠开始时间 `creation_spaces.pet_sleep_started_at`，被摸摸、清洁、陪玩或投喂打断时按已睡时长结算：少于 30 秒 +0、30 秒到 2 分钟 +6、2 到 5 分钟 +12、5 分钟以上 +18。
-- Live2D 小猫睡觉期间眼睛必须全程闭合，不要让 sleep motion 循环开头或眨眼逻辑重新睁眼；闭眼只能走模型自身参数/rig，不要强加贴图、遮罩或覆盖层，避免头部旋转/缩放时错位。`Live2DCanvas` 需在 `beforeModelUpdate` 阶段最终写入睡眠眼睛参数，防止被 SDK 的 motion/眨眼/pose 更新覆盖；小窝/全局 overlay 的小猫本体周围不能带单独浅色框、白底或径向光底。
-- Live2D 小窝主舞台布局必须按模型 `getLocalBounds()` 包围盒显式对齐，不要只依赖 anchor；同一房间页避免同时挂多个 LittleCat canvas，防止主舞台 ready 但视觉透明或不可见。
+- 云宠睡觉期间眼睛必须全程闭合，不要让 sleep motion 循环开头或眨眼逻辑重新睁眼；闭眼只能走模型自身参数/rig，不要强加贴图、遮罩或覆盖层，避免头部旋转/缩放时错位。`Live2DCanvas` 需在 `beforeModelUpdate` 阶段最终写入睡眠眼睛参数，防止被 SDK 的 motion/眨眼/pose 更新覆盖；小窝/全局 overlay 的云宠本体周围不能带单独浅色框、白底或径向光底。
+- 云宠小窝主舞台布局必须按模型 `getLocalBounds()` 包围盒显式对齐，不要只依赖 anchor；同一房间页避免同时挂多个 LittleCat canvas，防止主舞台 ready 但视觉透明或不可见。
 - Step 4-7 阶段 Live2D 云宠已接入首页全局层、`pet_world_surface` 页面位置分离、分享页送信场景和记忆页看照片/记忆场景；不要恢复旧 3D `PetWorldCanvas` / 全局 3D 漫游层。
 - Live2D 云宠位置以 `creation_spaces.pet_world_surface` 为准；用户当前页面和宠物真实页面必须分离，宠物不在当前主 tab 时只显示轻量状态，不自动切换用户页面。
-- Live2D 云宠本体全局只能出现一个；`pet_world_surface` 是 `pet_room` 时本体只在小窝显示，不要再映射成首页全局本体。小猫在外面时小窝是空的，只显示显式召回入口；召回后首页不应再保留第二只小猫。
-- Live2D 云宠在 `home` / `pet_room` / `creation_hub` 时视为“在家”，不要显示旧式“宠物不在当前页”的浮动离开提示；共创空间内小猫本体必须只在 `pet_world_surface` 对应的真实子页显示，避免 Hub、小窝、足迹页同时出现多个本体。
-- Live2D Step 0-7 不把 `footprints` / `playground` 作为小猫本体位置；这两个共创子页只保留足迹和小游戏功能，旧 `pet_world_surface` 值必须归一到 `pet_room`。
+- 云宠本体全局只能出现一个；`pet_world_surface` 是 `pet_room` 时本体只在小窝显示，不要再映射成首页全局本体。云宠在外面时小窝是空的，只显示显式召回入口；召回后首页不应再保留第二只云宠。
+- 云宠在 `home` / `pet_room` / `creation_hub` 时视为“在家”，不要显示旧式“宠物不在当前页”的浮动离开提示；共创空间内云宠本体必须只在 `pet_world_surface` 对应的真实子页显示，避免 Hub、小窝、足迹页同时出现多个本体。
+- Live2D Step 0-7 不把 `footprints` / `playground` 作为云宠本体位置；这两个共创子页只保留足迹和小游戏功能，旧 `pet_world_surface` 值必须归一到 `pet_room`。
 - Live2D 云宠离开当前主 tab 时的轻量状态可以提供“回小窝”显式召回，召回使用 `summon_creation_pet(couple_id, 'pet_room')`，不能通过进入页面或 `mark_pet_surface_seen` 偷偷改变真实位置。
-- Live2D 小猫可以按真实 `pet_world_surface` 到处跑；进入小窝时不能自动把它改回 `pet_room`。如果小猫不在小窝，小窝舞台应显示用户可点击的“召回小猫”入口，点击后才调用 `summon_creation_pet(couple_id, 'pet_room')`。
-- Live2D 小窝不要放单独的“抚摸 / 摸摸”操作按钮；用户直接点击小猫本体即为摸摸或唤醒。底部操作区只保留清洁、陪玩、哄睡、粮仓/投喂等明确动作。
+- 云宠可以按真实 `pet_world_surface` 到处跑；进入小窝时不能自动把它改回 `pet_room`。如果云宠不在小窝，小窝舞台应显示用户可点击的“召回云宠”入口，点击后才调用 `summon_creation_pet(couple_id, 'pet_room')`。
+- 云宠小窝不要放单独的“抚摸 / 摸摸”操作按钮；用户直接点击云宠本体即为摸摸或唤醒。底部操作区只保留清洁、陪玩、哄睡、粮仓/投喂等明确动作。
 - Live2D 送信、照片和记忆事件只允许写入低敏 world decision（如 `target_surface`、`intent`、`animation`、`prop` 和短句），不要把信件正文、留言正文、胶囊正文、照片内容、caption 或精确坐标放入宠物上下文。
 - `pet-ai-brain` 的 `world.target_surface` 白名单只允许 `home` / `share` / `memory` / `creation_hub` / `pet_room`；不要再让 AI 输出 `footprints` / `playground`。
-- `pet-ai-brain` 的 Step 8 输出是小猫表现导演协议，不是聊天助手：`world` 必须包含 `target_surface`、`intent`、`animation`、`expression`、`symbol`、`sound_cue`、`speech`、`prop`、`state_delta` 和 `memory_policy`；表达分两套，平时、自主漫游、送信、看照片、页面切换、伴侣事件和同步只用动作/拟声/符号/道具，`speech` / `bubble` 只能是“喵”“喵呜”“呼噜”“咕噜”“...”等动物表达；只有用户主动摸摸、喂食、清洁、陪玩、哄睡、拖动、找到/召回或点宠物记忆/道具时，才允许 2-8 字短人话，如“摸头，舒服”“饭饭”“干净啦”“再追一下”“困困”“找到啦”。不要输出完整人话、关系建议、催促或隐私正文复述。
+- `pet-ai-brain` 的 Step 8 输出是云宠表现导演协议，不是聊天助手：`world` 必须包含 `target_surface`、`intent`、`animation`、`expression`、`symbol`、`sound_cue`、`speech`、`prop`、`state_delta` 和 `memory_policy`；表达分两套，平时、自主漫游、送信、看照片、页面切换、伴侣事件和同步只用动作/拟声/符号/道具，`speech` / `bubble` 只能是“喵”“喵呜”“呼噜”“咕噜”“...”等动物表达；只有用户主动摸摸、喂食、清洁、陪玩、哄睡、拖动、找到/召回或点宠物记忆/道具时，才允许 2-8 字短人话，如“摸头，舒服”“饭饭”“干净啦”“再追一下”“困困”“找到啦”。不要输出完整人话、关系建议、催促或隐私正文复述。
+- 云宠说话气泡需根据文字长度自适应展开；“喵”等短句使用小气泡，不要固定撑成大卡片。
 - Step 9 云宠记忆只允许低敏白名单事项：第一次领养、第一次命名、第一次送信、纪念日事件、最近常去记忆页、常摸摸或常喂食；禁止保存留言正文、信件正文、胶囊正文、照片内容、caption 和精确坐标。写入统一走 `memory_policy` / `insert_pet_memory_if_allowed` 的阈值、去重和 7 天短期过期规则；用户删除记忆走 `archive_pet_memory(memory_id)`，取消核心记忆走 `toggle_pet_memory_core(memory_id, false)`。
 - Step 10 云宠自主漫游规则优先、AI 辅助：普通页面切换、刷新、连续摸摸、连续喂食、清洁、休息、饥饿和久未互动走 `apps/app/features/pet-world/logic/petWorldRules.ts` / `usePetWorldRoaming` 规则落库；来信、新照片、今日胶囊、纪念日、两人同时在线和第一次事件走 `applyPetRitualDecision`，先检查 `pet_ai_generations` 当日非 fallback 次数，超额或 AI 失败必须回退规则 decision。
 - Step 10 不能因为自主漫游自动切换用户页面，不能用 `mark_pet_surface_seen` 移动真实位置；只允许通过 `apply_pet_world_decision` / `summon_creation_pet` 明确更新 `pet_world_surface`。默认 `PET_AI_DAILY_LIMIT` 为 12 次/情侣/天，高频互动不得直接消耗 AI。
 - Step 10 首页全局云宠可视层会把真实 `pet_room` / `creation_hub` 映射为首页可显示状态；真实位置仍以 `creation_spaces.pet_world_surface` 为准，不要因为首页可见而改写成 `home`。
 - Step 10 自主漫游必须能被用户实际观察到：首刷没有 `pet_last_surface_changed_at` 时可规则投递首页探头；空闲检查当前为 2 分钟，满足能量/舒适度后约 8 分钟可从小窝游走。
-- 首页全局 Live2D 云宠必须在页面内连续走动到不同锚点，移动期间使用 `walk` 动作，不要用瞬移/闪动；气泡只在新事件或到达新锚点时短暂出现，约 2.8 秒后自动消失，不能常驻；Web 可视层必须挂到 `data-app-scroll-content` 滚动内容容器并使用内容层相对坐标，不要再用 body 级 fixed 层把宠物钉在视口上。小猫允许轻微遮挡页面内容，不需要过度避让到边缘；用户可通过长按/拖动把小猫移开。
+- Step 10 云宠在 `home` / `share` / `memory` 外部可见页面之间切换时，可由 page-change 规则即时投递到当前页；从小窝 `pet_room` 出门仍保留约 8 分钟门槛。饥饿回窝判断必须结合 `fullness`，不要只因 `last_fed_at` 时间久就把饱腹值仍正常的云宠锁回小窝。
+- Step 10 云宠刚打开应用时可触发一次会话级随机刷新，使用 `app_open` 规则和本地随机种子，候选只限低敏外部可见页面与小窝状态；同一浏览器会话、同一情侣只触发一次，不消耗 AI 额度，不自动切用户页面。
+- 首页全局云宠必须在页面内克制地走动到不同锚点，移动期间使用 `walk` 动作，不要用瞬移/闪动，也不要高频大幅跳动；气泡只在新事件或到达新锚点时短暂出现，约 2.8 秒后自动消失，不能常驻；Web 可视层必须挂到 `data-app-scroll-content` 滚动内容容器并使用内容层相对坐标，不要再用 body 级 fixed 层把宠物钉在视口上。云宠允许轻微遮挡页面内容，不需要过度避让到边缘；用户可通过长按/拖动把云宠移开。
+- 云宠在 `home` / `share` / `memory` 外部可见页面可以原地休息或打盹；外部打盹也必须写入 `pet_sleep_started_at` 并复用同一套按时长恢复精力规则，休息/睡眠状态下不能继续自动换锚点或被移动状态覆盖成 `walk`。夜间自动睡眠仍以小窝正式睡眠逻辑为准。
 - Step 11 云宠用户设置位于 `apps/app/features/pet/userPetSettings.ts`，Web 端按 `pet-user-settings:<userId|anonymous>` 存入 localStorage；显示/隐藏、声音、自主漫游、大小、减少动画和重置位置只影响当前登录用户与当前设备，不改写情侣共享的 `creation_spaces` 状态。
-- Step 12 Live2D 多宠物预留配置位于 `apps/app/features/pet/live2dCatalog.ts`；当前只注册 `little_cat`，`activeLive2DPet` 是模型路径、动作、表情、声音 cue、默认体型和偏好页面的统一来源，不要在组件里重新硬编码小猫配置。
+- Step 12 云宠模型预留配置位于 `apps/app/features/pet/live2dCatalog.ts`；当前只注册 `little_cat`，`activeLive2DPet` 是模型路径、动作、表情、声音 cue、默认体型和偏好页面的统一来源，不要在组件里重新硬编码云宠配置。
 - 共创空间页面本地状态不要被较旧的父级缓存直接覆盖，必须优先保留 `updated_at` 更新更晚的共享状态。
-- 共创小镇视觉插画资源位于 `apps/app/assets/creation-town/`；`cloud-cabin.png`、`footprints.png`、`playground.png` 和 `cabin-interior.png` 用于小镇 Hub、足迹页、游乐场页和小屋背景。
-- 足迹记录使用 `couple_footprints`，允许坐标为空；只记录地点名和备注也必须可用，且足迹可沉淀到记忆页“日常”。
-- 今日胶囊卡片位于分享页，用于替代“今天存下的胶囊”卡片。
+- 家园视觉插画资源位于 `apps/app/assets/creation-town/`；`cloud-cabin.png`、`footprints.png`、`playground.png` 和 `cabin-interior.png` 用于家园 Hub、足迹页、今日娱乐页和小屋背景。
+- 足迹页对外标题为“我们的足迹”；新增/编辑足迹使用居中弹窗，只填写地点名、日期和备注，不在页面暴露纬度/经度；足迹记录使用 `couple_footprints`，允许坐标为空，且可沉淀到记忆页“日常”。
+- 今日娱乐页只保留今日挑战主体，不展示顶部奖励资产条或额外口粮说明卡。
+- 云宠小窝顶部不展示情侣头像关系卡、云宠档案或小屋设置；小屋日志最多展示 3 条有意义的低敏记忆，过滤“喵 / 咕噜 / 呼噜”等短反应。
 - 分享页今日胶囊以 `checkins` 写入成功作为封存成功标准；`mood_status` 与 `notifications` 属于附属同步，失败时不能阻塞封存按钮或底部导航交互。
 - 今日胶囊图片不新增独立表字段，仍上传到 `couple-media` 并写入 `media_files`，caption 使用 `今日胶囊图片:<checkin_id>` 绑定到对应 `checkins`；这类图片也必须自动进入拍立得时光墙。
-- 分享页今日胶囊采用触感化视觉：精致小尺寸情绪糖果、折角心情便签、柔和呼吸胶囊预览；标题仍叫“今日胶囊”，不要使用“情感封存魔盒”作为界面标题。
+- 分享页今日胶囊采用触感化视觉：精致小尺寸情绪糖果、折角心情便签、柔和呼吸胶囊预览；预览提示文案为“把今天存起来吧”，标题仍叫“今日胶囊”，不要使用“情感封存魔盒”作为界面标题；图片计数只显示如 `0/3 张`，不展示“会同步到拍立得时光墙”。
 - 首页相册缩略图必须可点开全屏查看，查看层使用居中预览卡片而不是系统原生弹窗。
 - 分享页“今天的心情”固定选项为“开心 / 难过 / 想你 / 委屈”，不展示“甜蜜 / 平静”。
 - 记忆页筛选分类固定为“全部 / 日常 / 留言 / 纪念日 / 信件”，不展示“想你”分类；想你类今日胶囊仍归入“日常”。
 - 记忆页时间线采用“彩色回忆风铃”视觉：奶油气泡筛选器、蔷薇到雾紫渐变轨道、微缩胶囊节点、按分类异构的糖果色记忆卡；卡片内角标和图标需保持移动端小尺寸。
-- Web 底部导航必须是固定导航栏：`BottomTabBar` 的 Web bottom offset 固定为 `calc(2px + env(safe-area-inset-bottom))`，不要再用 `visualViewport` / 键盘高度动态抬升，否则顶部回弹或输入聚焦会让底栏上下跳动。
+- Web 底部导航必须是固定导航栏：`BottomTabBar` 的 Web bottom offset 使用 `max(6px, calc(env(safe-area-inset-bottom) - 26px))` 抵消 iPhone 网页安全区过度抬升，同时让导航比屏幕底部略高一点；不要再用 `visualViewport` / 键盘高度动态抬升，否则顶部回弹或输入聚焦会让底栏上下跳动。
 - 相册和记忆卡片图片上传当前最多 10 张；首页相册卡片使用九宫格预览前 9 张，超过 9 张显示 `+N` 并提供“查看全部”入口，完整预览层支持全量浏览与单张删除。
 
 ## Migration 与数据变更
@@ -134,9 +142,11 @@
 - 共创空间 schema 放在 `packages/db/migrations/008_v02_creation_space.sql`。
 - 共创空间足迹/解谜反哺生态 RPC 放在 `packages/db/migrations/018_creation_reward_ecosystem.sql`。
 - 当前 Supabase 项目 `lrwzvxcuchfkchtkqdfs` 已应用 `018_creation_reward_ecosystem.sql`，并确认 `claim_creation_footprint_reward(uuid, uuid)` 与 `claim_creation_game_reward(uuid, text, boolean)` 存在。
-- Live2D 小猫 surface 约束与旧值归一化放在 `packages/db/migrations/026_live2d_pet_surface_scope.sql`；当前 Supabase 项目 `lrwzvxcuchfkchtkqdfs` 已应用，`creation_spaces_normalize_pet_world_surface` 触发器会把旧 `footprints` / `playground` 写入归一为 `pet_room`。
+- 云宠 surface 约束与旧值归一化放在 `packages/db/migrations/026_live2d_pet_surface_scope.sql`；当前 Supabase 项目 `lrwzvxcuchfkchtkqdfs` 已应用，`creation_spaces_normalize_pet_world_surface` 触发器会把旧 `footprints` / `playground` 写入归一为 `pet_room`。
 - Live2D 云宠计划验收权限加固放在 `packages/db/migrations/028_pet_plan_security_hardening.sql`；当前 Supabase 项目 `lrwzvxcuchfkchtkqdfs` 已应用。计划相关云宠 RPC 不允许 `anon` 执行，内部记忆写入函数不开放给前端角色，`pets` / `pet_events` 兼容视图使用 `security_invoker=true` 且 `anon` 不可读。
-- Live2D 云宠投喂恢复基础数值放在 `packages/db/migrations/029_pet_energy_recovery_tuning.sql`；睡眠按时长结算规则放在 `packages/db/migrations/030_pet_sleep_duration_recovery.sql`。当前 Supabase 项目 `lrwzvxcuchfkchtkqdfs` 已应用，哄睡开始不立即加精力，打断或满 5 分钟结算时才恢复 `creation_spaces.energy`。
+- Live2D 云宠投喂恢复基础数值放在 `packages/db/migrations/029_pet_energy_recovery_tuning.sql`；睡眠按时长结算规则放在 `packages/db/migrations/030_pet_sleep_duration_recovery.sql`；夜间自动睡眠/天亮醒来放在 `packages/db/migrations/031_pet_night_auto_sleep.sql`。当前 Supabase 项目 `lrwzvxcuchfkchtkqdfs` 已应用，哄睡开始不立即加精力，打断或满 5 分钟结算时才恢复 `creation_spaces.energy`；23:00-07:00 自动睡眠要在小窝真实睡下，07:00 后自动结算醒来，清空 `pet_sleep_started_at` 后再恢复自主漫游。
+- 云宠外部打盹恢复精力逻辑放在 `packages/db/migrations/033_pet_outside_sleep_recovery.sql`；当前 Supabase 项目 `lrwzvxcuchfkchtkqdfs` 已应用。`start_creation_pet_sleep(target_couple_id, 'outside_rest', sleep_surface)` 允许 `home` / `share` / `memory` 原地睡眠并复用同一套按时长恢复精力规则，`refresh_creation_pet_sleep` 必须保留睡眠所在 surface，不要刷新回 `pet_room`。
+- 头像/相册缩略图字段与 Storage RLS 扩展放在 `packages/db/migrations/032_media_thumbnail_paths.sql`；当前 Supabase 项目 `lrwzvxcuchfkchtkqdfs` 已应用并验证 `profiles.avatar_thumbnail_url`、`media_files.thumbnail_storage_path` 存在，新上传头像与相册会保存 WebP 缩略图 path。
 - 当前 Supabase 项目 `lrwzvxcuchfkchtkqdfs` 已按顺序应用 `001_v01a_schema.sql` 到 `004_v01b_schema.sql`，并验证 V0.1B 表、RPC、private bucket 和 RLS 存在。
 - RLS policy 放在 `packages/db/policies`。
 - 事务性绑定逻辑使用 Postgres RPC，不允许前端直接创建 `couples` 和 `couple_members`。

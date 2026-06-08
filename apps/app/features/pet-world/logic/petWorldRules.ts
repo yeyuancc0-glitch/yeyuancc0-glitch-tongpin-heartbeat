@@ -14,6 +14,7 @@ type RuleDecisionInput = {
 export type PetWorldRuleTrigger =
   | "page_change"
   | "refresh"
+  | "app_open"
   | "idle_tick"
   | "pet"
   | "feed"
@@ -26,6 +27,7 @@ type RoamDecisionInput = RuleDecisionInput & {
   trigger: PetWorldRuleTrigger;
   currentSurface?: PetWorldSurface;
   recentActions?: CreationAction[];
+  randomSeed?: string;
 };
 
 export type PetWorldRoamResolution = {
@@ -37,7 +39,11 @@ export type PetWorldRoamResolution = {
 
 const roamSurfaceCycle: PetWorldSurface[] = ["home", "share", "memory", "creation_hub", "pet_room"];
 const initialRoamSurfaces: PetWorldSurface[] = ["home", "share", "memory"];
+const visibleRoamSurfaceSet = new Set<PetWorldSurface>(["home", "share", "memory"]);
 const highFrequencyActionTypes = new Set(["feed", "pet", "clean", "play", "sleep"]);
+const hungryFullnessThreshold = 28;
+const staleFeedFullnessThreshold = 42;
+const staleFeedHours = 20;
 
 function minutesSince(value: string | null | undefined, now: Date) {
   if (!value) {
@@ -116,7 +122,7 @@ export function resolvePetWorldRuleDecision({
   const minutesFromFound = minutesSince(space.pet_last_found_at, now);
   const minutesFromSurfaceChange = minutesSince(space.pet_last_surface_changed_at, now);
 
-  if (space.fullness < 28 || minutesFromFeed > 18 * 60) {
+  if (isHungryForRoomReturn(space.fullness, minutesFromFeed, 18 * 60)) {
     return baseDecision({
       intent: "ask_food",
       surface: "pet_room",
@@ -285,6 +291,7 @@ export function resolvePetWorldRoamDecision({
   now = new Date(),
   trigger,
   recentActions = [],
+  randomSeed,
 }: RoamDecisionInput): PetWorldRoamResolution {
   const autonomousSurface = normalizePetWorldSurface(space?.pet_world_surface, surface);
   const fallback = resolvePetWorldRuleDecision({
@@ -327,6 +334,39 @@ export function resolvePetWorldRoamDecision({
   const recentPetCount = countRecentActions(recentActions, now, 12, new Set(["pet"])) + (trigger === "pet" ? currentActionBoost : 0);
   const recentFeedCount = countRecentActions(recentActions, now, 18, new Set(["feed"])) + (trigger === "feed" ? currentActionBoost : 0);
   const hour = now.getHours();
+  const nightRestEnded = hour >= 7 && hour < 23 && autonomousSurface === "pet_room" && space.current_action === "happy" && space.energy >= 24 && isNightAutoWakeDecision(space.last_world_decision);
+
+  if (trigger === "app_open") {
+    const appOpenDecision = appOpenRefreshDecision({
+      space,
+      currentSurface,
+      autonomousSurface,
+      minutesFromFeed,
+      minutesFromSurfaceChange,
+      randomSeed,
+      now,
+    });
+    if (appOpenDecision) {
+      return appOpenDecision;
+    }
+  }
+
+  if ((trigger === "refresh" || trigger === "page_change" || trigger === "idle_tick") && currentSurface === "home" && nightRestEnded) {
+    return {
+      shouldApply: true,
+      reason: "night_wake_home_visit",
+      minIntervalMinutes: 1,
+      decision: baseDecision({
+        intent: "wander",
+        surface: "home",
+        mood: "happy",
+        animation: "walk",
+        symbol: "sparkle",
+        soundCue: "soft_chime",
+        bubble: petAnimalLine({ triggerType: "refresh", intent: "wander", symbol: "sparkle" }),
+      }),
+    };
+  }
 
   if (trigger === "pet" && recentPetCount >= 3 && minutesFromSurfaceChange >= 10 && space.energy >= 24) {
     return {
@@ -400,7 +440,7 @@ export function resolvePetWorldRoamDecision({
     };
   }
 
-  if (space.fullness < 24 || minutesFromFeed > 20 * 60) {
+  if (isHungryForRoomReturn(space.fullness, minutesFromFeed, staleFeedHours * 60)) {
     return {
       shouldApply: minutesFromSurfaceChange >= 18,
       reason: "hungry_return_home",
@@ -412,6 +452,24 @@ export function resolvePetWorldRoamDecision({
         animation: "inspect",
         symbol: "food",
         bubble: petAnimalLine({ intent: "ask_food", symbol: "food" }),
+      }),
+    };
+  }
+
+  if (space.energy < 22 && isVisibleRoamSurface(autonomousSurface) && currentSurface === autonomousSurface && hour >= 7 && hour < 23) {
+    return {
+      shouldApply: space.pet_world_state !== "sleep" && minutesFromSurfaceChange >= 6,
+      reason: "outside_visible_rest_rule",
+      minIntervalMinutes: 18,
+      decision: baseDecision({
+        intent: "rest",
+        surface: autonomousSurface,
+        mood: "sleepy",
+        animation: "sleep",
+        symbol: "sleep",
+        soundCue: "purr",
+        bubble: petAnimalLine({ intent: "rest", symbol: "sleep" }),
+        stateDelta: { comfort: 1, boredom: -1 },
       }),
     };
   }
@@ -473,6 +531,32 @@ export function resolvePetWorldRoamDecision({
     };
   }
 
+  if (
+    (trigger === "page_change" || trigger === "idle_tick") &&
+    isVisibleRoamSurface(currentSurface) &&
+    currentSurface !== autonomousSurface &&
+    space.energy >= 30 &&
+    space.comfort >= 38 &&
+    minutesFromSurfaceChange >= visibleSurfaceVisitDelayMinutes(autonomousSurface, trigger)
+  ) {
+    return {
+      shouldApply: true,
+      reason: "current_surface_visit_rule",
+      minIntervalMinutes: visibleSurfaceVisitDelayMinutes(autonomousSurface, trigger),
+      decision: baseDecision({
+        intent: currentSurface === "memory" ? "inspect_memory" : "wander",
+        surface: currentSurface,
+        mood: currentSurface === "memory" ? "calm" : "curious",
+        animation: "walk",
+        symbol: currentSurface === "memory" ? "memory" : "sparkle",
+        soundCue: "soft_chime",
+        prop: "none",
+        bubble: roamLineForSurface(currentSurface),
+        stateDelta: { boredom: -1 },
+      }),
+    };
+  }
+
   if ((trigger === "page_change" || trigger === "refresh") && autonomousSurface === currentSurface) {
     return {
       shouldApply: false,
@@ -483,17 +567,19 @@ export function resolvePetWorldRoamDecision({
   }
 
   if (recentCare >= 4 && minutesFromSurfaceChange >= 22 && space.energy >= 28) {
+    const restSurface = isVisibleRoamSurface(autonomousSurface) && currentSurface === autonomousSurface ? autonomousSurface : "pet_room";
     return {
       shouldApply: true,
       reason: "recent_care_rest_rule",
       minIntervalMinutes: 22,
       decision: baseDecision({
         intent: "rest",
-        surface: "pet_room",
+        surface: restSurface,
         mood: "calm",
-        animation: "return_home",
-        symbol: "heart",
-        bubble: petAnimalLine({ intent: "return_home", symbol: "heart" }),
+        animation: restSurface === "pet_room" ? "return_home" : "sleep",
+        symbol: restSurface === "pet_room" ? "heart" : "sleep",
+        soundCue: "purr",
+        bubble: petAnimalLine({ intent: restSurface === "pet_room" ? "return_home" : "rest", symbol: restSurface === "pet_room" ? "heart" : "sleep" }),
       }),
     };
   }
@@ -515,7 +601,7 @@ export function resolvePetWorldRoamDecision({
   }
 
   if (minutesFromInteraction > 6 * 60 && minutesFromSurfaceChange >= 90) {
-    const nextSurface = nextRoamSurface(autonomousSurface, currentSurface, "quiet");
+    const nextSurface = nextRoamSurface(autonomousSurface, "quiet");
     return {
       shouldApply: true,
       reason: "quiet_hide_rule",
@@ -532,7 +618,7 @@ export function resolvePetWorldRoamDecision({
   }
 
   if (minutesFromSurfaceChange >= 8 && space.energy >= 38 && space.comfort >= 42 && (minutesFromSeen >= 8 || autonomousSurface === "pet_room")) {
-    const nextSurface = nextRoamSurface(autonomousSurface, currentSurface, "wander");
+    const nextSurface = nextRoamSurface(autonomousSurface, "wander");
     return {
       shouldApply: nextSurface !== autonomousSurface,
       reason: "autonomous_wander_rule",
@@ -551,6 +637,15 @@ export function resolvePetWorldRoamDecision({
   return { shouldApply: false, decision: fallback, reason: "no_rule_move", minIntervalMinutes: 30 };
 }
 
+function isNightAutoWakeDecision(value: CreationSpace["last_world_decision"] | null | undefined) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const raw = value as Record<string, unknown>;
+  const world = raw.world && typeof raw.world === "object" && !Array.isArray(raw.world) ? raw.world as Record<string, unknown> : raw;
+  return world.night_auto_wake === true;
+}
+
 function initialSurfaceForSpace(space: CreationSpace) {
   const seed = `${space.couple_id ?? ""}:${space.created_at ?? ""}:${space.id ?? ""}`;
   let hash = 0;
@@ -558,6 +653,98 @@ function initialSurfaceForSpace(space: CreationSpace) {
     hash = (hash * 31 + seed.charCodeAt(index)) >>> 0;
   }
   return initialRoamSurfaces[hash % initialRoamSurfaces.length] ?? "home";
+}
+
+function appOpenRefreshDecision({
+  space,
+  currentSurface,
+  autonomousSurface,
+  minutesFromFeed,
+  minutesFromSurfaceChange,
+  randomSeed,
+  now,
+}: {
+  space: CreationSpace;
+  currentSurface: PetWorldSurface;
+  autonomousSurface: PetWorldSurface;
+  minutesFromFeed: number;
+  minutesFromSurfaceChange: number;
+  randomSeed?: string;
+  now: Date;
+}): PetWorldRoamResolution | null {
+  const hour = now.getHours();
+  if (space.pet_sleep_started_at || space.energy < 24 || hour >= 23 || hour < 7) {
+    return null;
+  }
+
+  if (isHungryForRoomReturn(space.fullness, minutesFromFeed, staleFeedHours * 60)) {
+    return {
+      shouldApply: minutesFromSurfaceChange >= 18,
+      reason: "app_open_hungry_home",
+      minIntervalMinutes: 18,
+      decision: baseDecision({
+        intent: "ask_food",
+        surface: "pet_room",
+        mood: "hungry",
+        animation: "inspect",
+        symbol: "food",
+        bubble: petAnimalLine({ intent: "ask_food", symbol: "food" }),
+      }),
+    };
+  }
+
+  const seed = `${space.couple_id ?? ""}:${randomSeed ?? `${space.updated_at ?? ""}:${space.pet_last_surface_changed_at ?? ""}:${now.toDateString()}`}`;
+  const roll = hashNumber(seed) % 100;
+  const preferredVisibleSurface = isVisibleRoamSurface(currentSurface) ? currentSurface : "home";
+  let targetSurface: PetWorldSurface = preferredVisibleSurface;
+
+  if (autonomousSurface === "pet_room") {
+    if (minutesFromSurfaceChange < visibleSurfaceVisitDelayMinutes("pet_room", "app_open") || roll < 45) {
+      return null;
+    }
+    targetSurface = preferredVisibleSurface;
+  } else if (roll < 18 && space.comfort >= 46) {
+    targetSurface = "pet_room";
+  } else if (roll < 56) {
+    targetSurface = preferredVisibleSurface;
+  } else {
+    targetSurface = randomVisibleSurface(seed);
+  }
+
+  if (targetSurface === autonomousSurface && minutesFromSurfaceChange < 3) {
+    return null;
+  }
+
+  return {
+    shouldApply: targetSurface !== autonomousSurface || roll >= 56,
+    reason: "app_open_random_refresh",
+    minIntervalMinutes: autonomousSurface === "pet_room" ? 8 : 0,
+    decision: baseDecision({
+      intent: targetSurface === "memory" ? "inspect_memory" : targetSurface === "pet_room" ? "return_home" : "wander",
+      surface: targetSurface,
+      mood: targetSurface === "memory" ? "calm" : targetSurface === "pet_room" ? "happy" : "curious",
+      animation: targetSurface === "pet_room" ? "peek" : "walk",
+      symbol: targetSurface === "memory" ? "memory" : "sparkle",
+      soundCue: "soft_chime",
+      prop: "none",
+      bubble: roamLineForSurface(targetSurface),
+      stateDelta: { boredom: -1 },
+    }),
+  };
+}
+
+function hashNumber(seed: string) {
+  let hash = 2166136261;
+  for (let index = 0; index < seed.length; index += 1) {
+    hash ^= seed.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+}
+
+function randomVisibleSurface(seed: string) {
+  const index = hashNumber(`visible:${seed}`) % initialRoamSurfaces.length;
+  return initialRoamSurfaces[index] ?? "home";
 }
 
 function countRecentActions(actions: CreationAction[], now: Date, withinMinutes: number, actionTypes: Set<string>) {
@@ -569,7 +756,22 @@ function countRecentActions(actions: CreationAction[], now: Date, withinMinutes:
   }).length;
 }
 
-function nextRoamSurface(current: PetWorldSurface, userSurface: PetWorldSurface, mode: "wander" | "quiet") {
+function isVisibleRoamSurface(surface: PetWorldSurface) {
+  return visibleRoamSurfaceSet.has(surface);
+}
+
+function isHungryForRoomReturn(fullness: number, minutesFromFeed: number, staleFeedMinutes = staleFeedHours * 60) {
+  return fullness < hungryFullnessThreshold || (fullness < staleFeedFullnessThreshold && minutesFromFeed > staleFeedMinutes);
+}
+
+function visibleSurfaceVisitDelayMinutes(current: PetWorldSurface, trigger: PetWorldRuleTrigger) {
+  if (current === "pet_room") {
+    return 8;
+  }
+  return trigger === "page_change" ? 0 : 3;
+}
+
+function nextRoamSurface(current: PetWorldSurface, mode: "wander" | "quiet") {
   if (mode === "quiet") {
     return current === "pet_room" ? "creation_hub" : "pet_room";
   }
@@ -577,9 +779,6 @@ function nextRoamSurface(current: PetWorldSurface, userSurface: PetWorldSurface,
   for (let offset = 1; offset <= roamSurfaceCycle.length; offset += 1) {
     const candidate = roamSurfaceCycle[(startIndex + offset) % roamSurfaceCycle.length];
     if (candidate === current) {
-      continue;
-    }
-    if (candidate === userSurface && current !== userSurface) {
       continue;
     }
     return candidate;

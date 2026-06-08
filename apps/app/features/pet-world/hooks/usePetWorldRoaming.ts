@@ -1,11 +1,20 @@
 import { useEffect, useRef, type MutableRefObject } from "react";
 
 import type { CreationAction, CreationSpace } from "@/lib/supabase/database.types";
-import { applyPetWorldDecision } from "@/features/pet-world/services/petWorldApi";
+import { applyPetWorldDecision, refreshPetSleep, startPetSleep } from "@/features/pet-world/services/petWorldApi";
 import { resolvePetWorldRoamDecision, type PetWorldRuleTrigger } from "@/features/pet-world/logic/petWorldRules";
 import { normalizePetWorldSurface, type PetWorldSurface } from "@/features/pet-world/logic/petWorldRoutes";
 
 const idleTickMs = 2 * 60 * 1000;
+const sleepRefreshTickMs = 30 * 1000;
+const appOpenAppliedKeys = new Set<string>();
+
+function createAppOpenRandomSeed() {
+  const randomValue = typeof crypto !== "undefined" && "getRandomValues" in crypto
+    ? crypto.getRandomValues(new Uint32Array(1))[0]
+    : Math.floor(Math.random() * 0xffffffff);
+  return `${Date.now().toString(36)}:${randomValue.toString(36)}`;
+}
 
 export function usePetWorldRoaming({
   coupleId,
@@ -26,12 +35,18 @@ export function usePetWorldRoaming({
 }) {
   const lastAppliedRef = useRef<string | null>(null);
   const lastPartnerOnlineRef = useRef(false);
+  const appOpenRandomSeedRef = useRef(createAppOpenRandomSeed());
 
   useEffect(() => {
     if (!coupleId || !creationSpace || disabled) {
       return;
     }
-    const reason = creationSpace.pet_last_surface_changed_at ? "page_change" : "refresh";
+    const openKey = `${coupleId}:${creationSpace.id ?? "space"}`;
+    const firstOpenForSession = !appOpenAppliedKeys.has(openKey);
+    if (firstOpenForSession) {
+      appOpenAppliedKeys.add(openKey);
+    }
+    const reason = firstOpenForSession ? "app_open" : creationSpace.pet_last_surface_changed_at ? "page_change" : "refresh";
     void applyRuleRoam({
       coupleId,
       creationSpace,
@@ -39,7 +54,8 @@ export function usePetWorldRoaming({
       currentSurface,
       partnerOnline,
       trigger: reason,
-      source: "route_effect",
+      source: firstOpenForSession ? "app_open" : "route_effect",
+      randomSeed: firstOpenForSession ? appOpenRandomSeedRef.current : undefined,
       lastAppliedRef,
       onChanged,
     });
@@ -79,6 +95,29 @@ export function usePetWorldRoaming({
     disabled,
     onChanged,
     partnerOnline,
+  ]);
+
+  useEffect(() => {
+    if (!coupleId || !creationSpace || disabled || !creationSpace.pet_sleep_started_at) {
+      return undefined;
+    }
+    const interval = setInterval(() => {
+      void refreshPetSleep(coupleId)
+        .then((space) => {
+          if (space && space.updated_at !== creationSpace.updated_at) {
+            onChanged();
+          }
+        })
+        .catch((error) => {
+          console.warn("Pet sleep refresh failed:", error instanceof Error ? error.message : error);
+        });
+    }, sleepRefreshTickMs);
+    return () => clearInterval(interval);
+  }, [
+    coupleId,
+    creationSpace,
+    disabled,
+    onChanged,
   ]);
 
   useEffect(() => {
@@ -137,6 +176,7 @@ async function applyRuleRoam({
   trigger,
   source,
   lastAppliedRef,
+  randomSeed,
   onChanged,
 }: {
   coupleId: string;
@@ -146,6 +186,7 @@ async function applyRuleRoam({
   partnerOnline?: boolean;
   trigger: PetWorldRuleTrigger;
   source: string;
+  randomSeed?: string;
   lastAppliedRef: MutableRefObject<string | null>;
   onChanged: () => void;
 }) {
@@ -158,6 +199,7 @@ async function applyRuleRoam({
     hidden: creationSpace.pet_hidden,
     trigger,
     recentActions: creationActions,
+    randomSeed,
   });
 
   if (!resolution.shouldApply) {
@@ -178,13 +220,19 @@ async function applyRuleRoam({
   lastAppliedRef.current = dedupeKey;
 
   try {
-    await applyPetWorldDecision(coupleId, resolution.decision, {
-      trigger,
-      source,
-      rule_reason: resolution.reason,
-      ai_used: false,
-      privacy: "rule_only_low_sensitive_pet_state",
-    });
+    if (resolution.reason === "outside_visible_rest_rule") {
+      await startPetSleep(coupleId, "outside_rest", resolution.decision.target_surface);
+    } else if (resolution.reason === "rest_return_home") {
+      await startPetSleep(coupleId, "night_auto");
+    } else {
+      await applyPetWorldDecision(coupleId, resolution.decision, {
+        trigger,
+        source,
+        rule_reason: resolution.reason,
+        ai_used: false,
+        privacy: "rule_only_low_sensitive_pet_state",
+      });
+    }
     onChanged();
     return true;
   } catch (error) {

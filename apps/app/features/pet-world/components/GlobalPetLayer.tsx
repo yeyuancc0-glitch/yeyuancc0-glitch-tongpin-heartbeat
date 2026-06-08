@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
 import { Platform, StyleSheet, Text, View } from "react-native";
-import { Mail } from "lucide-react-native";
+import { ImagePlus, Mail } from "lucide-react-native";
 
-import type { CreationLivePetAction, CreationPetStageReaction } from "@/features/pet/components/PetStage";
+import type { CreationPetStageReaction, LivePetVisualAction } from "@/features/pet/components/PetStage";
 import { Live2DCanvas } from "@/features/pet/components/Live2DCanvas";
 import { activeLive2DPet } from "@/features/pet/live2dCatalog";
 import { petRigCueFromJson } from "@/features/pet/services/petAiBrain";
@@ -28,6 +28,46 @@ type PetAnchorName =
   | "memory-pet-cue"
   | "memory-hero"
   | "memory-calendar";
+type GlobalPetDecisionIntent =
+  | "rest"
+  | "wander"
+  | "hide"
+  | "seek_attention"
+  | "inspect_memory"
+  | "visit_partner"
+  | "return_home"
+  | "play"
+  | "ask_food"
+  | "comfort_user";
+type GlobalPetDecisionAnimation =
+  | "idle"
+  | "walk"
+  | "run"
+  | "hop"
+  | "float"
+  | "eat"
+  | "pet"
+  | "clean"
+  | "play"
+  | "sleep"
+  | "sad"
+  | "happy"
+  | "curious"
+  | "hide"
+  | "peek"
+  | "found"
+  | "summon"
+  | "return_home"
+  | "inspect"
+  | "visit_partner";
+type GlobalPetWorldDecision = {
+  bubble?: string;
+  speech?: string;
+  intent?: GlobalPetDecisionIntent;
+  animation?: GlobalPetDecisionAnimation;
+  symbol?: "heart" | "sparkle" | "letter" | "photo" | "memory" | "food" | "sleep";
+  prop?: "letter" | "photo" | "memory" | "none";
+};
 
 export type GlobalPetLayerProps = {
   visible: boolean;
@@ -47,38 +87,51 @@ const petWidth = 116;
 const petHeight = 154;
 const dragReleaseMs = 90_000;
 const bubbleVisibleMs = 2_800;
-const walkSpeedPxPerSecond = 95;
-const minWalkMs = 900;
-const maxWalkMs = 3_600;
+const walkSpeedPxPerSecond = 46;
+const verticalWalkSpeedPxPerSecond = 28;
+const minWalkMs = 1_600;
+const verticalMinWalkMs = 2_400;
+const maxWalkMs = 6_000;
+const verticalMaxWalkMs = 12_000;
 const pageTopPadding = 72;
 const pageBottomPadding = 92;
 const walkLanePadding = 8;
-const walkWigglePx = 18;
+const walkWigglePx = 8;
+const hiddenKeepAliveMs = 12_000;
+const anchorAdvanceMs = 38_000;
+const reducedMotionAnchorAdvanceMs = 65_000;
 
 export function GlobalPetLayer({ visible, surface = "home", creationSpace, realtimeReaction, onOpenCreation, userSettings }: GlobalPetLayerProps) {
+  const [renderSurface, setRenderSurface] = useState<PetLayerSurface>(surface);
   const [anchorIndex, setAnchorIndex] = useState(() => randomAnchorIndex(anchorsBySurface.home.length));
   const [position, setPosition] = useState<{ x: number; y: number } | null>(null);
   const [portalHost, setPortalHost] = useState<HTMLElement | null>(null);
   const [dragging, setDragging] = useState(false);
   const [moving, setMoving] = useState(false);
   const [bubbleVisible, setBubbleVisible] = useState(false);
+  const [shouldMount, setShouldMount] = useState(visible);
   const positionRef = useRef<{ x: number; y: number } | null>(null);
+  const petElementRef = useRef<HTMLDivElement | null>(null);
   const manualPositionRef = useRef<{ x: number; y: number; updatedAt: number } | null>(null);
   const dragOffsetRef = useRef({ x: 0, y: 0 });
   const walkAnimationRef = useRef<number | null>(null);
   const bubbleTimerRef = useRef<number | null>(null);
+  const unmountTimerRef = useRef<number | null>(null);
   const lastBubbleKeyRef = useRef<string | null>(null);
-  const surfaceAnchors = anchorsBySurface[surface] ?? anchorsBySurface.home;
+  const surfaceAnchors = anchorsBySurface[renderSurface] ?? anchorsBySurface.home;
   const activeAnchor = surfaceAnchors[anchorIndex % surfaceAnchors.length];
+  const layerActive = visible && renderSurface === surface;
   const reaction = realtimeReaction ?? null;
-  const action = reaction?.action ?? creationSpace?.current_action ?? "idle";
+  const action = reaction?.action ?? visualActionFromWorldState(creationSpace) ?? "idle";
   const worldDecision = useMemo(() => petWorldDecisionFromJson(creationSpace?.last_world_decision), [creationSpace?.last_world_decision]);
   const prop = worldDecision?.prop;
   const symbol = worldDecision?.symbol;
   const bubble = bubbleForPetState({ reaction, worldDecision, activeAnchor, prop });
+  const bubbleWidth = globalPetBubbleWidth(bubble, Boolean(symbol));
   const rigCue = useMemo(() => petRigCueFromJson(creationSpace?.last_rig_cue), [creationSpace?.last_rig_cue]);
-  const liveAction: CreationLivePetAction = moving && !dragging ? "walk" : action;
-  const bubbleKey = `${reaction?.id ?? ""}:${worldDecision?.speech ?? ""}:${worldDecision?.bubble ?? ""}:${symbol ?? ""}:${prop ?? ""}:${activeAnchor}`;
+  const restingOutside = isRestingOutside(creationSpace, action, worldDecision);
+  const liveAction: LivePetVisualAction = restingOutside ? "sleep" : moving && !dragging ? "walk" : action;
+  const bubbleKey = `${reaction?.id ?? ""}:${worldDecision?.speech ?? ""}:${worldDecision?.bubble ?? ""}:${symbol ?? ""}:${prop ?? ""}:${activeAnchor}:${restingOutside ? "rest" : "awake"}`;
   const actionKey = `${liveAction}:${moving ? "moving" : "still"}:${reaction?.id ?? ""}:${activeAnchor}`;
   const soundEnabled = userSettings?.soundEnabled ?? true;
   const reducedMotion = Boolean(userSettings?.reducedMotion);
@@ -89,6 +142,12 @@ export function GlobalPetLayer({ visible, surface = "home", creationSpace, realt
   }), [sizeScale]);
 
   useEffect(() => {
+    if (visible) {
+      setRenderSurface(surface);
+    }
+  }, [surface, visible]);
+
+  useEffect(() => {
     if (Platform.OS !== "web" || typeof document === "undefined") {
       return;
     }
@@ -96,10 +155,21 @@ export function GlobalPetLayer({ visible, surface = "home", creationSpace, realt
     setPortalHost(host);
   }, [visible]);
 
-  const setPositionNow = useCallback((next: { x: number; y: number }) => {
-    positionRef.current = next;
-    setPosition(next);
+  const applyPetTransform = useCallback((next: { x: number; y: number }) => {
+    const element = petElementRef.current;
+    if (!element) {
+      return;
+    }
+    element.style.transform = `translate3d(${Math.round(next.x)}px, ${Math.round(next.y)}px, 0)`;
   }, []);
+
+  const setPositionNow = useCallback((next: { x: number; y: number }, render = false) => {
+    positionRef.current = next;
+    applyPetTransform(next);
+    if (render) {
+      setPosition(next);
+    }
+  }, [applyPetTransform]);
 
   const cancelWalkAnimation = useCallback(() => {
     if (walkAnimationRef.current !== null) {
@@ -115,7 +185,7 @@ export function GlobalPetLayer({ visible, surface = "home", creationSpace, realt
 
     if (immediate || !start) {
       setMoving(false);
-      setPositionNow(next);
+      setPositionNow(next, true);
       return;
     }
 
@@ -124,11 +194,15 @@ export function GlobalPetLayer({ visible, surface = "home", creationSpace, realt
     const distance = Math.hypot(dx, dy);
     if (distance < 2) {
       setMoving(false);
-      setPositionNow(next);
+      setPositionNow(next, true);
       return;
     }
 
-    const duration = Math.max(minWalkMs, Math.min(maxWalkMs, distance / (reducedMotion ? walkSpeedPxPerSecond * 0.72 : walkSpeedPxPerSecond) * 1000));
+    const verticalWeight = Math.min(1, Math.abs(dy) / Math.max(1, Math.abs(dx) + Math.abs(dy)));
+    const baseSpeed = walkSpeedPxPerSecond - (walkSpeedPxPerSecond - verticalWalkSpeedPxPerSecond) * verticalWeight;
+    const minDuration = minWalkMs + (verticalMinWalkMs - minWalkMs) * verticalWeight;
+    const maxDuration = maxWalkMs + (verticalMaxWalkMs - maxWalkMs) * verticalWeight;
+    const duration = Math.max(minDuration, Math.min(maxDuration, distance / (reducedMotion ? baseSpeed * 0.72 : baseSpeed) * 1000));
     const startedAt = window.performance.now();
     setMoving(true);
     const crossAxis = reducedMotion ? { x: 0, y: 0, wiggle: 0 } : walkingCrossAxis(start, next, portalHost);
@@ -148,11 +222,37 @@ export function GlobalPetLayer({ visible, surface = "home", creationSpace, realt
       }
       walkAnimationRef.current = null;
       setMoving(false);
-      setPositionNow(next);
+      setPositionNow(next, true);
     };
 
     walkAnimationRef.current = window.requestAnimationFrame(tick);
   }, [cancelWalkAnimation, petSize, portalHost, reducedMotion, setPositionNow]);
+
+  useEffect(() => {
+    if (visible) {
+      setShouldMount(true);
+      if (unmountTimerRef.current !== null) {
+        window.clearTimeout(unmountTimerRef.current);
+        unmountTimerRef.current = null;
+      }
+      return undefined;
+    }
+    cancelWalkAnimation();
+    setMoving(false);
+    if (unmountTimerRef.current !== null) {
+      window.clearTimeout(unmountTimerRef.current);
+    }
+    unmountTimerRef.current = window.setTimeout(() => {
+      setShouldMount(false);
+      unmountTimerRef.current = null;
+    }, hiddenKeepAliveMs);
+    return () => {
+      if (unmountTimerRef.current !== null) {
+        window.clearTimeout(unmountTimerRef.current);
+        unmountTimerRef.current = null;
+      }
+    };
+  }, [cancelWalkAnimation, visible]);
 
   useEffect(() => {
     cancelWalkAnimation();
@@ -163,7 +263,7 @@ export function GlobalPetLayer({ visible, surface = "home", creationSpace, realt
     setPosition(null);
     setMoving(false);
     setBubbleVisible(false);
-  }, [cancelWalkAnimation, surface, surfaceAnchors.length]);
+  }, [cancelWalkAnimation, renderSurface, surfaceAnchors.length]);
 
   useEffect(() => {
     if (!userSettings?.positionResetAt) {
@@ -178,7 +278,7 @@ export function GlobalPetLayer({ visible, surface = "home", creationSpace, realt
   }, [cancelWalkAnimation, surfaceAnchors.length, userSettings?.positionResetAt]);
 
   useEffect(() => {
-    if (!visible || !bubble) {
+    if (!layerActive || !bubble) {
       if (bubbleTimerRef.current !== null) {
         window.clearTimeout(bubbleTimerRef.current);
         bubbleTimerRef.current = null;
@@ -204,10 +304,10 @@ export function GlobalPetLayer({ visible, surface = "home", creationSpace, realt
         bubbleTimerRef.current = null;
       }
     };
-  }, [bubble, bubbleKey, visible]);
+  }, [bubble, bubbleKey, layerActive]);
 
   useEffect(() => {
-    if (!visible) {
+    if (!layerActive || restingOutside) {
       return undefined;
     }
     const interval = window.setInterval(() => {
@@ -217,12 +317,12 @@ export function GlobalPetLayer({ visible, surface = "home", creationSpace, realt
       }
       manualPositionRef.current = null;
       setAnchorIndex((index) => (index + 1) % surfaceAnchors.length);
-    }, reducedMotion ? 15_000 : 9000);
+    }, reducedMotion ? reducedMotionAnchorAdvanceMs : anchorAdvanceMs);
     return () => window.clearInterval(interval);
-  }, [reducedMotion, surfaceAnchors.length, visible]);
+  }, [layerActive, reducedMotion, restingOutside, surfaceAnchors.length]);
 
   useEffect(() => {
-    if (!visible) {
+    if (!layerActive) {
       return undefined;
     }
     const updatePosition = (immediate = false) => {
@@ -230,11 +330,17 @@ export function GlobalPetLayer({ visible, surface = "home", creationSpace, realt
       if (manual && Date.now() - manual.updatedAt < dragReleaseMs) {
         cancelWalkAnimation();
         setMoving(false);
-        setPositionNow(clampPosition(manual.x, manual.y, portalHost, petSize));
+        setPositionNow(clampPosition(manual.x, manual.y, portalHost, petSize), true);
         return;
       }
       manualPositionRef.current = null;
-      moveToPosition(resolveAnchorPosition(activeAnchor, portalHost, petSize), immediate || !positionRef.current);
+      if (restingOutside && positionRef.current) {
+        cancelWalkAnimation();
+        setMoving(false);
+        setPositionNow(clampPosition(positionRef.current.x, positionRef.current.y, portalHost, petSize), true);
+        return;
+      }
+      moveToPosition(resolveAnchorPosition(activeAnchor, portalHost, petSize), immediate || !positionRef.current || restingOutside);
     };
     const handleResize = () => updatePosition(true);
     updatePosition(!positionRef.current);
@@ -242,7 +348,7 @@ export function GlobalPetLayer({ visible, surface = "home", creationSpace, realt
     return () => {
       window.removeEventListener("resize", handleResize);
     };
-  }, [activeAnchor, cancelWalkAnimation, moveToPosition, petSize, portalHost, setPositionNow, visible]);
+  }, [activeAnchor, cancelWalkAnimation, layerActive, moveToPosition, petSize, portalHost, restingOutside, setPositionNow]);
 
   useEffect(() => {
     if (!dragging) {
@@ -273,33 +379,48 @@ export function GlobalPetLayer({ visible, surface = "home", creationSpace, realt
       if (bubbleTimerRef.current !== null) {
         window.clearTimeout(bubbleTimerRef.current);
       }
+      if (unmountTimerRef.current !== null) {
+        window.clearTimeout(unmountTimerRef.current);
+      }
     };
   }, [cancelWalkAnimation]);
 
-  if (Platform.OS !== "web" || typeof document === "undefined" || !visible || !creationSpace || !position || !portalHost) {
+  if (Platform.OS !== "web" || typeof document === "undefined" || !shouldMount || !creationSpace || !position || !portalHost) {
     return null;
   }
 
   const layer = (
-    <div style={portalHostStyle} data-live2d-global-pet-layer={surface}>
+    <div style={portalHostStyle} data-live2d-global-pet-layer={renderSurface}>
       <div
-        data-live2d-global-pet={surface}
+        ref={(element) => {
+          petElementRef.current = element;
+          if (element && positionRef.current) {
+            applyPetTransform(positionRef.current);
+          }
+        }}
+        data-live2d-global-pet={renderSurface}
         data-live2d-global-anchor={activeAnchor}
         style={{
           ...petWrapBaseStyle,
           width: petSize.width,
           height: petSize.height,
-          left: position.x,
-          top: position.y,
+          left: 0,
+          top: 0,
+          opacity: layerActive ? 1 : 0,
+          visibility: layerActive ? "visible" : "hidden",
           cursor: dragging ? "grabbing" : "grab",
         } as never}
         onPointerDown={(event) => {
+          if (!layerActive) {
+            return;
+          }
           event.preventDefault();
           cancelWalkAnimation();
           setMoving(false);
           setBubbleVisible(false);
           const pointer = localPointer(event, portalHost);
-          dragOffsetRef.current = { x: pointer.x - position.x, y: pointer.y - position.y };
+          const currentPosition = positionRef.current ?? position;
+          dragOffsetRef.current = { x: pointer.x - currentPosition.x, y: pointer.y - currentPosition.y };
           setDragging(true);
         }}
         onDoubleClick={onOpenCreation}
@@ -311,7 +432,7 @@ export function GlobalPetLayer({ visible, surface = "home", creationSpace, realt
       >
         {bubbleVisible ? (
           <div data-live2d-pet-bubble="true">
-            <View pointerEvents="none" style={styles.bubble}>
+            <View pointerEvents="none" style={[styles.bubble, { width: bubbleWidth, marginLeft: -bubbleWidth / 2 }]}>
               {symbol ? <Text style={styles.bubbleSymbol}>{symbolLabel(symbol)}</Text> : null}
               <Text style={styles.bubbleText} numberOfLines={2}>{bubble}</Text>
             </View>
@@ -326,6 +447,7 @@ export function GlobalPetLayer({ visible, surface = "home", creationSpace, realt
             compact
             sizeScale={sizeScale}
             reducedMotion={reducedMotion}
+            paused={!layerActive}
           />
         </View>
         {prop === "letter" ? (
@@ -333,9 +455,9 @@ export function GlobalPetLayer({ visible, surface = "home", creationSpace, realt
             <Mail color={colors.accentDark} size={18} strokeWidth={2.5} />
           </View>
         ) : null}
-        {prop === "photo" || prop === "memory" ? (
+        {prop === "photo" ? (
           <View pointerEvents="none" style={styles.memoryProp}>
-            <Text style={styles.memoryPropText}>◌</Text>
+            <ImagePlus color={colors.accentDark} size={15} strokeWidth={2.6} />
           </View>
         ) : null}
       </div>
@@ -345,7 +467,7 @@ export function GlobalPetLayer({ visible, surface = "home", creationSpace, realt
   return createPortal(layer, portalHost);
 }
 
-function petWorldDecisionFromJson(value: CreationSpace["last_world_decision"] | null | undefined): { bubble?: string; speech?: string; symbol?: "heart" | "sparkle" | "letter" | "photo" | "memory" | "food" | "sleep"; prop?: "letter" | "photo" | "memory" | "none" } | null {
+function petWorldDecisionFromJson(value: CreationSpace["last_world_decision"] | null | undefined): GlobalPetWorldDecision | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return null;
   }
@@ -353,9 +475,43 @@ function petWorldDecisionFromJson(value: CreationSpace["last_world_decision"] | 
   const world = raw.world && typeof raw.world === "object" && !Array.isArray(raw.world) ? raw.world as Record<string, unknown> : raw;
   const prop = world.prop === "letter" || world.prop === "photo" || world.prop === "memory" || world.prop === "none" ? world.prop : undefined;
   const symbol = world.symbol === "heart" || world.symbol === "sparkle" || world.symbol === "letter" || world.symbol === "photo" || world.symbol === "memory" || world.symbol === "food" || world.symbol === "sleep" ? world.symbol : undefined;
+  const intent = world.intent === "rest" || world.intent === "wander" || world.intent === "hide" || world.intent === "seek_attention" || world.intent === "inspect_memory" || world.intent === "visit_partner" || world.intent === "return_home" || world.intent === "play" || world.intent === "ask_food" || world.intent === "comfort_user" ? world.intent : undefined;
+  const animation = world.animation === "idle" || world.animation === "walk" || world.animation === "run" || world.animation === "hop" || world.animation === "float" || world.animation === "eat" || world.animation === "pet" || world.animation === "clean" || world.animation === "play" || world.animation === "sleep" || world.animation === "sad" || world.animation === "happy" || world.animation === "curious" || world.animation === "hide" || world.animation === "peek" || world.animation === "found" || world.animation === "summon" || world.animation === "return_home" || world.animation === "inspect" || world.animation === "visit_partner" ? world.animation : undefined;
   const speech = sanitizePassivePetText(typeof world.speech === "string" ? world.speech : undefined) ?? undefined;
   const bubble = sanitizePassivePetText(typeof world.bubble === "string" ? world.bubble : undefined) ?? undefined;
-  return { prop, speech, symbol, bubble };
+  return { prop, speech, intent, animation, symbol, bubble };
+}
+
+function visualActionFromWorldState(space: CreationSpace | null | undefined): LivePetVisualAction | null {
+  const state = space?.pet_world_state ?? space?.current_action;
+  if (!state) {
+    return null;
+  }
+  if (state === "idle" || state === "walk" || state === "eat" || state === "pet" || state === "clean" || state === "play" || state === "sleep" || state === "sad" || state === "happy") {
+    return state;
+  }
+  if (state === "run" || state === "hop" || state === "float" || state === "peek" || state === "visit_partner") {
+    return "walk";
+  }
+  if (state === "found" || state === "summon" || state === "curious") {
+    return "happy";
+  }
+  if (state === "return_home" || state === "hide") {
+    return "walk";
+  }
+  if (state === "inspect") {
+    return "pet";
+  }
+  return "idle";
+}
+
+function isRestingOutside(
+  space: CreationSpace | null | undefined,
+  action: LivePetVisualAction,
+  worldDecision: ReturnType<typeof petWorldDecisionFromJson>,
+) {
+  void worldDecision;
+  return Boolean(space?.pet_sleep_started_at || action === "sleep" || space?.pet_world_state === "sleep" || space?.current_action === "sleep");
 }
 
 function symbolLabel(symbol: "heart" | "sparkle" | "letter" | "photo" | "memory" | "food" | "sleep") {
@@ -429,6 +585,12 @@ function bubbleForPetState({
     return sanitizeDirectPetText(reaction.message, reaction.action);
   }
   return worldDecision?.speech || worldDecision?.bubble || bubbleForAnchor(activeAnchor, prop);
+}
+
+function globalPetBubbleWidth(text: string, hasSymbol: boolean) {
+  const length = Math.max(1, Array.from(text.trim()).length);
+  const symbolWidth = hasSymbol ? 18 : 0;
+  return Math.min(156, Math.max(46, 28 + symbolWidth + length * 15));
 }
 
 function resolveAnchorPosition(anchor: PetAnchorName, host: HTMLElement | null, size = { width: petWidth, height: petHeight }) {
@@ -531,7 +693,7 @@ function walkingCrossAxis(start: { x: number; y: number }, next: { x: number; y:
   return {
     x: -dy / distance,
     y: dx / distance,
-    wiggle: Math.min(walkWigglePx, Math.max(8, distance * 0.08)),
+    wiggle: Math.min(walkWigglePx, Math.max(4, distance * 0.04)),
   };
 }
 
@@ -636,28 +798,22 @@ const styles = StyleSheet.create({
     position: "absolute",
     left: 12,
     bottom: 26,
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    backgroundColor: "rgba(255,255,255,0.88)",
+    width: 26,
+    height: 24,
+    borderRadius: 9,
+    backgroundColor: "rgba(255,239,246,0.72)",
     borderWidth: 1,
-    borderColor: "rgba(184,95,123,0.14)",
+    borderColor: "rgba(184,95,123,0.2)",
     alignItems: "center",
     justifyContent: "center",
-    boxShadow: "0 8px 18px rgba(116,74,89,0.12)",
+    boxShadow: "0 6px 14px rgba(116,74,89,0.1)",
     zIndex: 3,
-  },
-  memoryPropText: {
-    color: colors.accentDark,
-    fontSize: 19,
-    lineHeight: 22,
-    fontWeight: "900",
   },
   bubble: {
     position: "absolute",
-    left: -12,
-    right: -14,
+    left: "50%",
     top: 0,
+    minWidth: 46,
     minHeight: 34,
     borderRadius: 999,
     paddingHorizontal: 10,

@@ -12,10 +12,11 @@ import { isDirectPetAction, petAnimalLine, petHumanLine, sanitizeDirectPetText }
 import { Live2DCanvas } from "./Live2DCanvas";
 
 export type CreationLivePetAction = "idle" | "walk" | "eat" | "pet" | "clean" | "play" | "sleep" | "sad" | "happy";
+export type LivePetVisualAction = CreationLivePetAction | "wake";
 
 export type CreationPetStageReaction = {
   id: number;
-  action: CreationLivePetAction;
+  action: LivePetVisualAction;
   message: string;
 };
 
@@ -45,7 +46,7 @@ export type PetStageProps = {
   onSleepPet?: () => void;
 };
 
-const localLines: Record<CreationLivePetAction, string> = {
+const localLines: Record<LivePetVisualAction, string> = {
   idle: "喵",
   walk: "喵",
   eat: "饭饭",
@@ -53,13 +54,14 @@ const localLines: Record<CreationLivePetAction, string> = {
   clean: "干净啦",
   play: "再追一下",
   sleep: "困困",
+  wake: "醒啦",
   sad: "喵呜",
   happy: "咕噜",
 };
 
 export function PetStage({
-  petName = "小猫",
-  petTitle = "Live2D 小猫",
+  petName = "云宠",
+  petTitle = "云宠",
   petTrait = "共享小窝伙伴",
   petConfig = activeLive2DPet,
   fullness = 62,
@@ -80,7 +82,7 @@ export function PetStage({
   onSleepPet,
 }: PetStageProps) {
   const [localReaction, setLocalReaction] = useState<CreationPetStageReaction | null>(null);
-  const [heldAction, setHeldAction] = useState<CreationLivePetAction | null>(null);
+  const [heldAction, setHeldAction] = useState<LivePetVisualAction | null>(null);
   const [bubbleVisible, setBubbleVisible] = useState(false);
   const [expiredReactionId, setExpiredReactionId] = useState<number | null>(null);
   const [loadState, setLoadState] = useState<"loading" | "ready" | "error">("loading");
@@ -95,6 +97,7 @@ export function PetStage({
       ? petHumanLine(action)
       : petAnimalLine({ action });
   const compact = mode === "home";
+  const bubbleWidth = petBubbleWidth(bubble, compact);
 
   function holdSleep() {
     setHeldAction("sleep");
@@ -157,7 +160,7 @@ export function PetStage({
     [affection, cleanliness, energy, fullness],
   );
 
-  function triggerLocal(actionType: CreationLivePetAction, message = localLines[actionType]) {
+  function triggerLocal(actionType: LivePetVisualAction, message = localLines[actionType]) {
     haptics.play("light");
     if (actionType === "sleep") {
       holdSleep();
@@ -216,7 +219,7 @@ export function PetStage({
       </Pressable>
 
       {bubbleVisible ? (
-        <View pointerEvents="none" style={[styles.bubble, compact ? styles.bubbleCompact : null]}>
+        <View pointerEvents="none" style={[styles.bubble, { width: bubbleWidth }, compact ? styles.bubbleCompact : null]}>
           <Text style={styles.bubbleText}>{bubble}</Text>
         </View>
       ) : null}
@@ -230,7 +233,7 @@ export function PetStage({
             </View>
             <View style={styles.live2dBadge}>
               <Sparkles color={colors.accentDark} size={14} strokeWidth={2.5} />
-              <Text style={styles.live2dBadgeText}>{loadState === "ready" ? "Live2D" : "Web"}</Text>
+              <Text style={styles.live2dBadgeText}>{loadState === "ready" ? "云宠" : "Web"}</Text>
             </View>
           </View>
           <View style={styles.meterGrid}>
@@ -262,7 +265,7 @@ function actionFromState({
   fullness: number;
   cleanliness: number;
   energy: number;
-}): CreationLivePetAction {
+}): LivePetVisualAction {
   if (energy < 22) return "sleep";
   if (fullness < 24 || cleanliness < 24) return "sad";
   return "idle";
@@ -290,6 +293,14 @@ function StageActionButton({ label, icon, onPress }: { label: string; icon: Reac
       <Text style={styles.stageActionText}>{label}</Text>
     </BouncyPressable>
   );
+}
+
+function petBubbleWidth(text: string, compact: boolean) {
+  const length = Math.max(1, Array.from(text.trim()).length);
+  const minWidth = compact ? 48 : 56;
+  const maxWidth = compact ? 154 : 210;
+  const perChar = compact ? 17 : 18;
+  return Math.min(maxWidth, Math.max(minWidth, 26 + length * perChar));
 }
 
 const styles = StyleSheet.create({
@@ -335,6 +346,7 @@ const styles = StyleSheet.create({
     position: "absolute",
     left: 18,
     top: 16,
+    minWidth: 56,
     maxWidth: 235,
     borderRadius: 22,
     paddingHorizontal: 14,
@@ -344,10 +356,13 @@ const styles = StyleSheet.create({
     borderColor: "rgba(184,95,123,0.14)",
     zIndex: 4,
     boxShadow: "0 12px 26px rgba(116,74,89,0.12)",
+    alignItems: "center",
+    justifyContent: "center",
   },
   bubbleCompact: {
     left: 10,
     top: 8,
+    minWidth: 48,
     maxWidth: 190,
     paddingHorizontal: 11,
     paddingVertical: 8,
@@ -357,6 +372,7 @@ const styles = StyleSheet.create({
     fontSize: 13,
     lineHeight: 18,
     fontWeight: "800",
+    textAlign: "center",
   },
   infoPanel: {
     position: "absolute",

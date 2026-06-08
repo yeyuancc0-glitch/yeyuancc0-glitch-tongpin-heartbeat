@@ -1,22 +1,22 @@
 import { useEffect, useState } from "react";
 import { StyleSheet, Text, View } from "react-native";
 
-import type { CreationLivePetAction } from "@/features/pet/components/PetStage";
+import type { LivePetVisualAction } from "@/features/pet/components/PetStage";
 import { Live2DCanvas } from "@/features/pet/components/Live2DCanvas";
 import { activeLive2DPet } from "@/features/pet/live2dCatalog";
 import { colors } from "@/styles/theme";
 
-const supportedActions: CreationLivePetAction[] = activeLive2DPet.supportedActions;
+const supportedActions: LivePetVisualAction[] = activeLive2DPet.supportedActions;
 
 export default function Live2DPocPage() {
-  const [action, setAction] = useState<CreationLivePetAction>("idle");
+  const [action, setAction] = useState<LivePetVisualAction>("idle");
 
   useEffect(() => {
     if (typeof window === "undefined") {
       return;
     }
     const value = new URLSearchParams(window.location.search).get("action") ?? "idle";
-    setAction(supportedActions.includes(value as CreationLivePetAction) ? value as CreationLivePetAction : "idle");
+    setAction(supportedActions.includes(value as LivePetVisualAction) ? value as LivePetVisualAction : "idle");
   }, []);
 
   return (

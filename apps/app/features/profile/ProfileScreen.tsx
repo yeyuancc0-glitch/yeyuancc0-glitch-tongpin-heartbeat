@@ -7,7 +7,7 @@ import { DateField, useToast } from "@/components/ui";
 import { useAuth } from "@/features/auth/AuthProvider";
 import { supabase } from "@/lib/supabase/client";
 import type { Profile } from "@/lib/supabase/database.types";
-import { buildStoragePath, createSignedUrl, isSupportedImage, storageBuckets, uploadImage } from "@/lib/supabase/storage";
+import { buildStoragePath, buildThumbnailStoragePath, createImageThumbnail, createSignedUrl, isSupportedImage, storageBuckets, uploadImage } from "@/lib/supabase/storage";
 import { colors } from "@/styles/theme";
 
 export function ProfileScreen({ onSaved, onCancel, embedded = false }: { onSaved?: () => void; onCancel?: () => void; embedded?: boolean }) {
@@ -18,6 +18,7 @@ export function ProfileScreen({ onSaved, onCancel, embedded = false }: { onSaved
   const [birthdate, setBirthdate] = useState("");
   const [loveStartDate, setLoveStartDate] = useState("");
   const [avatarPath, setAvatarPath] = useState<string | null>(null);
+  const [avatarThumbnailPath, setAvatarThumbnailPath] = useState<string | null>(null);
   const [avatarPreviewUrl, setAvatarPreviewUrl] = useState<string | null>(null);
   const [uploadingAvatar, setUploadingAvatar] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -37,8 +38,9 @@ export function ProfileScreen({ onSaved, onCancel, embedded = false }: { onSaved
         setDisplayName(data?.display_name ?? user.user_metadata.display_name ?? "");
         setBirthdate(data?.birthdate ?? "");
         setAvatarPath(data?.avatar_url ?? null);
+        setAvatarThumbnailPath(data?.avatar_thumbnail_url ?? null);
         if (data?.avatar_url) {
-          createSignedUrl(storageBuckets.avatars, data.avatar_url).then(setAvatarPreviewUrl);
+          createSignedUrl(storageBuckets.avatars, data.avatar_thumbnail_url ?? data.avatar_url).then(setAvatarPreviewUrl);
         }
       });
 
@@ -94,17 +96,40 @@ export function ProfileScreen({ onSaved, onCancel, embedded = false }: { onSaved
         return;
       }
 
-      const { error: profileError } = await supabase.from("profiles").update({ avatar_url: path, updated_at: new Date().toISOString() }).eq("id", user.id);
+      const thumbnailFile = await createImageThumbnail(file, 220, 0.76);
+      let thumbnailPath = thumbnailFile ? buildThumbnailStoragePath(path) : null;
+
+      const updatePayload = { avatar_url: path, avatar_thumbnail_url: thumbnailPath, updated_at: new Date().toISOString() };
+      let { error: profileError } = await supabase.from("profiles").update(updatePayload).eq("id", user.id);
+      if (profileError && thumbnailPath && /avatar_thumbnail_url|schema cache|column/i.test(profileError.message)) {
+        const fallbackPayload = { avatar_url: path, updated_at: updatePayload.updated_at };
+        const fallbackResult = await supabase.from("profiles").update(fallbackPayload).eq("id", user.id);
+        profileError = fallbackResult.error;
+        if (!profileError) {
+          thumbnailPath = null;
+        }
+      }
       setUploadingAvatar(false);
       if (profileError) {
+        await supabase.storage.from(storageBuckets.avatars).remove([path]);
         showToast({ title: "头像保存失败", message: profileError.message, tone: "error" });
         return;
       }
+      if (thumbnailFile && thumbnailPath) {
+        const { error: thumbnailUploadError } = await uploadImage(storageBuckets.avatars, thumbnailPath, thumbnailFile);
+        if (thumbnailUploadError) {
+          console.warn("Avatar thumbnail upload failed:", thumbnailUploadError.message);
+          await supabase.from("profiles").update({ avatar_thumbnail_url: null }).eq("id", user.id);
+          thumbnailPath = null;
+        }
+      }
 
       if (avatarPath) {
-        await supabase.storage.from(storageBuckets.avatars).remove([avatarPath]);
+        const oldPaths = [avatarPath, avatarThumbnailPath].filter((path): path is string => Boolean(path));
+        await supabase.storage.from(storageBuckets.avatars).remove(oldPaths);
       }
       setAvatarPath(path);
+      setAvatarThumbnailPath(thumbnailPath);
       setAvatarPreviewUrl(URL.createObjectURL(file));
       showToast({ title: "头像已更新", tone: "success" });
     };
@@ -116,9 +141,14 @@ export function ProfileScreen({ onSaved, onCancel, embedded = false }: { onSaved
       return;
     }
     setUploadingAvatar(true);
-    const { error } = await supabase.from("profiles").update({ avatar_url: null, updated_at: new Date().toISOString() }).eq("id", user.id);
+    let { error } = await supabase.from("profiles").update({ avatar_url: null, avatar_thumbnail_url: null, updated_at: new Date().toISOString() }).eq("id", user.id);
+    if (error && /avatar_thumbnail_url|schema cache|column/i.test(error.message)) {
+      const fallbackResult = await supabase.from("profiles").update({ avatar_url: null, updated_at: new Date().toISOString() }).eq("id", user.id);
+      error = fallbackResult.error;
+    }
     if (!error) {
-      await supabase.storage.from(storageBuckets.avatars).remove([avatarPath]);
+      const pathsToRemove = [avatarPath, avatarThumbnailPath].filter((path): path is string => Boolean(path));
+      await supabase.storage.from(storageBuckets.avatars).remove(pathsToRemove);
     }
     setUploadingAvatar(false);
     if (error) {
@@ -126,6 +156,7 @@ export function ProfileScreen({ onSaved, onCancel, embedded = false }: { onSaved
       return;
     }
     setAvatarPath(null);
+    setAvatarThumbnailPath(null);
     setAvatarPreviewUrl(null);
     showToast({ title: "头像已移除", tone: "success" });
   }
@@ -136,13 +167,22 @@ export function ProfileScreen({ onSaved, onCancel, embedded = false }: { onSaved
     }
 
     setBusy(true);
-    const { error } = await supabase.from("profiles").upsert({
+    const savedAt = new Date().toISOString();
+    const upsertPayload = {
       id: user.id,
       display_name: displayName.trim() || user.email?.split("@")[0] || "未命名",
       avatar_url: avatarPath,
+      avatar_thumbnail_url: avatarThumbnailPath,
       birthdate: birthdate.trim() || null,
-      updated_at: new Date().toISOString(),
-    });
+      updated_at: savedAt,
+    };
+    let { error } = await supabase.from("profiles").upsert(upsertPayload);
+    if (error && /avatar_thumbnail_url|schema cache|column/i.test(error.message)) {
+      const fallbackPayload = { ...upsertPayload };
+      delete (fallbackPayload as Partial<typeof upsertPayload>).avatar_thumbnail_url;
+      const fallbackResult = await supabase.from("profiles").upsert(fallbackPayload);
+      error = fallbackResult.error;
+    }
 
     if (error) {
       setBusy(false);

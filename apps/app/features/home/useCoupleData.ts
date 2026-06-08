@@ -17,7 +17,7 @@ import type {
   CoupleFootprint,
   Profile,
 } from "@/lib/supabase/database.types";
-import { createSignedUrl, storageBuckets } from "@/lib/supabase/storage";
+import { createSignedUrl, createTransformedImageUrl, imageTransforms, storageBuckets } from "@/lib/supabase/storage";
 
 export type CoupleDashboard = {
   profile: Profile | null;
@@ -61,21 +61,21 @@ const dashboardCachePrefix = "couple-dashboard:v3:";
 function stripVolatileSignedUrls(data: CoupleDashboard): CoupleDashboard {
   return {
     ...data,
-    profile: data.profile ? { ...data.profile, avatar_signed_url: null } : null,
+    profile: data.profile ? { ...data.profile, avatar_signed_url: null, avatar_thumb_signed_url: null } : null,
     couple: data.couple
       ? {
           ...data.couple,
           couple_members: data.couple.couple_members.map((member) => ({
             ...member,
-            profile: member.profile ? { ...member.profile, avatar_signed_url: null } : member.profile,
+            profile: member.profile ? { ...member.profile, avatar_signed_url: null, avatar_thumb_signed_url: null } : member.profile,
           })),
         }
       : null,
     messages: data.messages.map((message) => ({
       ...message,
-      sender: message.sender ? { ...message.sender, avatar_signed_url: null } : message.sender,
+      sender: message.sender ? { ...message.sender, avatar_signed_url: null, avatar_thumb_signed_url: null } : message.sender,
     })),
-    mediaFiles: data.mediaFiles.map((file) => ({ ...file, signedUrl: null })),
+    mediaFiles: data.mediaFiles.map((file) => ({ ...file, signedUrl: null, thumbnailSignedUrl: null })),
   };
 }
 
@@ -175,32 +175,43 @@ export function useCoupleData(userId?: string) {
           .filter((avatarProfile): avatarProfile is Profile => Boolean(avatarProfile))
           .map((avatarProfile) => [
             avatarProfile.id,
-            { path: avatarProfile.avatar_url, signedUrl: avatarProfile.avatar_signed_url ?? null },
+            {
+              path: avatarProfile.avatar_url,
+              signedUrl: avatarProfile.avatar_signed_url ?? null,
+              thumbSignedUrl: avatarProfile.avatar_thumb_signed_url ?? null,
+            },
           ] as const)
       );
-      const preservedAvatarUrlForUser = (userIdToMatch: string, avatarPath?: string | null) => {
+      const preservedAvatarUrlsForUser = (userIdToMatch: string, avatarPath?: string | null) => {
         const existingAvatar = avatarStateByUserId.get(userIdToMatch);
         if (!existingAvatar || existingAvatar.path !== avatarPath) {
-          return null;
+          return { signedUrl: null, thumbSignedUrl: null };
         }
-        return existingAvatar.signedUrl;
+        return { signedUrl: existingAvatar.signedUrl, thumbSignedUrl: existingAvatar.thumbSignedUrl };
       };
+      const preservedProfileAvatarUrls = profileResult.data ? preservedAvatarUrlsForUser(profileResult.data.id, profileResult.data.avatar_url) : null;
       const profile = profileResult.data
-        ? { ...profileResult.data, avatar_signed_url: preservedAvatarUrlForUser(profileResult.data.id, profileResult.data.avatar_url) }
+        ? {
+            ...profileResult.data,
+            avatar_signed_url: preservedProfileAvatarUrls?.signedUrl ?? null,
+            avatar_thumb_signed_url: preservedProfileAvatarUrls?.thumbSignedUrl ?? null,
+          }
         : null;
       const coupleWithAvatarUrls = couple
         ? {
             ...couple,
             couple_members: coupleMembers.map((member) => ({
               ...member,
-              profile: member.profile
-                ? {
-                    ...member.profile,
-                    avatar_signed_url: preservedAvatarUrlForUser(member.user_id, member.profile.avatar_url),
-                  }
-                : member.profile,
+              profile: member.profile ? (() => {
+                const preservedUrls = preservedAvatarUrlsForUser(member.user_id, member.profile.avatar_url);
+                return {
+                  ...member.profile,
+                  avatar_signed_url: preservedUrls.signedUrl,
+                  avatar_thumb_signed_url: preservedUrls.thumbSignedUrl,
+                };
+              })() : member.profile,
             })),
-        }
+          }
         : null;
 
       if (requestId !== requestIdRef.current) {
@@ -337,11 +348,23 @@ export function useCoupleData(userId?: string) {
       const signedMediaUrlById = new Map(
         dataRef.current.mediaFiles
           .filter((file) => file.storage_path)
-          .map((file) => [file.id, { path: file.storage_path, signedUrl: file.signedUrl ?? null }] as const)
+          .map((file) => [
+            file.id,
+            {
+              path: file.storage_path,
+              signedUrl: file.signedUrl ?? null,
+              thumbnailSignedUrl: file.thumbnailSignedUrl ?? null,
+            },
+          ] as const)
       );
       const mediaFiles = mediaRows.map((file) => {
         const existingMediaUrl = signedMediaUrlById.get(file.id);
-        return { ...file, signedUrl: existingMediaUrl?.path === file.storage_path ? existingMediaUrl.signedUrl : null };
+        const shouldPreserve = existingMediaUrl?.path === file.storage_path;
+        return {
+          ...file,
+          signedUrl: shouldPreserve ? existingMediaUrl.signedUrl : null,
+          thumbnailSignedUrl: shouldPreserve ? existingMediaUrl.thumbnailSignedUrl : null,
+        };
       });
 
       if (requestId !== requestIdRef.current) {
@@ -366,20 +389,63 @@ export function useCoupleData(userId?: string) {
       writeCachedDashboard(userId, contentData);
 
       const avatarProfiles = [profileResult.data, ...coupleMembers.map((member) => member.profile).filter(Boolean)] as Profile[];
-      const avatarUrlByPath = new Map<string, string | null>();
-      await Promise.all(
-        avatarProfiles
-          .filter((avatarProfile) => avatarProfile.avatar_url)
-          .map(async (avatarProfile) => {
-            const path = avatarProfile.avatar_url!;
-            if (!avatarUrlByPath.has(path)) {
-              avatarUrlByPath.set(path, await createSignedUrl(storageBuckets.avatars, path));
-            }
+      const avatarPathByOriginalPath = new Map<string, { originalPath: string; thumbnailPath: string | null }>();
+      avatarProfiles.forEach((avatarProfile) => {
+        if (avatarProfile.avatar_url && !avatarPathByOriginalPath.has(avatarProfile.avatar_url)) {
+          avatarPathByOriginalPath.set(avatarProfile.avatar_url, {
+            originalPath: avatarProfile.avatar_url,
+            thumbnailPath: avatarProfile.avatar_thumbnail_url ?? null,
+          });
+        }
+      });
+      const avatarPaths = Array.from(avatarPathByOriginalPath.values());
+      const avatarUrlByPathPromise = (async () => {
+        const avatarUrlByPath = new Map<string, { signedUrl: string | null; thumbSignedUrl: string | null }>();
+        await Promise.all(
+          avatarPaths.map(async ({ originalPath, thumbnailPath }) => {
+            const thumbSignedUrl = thumbnailPath
+              ? await createSignedUrl(storageBuckets.avatars, thumbnailPath)
+              : await createTransformedImageUrl(storageBuckets.avatars, originalPath, imageTransforms.avatarThumb);
+            const signedUrl = thumbSignedUrl ?? await createSignedUrl(storageBuckets.avatars, originalPath);
+            avatarUrlByPath.set(originalPath, {
+              signedUrl,
+              thumbSignedUrl: thumbSignedUrl ?? signedUrl,
+            });
           })
+        );
+        return avatarUrlByPath;
+      })();
+      const hydratedMediaFilesPromise = Promise.all(
+        mediaRows.map(async (file) => {
+          const existingMediaUrl = signedMediaUrlById.get(file.id);
+          const shouldPreserve = existingMediaUrl?.path === file.storage_path;
+          const existingSignedUrl = shouldPreserve ? existingMediaUrl.signedUrl : null;
+          const existingThumbnailSignedUrl = shouldPreserve ? existingMediaUrl.thumbnailSignedUrl : null;
+          const thumbnailSignedUrl =
+            existingThumbnailSignedUrl ??
+            (file.thumbnail_storage_path
+              ? await createSignedUrl(storageBuckets.coupleMedia, file.thumbnail_storage_path)
+              : await createTransformedImageUrl(storageBuckets.coupleMedia, file.storage_path, imageTransforms.albumThumb));
+          const fallbackSignedUrl = thumbnailSignedUrl || existingSignedUrl ? existingSignedUrl : await createSignedUrl(storageBuckets.coupleMedia, file.storage_path);
+          return {
+            ...file,
+            signedUrl: fallbackSignedUrl,
+            thumbnailSignedUrl: thumbnailSignedUrl ?? fallbackSignedUrl,
+          };
+        })
       );
+      const [avatarUrlByPath, hydratedMediaFiles] = await Promise.all([
+        avatarUrlByPathPromise,
+        hydratedMediaFilesPromise,
+      ]);
 
+      const avatarUrlsForPath = (path?: string | null) => (path ? avatarUrlByPath.get(path) ?? { signedUrl: null, thumbSignedUrl: null } : { signedUrl: null, thumbSignedUrl: null });
       const hydratedProfile = profileResult.data
-        ? { ...profileResult.data, avatar_signed_url: profileResult.data.avatar_url ? avatarUrlByPath.get(profileResult.data.avatar_url) ?? null : null }
+        ? {
+            ...profileResult.data,
+            avatar_signed_url: avatarUrlsForPath(profileResult.data.avatar_url).signedUrl,
+            avatar_thumb_signed_url: avatarUrlsForPath(profileResult.data.avatar_url).thumbSignedUrl,
+          }
         : null;
       const hydratedCouple = couple
         ? {
@@ -389,22 +455,13 @@ export function useCoupleData(userId?: string) {
               profile: member.profile
                 ? {
                     ...member.profile,
-                    avatar_signed_url: member.profile.avatar_url ? avatarUrlByPath.get(member.profile.avatar_url) ?? null : null,
+                    avatar_signed_url: avatarUrlsForPath(member.profile.avatar_url).signedUrl,
+                    avatar_thumb_signed_url: avatarUrlsForPath(member.profile.avatar_url).thumbSignedUrl,
                   }
                 : member.profile,
             })),
           }
         : null;
-      const hydratedMediaFiles = await Promise.all(
-        mediaRows.map(async (file) => {
-          const existingMediaUrl = signedMediaUrlById.get(file.id);
-          const existingSignedUrl = existingMediaUrl?.path === file.storage_path ? existingMediaUrl.signedUrl : null;
-          return {
-            ...file,
-            signedUrl: existingSignedUrl ?? await createSignedUrl(storageBuckets.coupleMedia, file.storage_path),
-          };
-        })
-      );
 
       if (requestId !== requestIdRef.current) {
         return;

@@ -1,4 +1,4 @@
-import type { CreationLivePetAction } from "@/features/pet/components/PetStage";
+import type { LivePetVisualAction } from "@/features/pet/components/PetStage";
 import type { PetWorldExpression, PetWorldSoundCue, PetWorldSurface } from "@/features/pet/services/petAiBrain";
 import type { CreationSpace } from "@/lib/supabase/database.types";
 
@@ -14,7 +14,7 @@ export type Live2DPetConfig = {
   trait: string;
   modelPath: string;
   corePath: string;
-  supportedActions: CreationLivePetAction[];
+  supportedActions: LivePetVisualAction[];
   supportedExpressions: PetWorldExpression[];
   soundCues: PetWorldSoundCue[];
   defaultSize: "small" | "medium" | "large";
@@ -25,14 +25,14 @@ export type Live2DPetConfig = {
 export const littleCatLive2D: Live2DPetConfig = {
   key: "little_cat",
   compatPetKey: "silver_tabby",
-  label: "LittleCat",
-  name: "小猫",
-  title: "Live2D 小猫",
-  description: "LittleCat 模型驱动的共享小猫，第一版先住在小窝里陪你们互动。",
-  trait: "唯一共享小猫",
+  label: "云宠",
+  name: "云宠",
+  title: "云宠",
+  description: "住在小窝里的共享云宠，陪你们互动、送信和记录小事。",
+  trait: "唯一共享云宠",
   modelPath: "/live2d/little-cat/LittleCat.model3.json",
   corePath: "/live2d/core/live2dcubismcore.min.js",
-  supportedActions: ["idle", "walk", "eat", "pet", "clean", "play", "sleep", "sad", "happy"],
+  supportedActions: ["idle", "walk", "eat", "pet", "clean", "play", "sleep", "wake", "sad", "happy"],
   supportedExpressions: ["happy", "curious", "sleepy", "lonely", "excited", "calm", "hungry", "soft", "shy"],
   soundCues: ["none", "soft_chime", "purr", "tap", "letter", "photo"],
   defaultSize: "medium",

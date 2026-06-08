@@ -1,4 +1,4 @@
-import type { CreationLivePetAction } from "@/features/pet/components/PetStage";
+import type { CreationLivePetAction, LivePetVisualAction } from "@/features/pet/components/PetStage";
 import type { PetWorldDecision, PetWorldIntent } from "@/features/pet/services/petAiBrain";
 
 export type PetExpressionMode = "animal" | "human";
@@ -11,17 +11,18 @@ export function isDirectPetInteractionTrigger(triggerType: string) {
   return /^(pet|stroke|tap|feed|clean|play|sleep|summon|find|found|drag|drop|memory_tap|prop_tap)/.test(triggerType);
 }
 
-export function isDirectPetAction(action: CreationLivePetAction | null | undefined) {
+export function isDirectPetAction(action: LivePetVisualAction | null | undefined) {
   return action === "eat" || action === "pet" || action === "clean" || action === "play" || action === "sleep";
 }
 
-export function petHumanLine(actionOrTrigger: CreationLivePetAction | string | null | undefined) {
+export function petHumanLine(actionOrTrigger: LivePetVisualAction | string | null | undefined) {
   const value = String(actionOrTrigger ?? "idle");
   if (value.startsWith("feed") || value === "eat") return "饭饭";
   if (value === "pet" || value === "stroke" || value === "tap") return "摸头，舒服";
   if (value === "clean") return "干净啦";
   if (value === "play") return "再追一下";
   if (value === "sleep") return "困困";
+  if (value === "wake" || value === "awake") return "醒啦";
   if (value === "drag" || value === "drop") return "这里也可以";
   if (value === "summon" || value === "find" || value === "found") return "找到啦";
   if (value === "memory_tap" || value === "prop_tap") return "这个，记得";
@@ -33,7 +34,7 @@ export function petAnimalLine(input: {
   intent?: PetWorldIntent;
   prop?: PetWorldDecision["prop"];
   symbol?: PetWorldDecision["symbol"];
-  action?: CreationLivePetAction | null;
+  action?: LivePetVisualAction | null;
   surface?: string;
 } = {}) {
   const trigger = input.triggerType ?? "";
@@ -50,7 +51,7 @@ export function petAnimalLine(input: {
 export function petLineForMode(input: {
   mode: PetExpressionMode;
   triggerType?: string;
-  action?: CreationLivePetAction | null;
+  action?: LivePetVisualAction | null;
   intent?: PetWorldIntent;
   prop?: PetWorldDecision["prop"];
   symbol?: PetWorldDecision["symbol"];
@@ -73,7 +74,7 @@ export function sanitizePassivePetText(value: string | null | undefined) {
   return null;
 }
 
-export function sanitizeDirectPetText(value: string | null | undefined, actionOrTrigger: CreationLivePetAction | string | null | undefined) {
+export function sanitizeDirectPetText(value: string | null | undefined, actionOrTrigger: LivePetVisualAction | string | null | undefined) {
   const text = value?.trim().replace(/[。；;!！~～]+/g, "").replace(/\s+/g, "");
   if (!text) {
     return petHumanLine(actionOrTrigger);

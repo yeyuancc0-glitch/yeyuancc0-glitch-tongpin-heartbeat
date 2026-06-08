@@ -199,7 +199,7 @@ set search_path = public
 as $$
 declare
   action_count integer := 0;
-  clean_pet_name text := left(coalesce(nullif(trim(new.metadata ->> 'pet_name'), ''), '迪灵'), 16);
+  clean_pet_name text := left(coalesce(nullif(trim(new.metadata ->> 'pet_name'), ''), '云宠'), 16);
 begin
   if new.action_type = 'choose_pet' then
     perform public.insert_pet_memory_if_allowed(

@@ -46,6 +46,7 @@ const RefreshContext = createContext<((refresh: (() => Promise<void> | void) | n
 let toastId = 0;
 const pullRefreshDistance = 76;
 const maxRubberBandDistance = 84;
+const scrollStateStep = 40;
 
 function dampenPullDistance(distance: number) {
   return Math.min(maxRubberBandDistance, Math.sqrt(distance) * 9);
@@ -163,6 +164,10 @@ export function AppScroll({ children }: PropsWithChildren) {
   const lastTouchY = useRef(0);
   const refreshRef = useRef<(() => Promise<void> | void) | null>(null);
   const pullReadyRef = useRef(false);
+  const pullStateRef = useRef<"idle" | "pulling" | "ready">("idle");
+  const touchPullDistanceRef = useRef(0);
+  const pendingRubberBandRef = useRef(0);
+  const rubberBandFrameRef = useRef<number | null>(null);
   const rubberBand = useSharedValue(0);
 
   const setRefreshHandler = useCallback((refresh: (() => Promise<void> | void) | null) => {
@@ -183,11 +188,49 @@ export function AppScroll({ children }: PropsWithChildren) {
     }
   }, [refreshing]);
 
+  const setPullStateIfChanged = useCallback((nextState: "idle" | "pulling" | "ready") => {
+    if (pullStateRef.current === nextState) {
+      return;
+    }
+    pullStateRef.current = nextState;
+    setPullState(nextState);
+  }, []);
+
+  const applyRubberBand = useCallback((nextValue: number) => {
+    pendingRubberBandRef.current = nextValue;
+    if (typeof window === "undefined") {
+      rubberBand.value = nextValue;
+      return;
+    }
+    if (rubberBandFrameRef.current !== null) {
+      return;
+    }
+    rubberBandFrameRef.current = window.requestAnimationFrame(() => {
+      rubberBandFrameRef.current = null;
+      rubberBand.value = pendingRubberBandRef.current;
+    });
+  }, [rubberBand]);
+
   const releaseRubberBand = useCallback(() => {
+    if (typeof window !== "undefined" && rubberBandFrameRef.current !== null) {
+      window.cancelAnimationFrame(rubberBandFrameRef.current);
+      rubberBandFrameRef.current = null;
+    }
+    pendingRubberBandRef.current = 0;
+    touchPullDistanceRef.current = 0;
     rubberBand.value = withSpring(0, motionTokens.spring.gentle);
     pullReadyRef.current = false;
-    setPullState("idle");
-  }, [rubberBand]);
+    setPullStateIfChanged("idle");
+  }, [rubberBand, setPullStateIfChanged]);
+
+  useEffect(() => {
+    return () => {
+      if (typeof window !== "undefined" && rubberBandFrameRef.current !== null) {
+        window.cancelAnimationFrame(rubberBandFrameRef.current);
+        rubberBandFrameRef.current = null;
+      }
+    };
+  }, []);
 
   const webPullHandlers =
     Platform.OS === "web"
@@ -203,17 +246,17 @@ export function AppScroll({ children }: PropsWithChildren) {
             const { atTop, atBottom } = getWebScrollBounds(target);
             const overscrollingTop = atTop && deltaY < 0;
             const overscrollingBottom = atBottom && deltaY > 0;
-            if (!overscrollingTop && !overscrollingBottom) {
+            // Trackpad momentum already gets native rebound; JS rubber-band here can stutter.
+            if (overscrollingTop || overscrollingBottom) {
               if (rubberBand.value !== 0) {
                 releaseRubberBand();
               }
               return;
             }
 
-            const direction = overscrollingTop ? 1 : -1;
-            const nextDistance = dampenPullDistance(Math.abs(deltaY));
-            rubberBand.value = withSpring(direction * nextDistance, motionTokens.spring.press);
-            window.setTimeout(releaseRubberBand, 90);
+            if (rubberBand.value !== 0) {
+              releaseRubberBand();
+            }
           },
           onTouchStart: (event: unknown) => {
             const touchEvent = event as { touches?: ArrayLike<{ clientY: number }> };
@@ -222,6 +265,7 @@ export function AppScroll({ children }: PropsWithChildren) {
               return;
             }
             lastTouchY.current = firstTouch.clientY;
+            touchPullDistanceRef.current = 0;
           },
           onTouchMove: (event: unknown) => {
             const touchEvent = event as {
@@ -235,20 +279,46 @@ export function AppScroll({ children }: PropsWithChildren) {
             }
 
             const deltaY = firstTouch.clientY - lastTouchY.current;
+            lastTouchY.current = firstTouch.clientY;
             const { atTop, atBottom } = getWebScrollBounds(target);
             const overscrollingTop = atTop && deltaY > 0;
             const overscrollingBottom = atBottom && deltaY < 0;
 
-            if (overscrollingTop || overscrollingBottom) {
-              const direction = overscrollingTop ? 1 : -1;
-              const pullDistance = Math.abs(deltaY) * 1.8;
-              const nextDistance = dampenPullDistance(pullDistance);
-              rubberBand.value = direction * nextDistance;
-              if (overscrollingTop && refreshRef.current) {
+            if (overscrollingBottom) {
+              if (rubberBand.value !== 0) {
+                releaseRubberBand();
+              }
+              return;
+            }
+
+            if (atTop && deltaY < 0 && touchPullDistanceRef.current > 0) {
+              touchPullDistanceRef.current = Math.max(0, touchPullDistanceRef.current + deltaY * 1.8);
+              const nextDistance = dampenPullDistance(touchPullDistanceRef.current);
+              applyRubberBand(nextDistance);
+              if (refreshRef.current) {
                 const isReady = nextDistance >= pullRefreshDistance;
                 pullReadyRef.current = isReady;
-                setPullState(isReady ? "ready" : "pulling");
+                setPullStateIfChanged(nextDistance > 0 ? (isReady ? "ready" : "pulling") : "idle");
               }
+              return;
+            }
+
+            if (overscrollingTop) {
+              touchPullDistanceRef.current += deltaY * 1.8;
+              const nextDistance = dampenPullDistance(touchPullDistanceRef.current);
+              applyRubberBand(nextDistance);
+              if (refreshRef.current) {
+                const isReady = nextDistance >= pullRefreshDistance;
+                pullReadyRef.current = isReady;
+                setPullStateIfChanged(isReady ? "ready" : "pulling");
+              }
+              return;
+            }
+
+            if (rubberBand.value !== 0) {
+              releaseRubberBand();
+            } else {
+              touchPullDistanceRef.current = 0;
             }
           },
           onTouchEnd: () => {
@@ -287,11 +357,12 @@ export function AppScroll({ children }: PropsWithChildren) {
         }
         onScroll={(event) => {
           const nextScrollY = event.nativeEvent.contentOffset.y;
-          if (Math.abs(nextScrollY - lastScrollY.current) < 8) {
+          if (Math.abs(nextScrollY - lastScrollY.current) < scrollStateStep) {
             return;
           }
-          lastScrollY.current = nextScrollY;
-          setScrollY(nextScrollY);
+          const snappedScrollY = Math.round(nextScrollY / scrollStateStep) * scrollStateStep;
+          lastScrollY.current = snappedScrollY;
+          setScrollY(snappedScrollY);
         }}
         {...webPullHandlers}
       >

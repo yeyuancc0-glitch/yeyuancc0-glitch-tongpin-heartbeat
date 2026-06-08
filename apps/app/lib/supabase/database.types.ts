@@ -10,7 +10,9 @@ export type Profile = {
   id: string;
   display_name: string | null;
   avatar_url: string | null;
+  avatar_thumbnail_url: string | null;
   avatar_signed_url?: string | null;
+  avatar_thumb_signed_url?: string | null;
   birthdate: string | null;
   account_status: "active" | "deletion_requested" | "frozen";
   deletion_requested_at: string | null;
@@ -119,6 +121,7 @@ export type MediaFile = {
   couple_id: string;
   uploader_id: string;
   storage_path: string;
+  thumbnail_storage_path: string | null;
   mime_type: string;
   size_bytes: number;
   caption: string | null;
@@ -126,6 +129,7 @@ export type MediaFile = {
   updated_at: string;
   deleted_at: string | null;
   signedUrl?: string | null;
+  thumbnailSignedUrl?: string | null;
 };
 
 export type MoodStatus = {
@@ -269,6 +273,7 @@ export type CreationSpace = {
   pet_last_found_at: string | null;
   pet_last_surface_changed_at: string | null;
   pet_sleep_started_at: string | null;
+  pet_sleep_recovered_energy: number;
   created_at: string;
   updated_at: string;
 };
@@ -349,6 +354,7 @@ export type Database = {
           id: string;
           display_name?: string | null;
           avatar_url?: string | null;
+          avatar_thumbnail_url?: string | null;
           birthdate?: string | null;
           account_status?: Profile["account_status"];
           deletion_requested_at?: string | null;
@@ -470,6 +476,7 @@ export type Database = {
           couple_id: string;
           uploader_id: string;
           storage_path: string;
+          thumbnail_storage_path?: string | null;
           mime_type: string;
           size_bytes: number;
           caption?: string | null;
@@ -906,7 +913,27 @@ export type Database = {
         };
         Returns: CreationSpace[];
       };
+      start_creation_pet_sleep: {
+        Args: {
+          target_couple_id: string;
+          sleep_reason?: string;
+          sleep_surface?: "home" | "share" | "memory" | "creation_hub" | "pet_room" | null;
+        };
+        Returns: CreationSpace[];
+      };
+      refresh_creation_pet_sleep: {
+        Args: {
+          target_couple_id: string;
+        };
+        Returns: CreationSpace[];
+      };
       settle_creation_pet_sleep: {
+        Args: {
+          target_couple_id: string;
+        };
+        Returns: CreationSpace[];
+      };
+      settle_creation_pet_night_sleep: {
         Args: {
           target_couple_id: string;
         };

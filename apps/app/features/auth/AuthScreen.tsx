@@ -1,32 +1,49 @@
+import type { ReactNode } from "react";
 import { useState } from "react";
-import { Image, Pressable, StyleSheet, Text, View, type ImageSourcePropType } from "react-native";
-
 import {
-  AppLogo,
-  AppTextInput,
-  Card,
-  PrimaryButton,
-  SecondaryButton,
-} from "@/components/app-ui/AppUI";
+  ActivityIndicator,
+  Platform,
+  Pressable,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+  type TextInputProps,
+} from "react-native";
+import {
+  Apple,
+  HeartHandshake,
+  LockKeyhole,
+  Mail,
+  MessageCircleMore,
+  UserRound,
+} from "lucide-react-native";
+
 import { useToast } from "@/components/ui";
 import { supabase } from "@/lib/supabase/client";
-import { colors } from "@/styles/theme";
+import { BouncyPressable } from "@/motion/BouncyPressable";
 
-type AuthView = "splash" | "signIn" | "signUp";
-
-const authHero = require("@/assets/auth-hero.png") as ImageSourcePropType;
+type AuthView = "signIn" | "signUp";
+type AuthField = "displayName" | "email" | "password";
 
 export function AuthScreen() {
   const { showToast } = useToast();
-  const [view, setView] = useState<AuthView>("splash");
+  const [view, setView] = useState<AuthView>("signIn");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [acceptedTerms, setAcceptedTerms] = useState(false);
+  const [focusedField, setFocusedField] = useState<AuthField | null>(null);
   const [errorText, setErrorText] = useState("");
   const [busy, setBusy] = useState(false);
+  const [resetBusy, setResetBusy] = useState(false);
 
-  async function submit(mode: Exclude<AuthView, "splash">) {
+  function goTo(nextView: AuthView) {
+    setErrorText("");
+    setView(nextView);
+  }
+
+  async function submit(mode: AuthView) {
     setErrorText("");
     if (!acceptedTerms) {
       setErrorText("请先勾选用户协议与隐私政策。");
@@ -72,298 +89,555 @@ export function AuthScreen() {
     }
   }
 
-  if (view === "splash") {
-    return (
-      <View style={styles.screen}>
-        <View style={styles.backdropWash} />
-        <View style={styles.splashHero}>
-          <View style={styles.brandMark}>
-            <AppLogo size={56} />
-            <View style={styles.brandTextBlock}>
-              <Text style={styles.brandName}>同频跳动</Text>
-              <Text style={styles.brandSub}>只属于两个人</Text>
-            </View>
-          </View>
-          <View style={styles.copyBlock}>
-            <Text style={styles.heroTitle}>每一天都是一颗</Text>
-            <Text style={styles.appName}>情绪胶囊</Text>
-            <Text style={styles.slogan}>奶茶、拥抱、晚安和想念，都可以被两个人慢慢存起来。</Text>
-          </View>
-          <View style={styles.illustration}>
-            <Image source={authHero} style={styles.heroImage} />
-            <View style={styles.imageCaption}>
-              <Text style={styles.imageCaptionText}>今天也存进记忆</Text>
-            </View>
-          </View>
-        </View>
-        <View style={styles.actionStack}>
-          <PrimaryButton label="登录" onPress={() => setView("signIn")} />
-          <SecondaryButton label="注册新账号" onPress={() => setView("signUp")} />
-          <View style={styles.legalRow}>
-            <Text style={styles.legalText}>用户协议</Text>
-            <Text style={styles.dot}>·</Text>
-            <Text style={styles.legalText}>隐私政策</Text>
-          </View>
-        </View>
-      </View>
-    );
+  async function sendPasswordReset() {
+    const normalizedEmail = email.trim();
+    setErrorText("");
+
+    if (!normalizedEmail) {
+      setErrorText("请先输入邮箱，再发送重置邮件。");
+      return;
+    }
+
+    setResetBusy(true);
+    try {
+      const redirectTo = Platform.OS === "web" && typeof window !== "undefined" ? window.location.origin : undefined;
+      const { error } = await supabase.auth.resetPasswordForEmail(
+        normalizedEmail,
+        redirectTo ? { redirectTo } : undefined,
+      );
+      if (error) {
+        throw error;
+      }
+      showToast({
+        title: "重置邮件已发送",
+        message: "请查看邮箱，并按邮件里的链接设置新密码。",
+        tone: "success",
+      });
+    } catch (error) {
+      setErrorText(error instanceof Error ? error.message : "请稍后重试。");
+    } finally {
+      setResetBusy(false);
+    }
   }
 
   const isSignUp = view === "signUp";
+  const primaryLabel = busy ? (isSignUp ? "注册中" : "登录中") : isSignUp ? "注册" : "登录";
 
   return (
     <View style={styles.screen}>
-      <View style={styles.backdropWash} />
-      <View style={styles.formHeader}>
-        <View style={styles.formTitleBlock}>
-          <Text style={styles.title}>{isSignUp ? "创建账号" : "欢迎回来"}</Text>
-          <Text style={styles.subtitle}>{isSignUp ? "开启你们的情绪胶囊日记。" : "回来看看你们存下的今天。"}</Text>
+      <View pointerEvents="none" style={styles.backgroundClip}>
+        <View style={styles.meshBackground}>
+          <View style={[styles.ambientWash, styles.ambientWashTop]} />
+          <View style={[styles.ambientWash, styles.ambientWashBottom]} />
+          <View style={[styles.orbitLine, styles.orbitLineTop]} />
+          <View style={[styles.orbitLine, styles.orbitLineBottom]} />
         </View>
-        <AppLogo size={52} />
       </View>
 
-      <Card style={styles.authCard}>
-        {isSignUp ? (
-          <AppTextInput value={displayName} onChangeText={setDisplayName} placeholder="昵称（可选）" autoCapitalize="none" />
-        ) : null}
-        <AppTextInput
-          value={email}
-          onChangeText={setEmail}
-          placeholder="邮箱或手机号"
-          autoCapitalize="none"
-          keyboardType="email-address"
-        />
-        <AppTextInput value={password} onChangeText={setPassword} placeholder="密码或验证码" secureTextEntry />
-        {!isSignUp ? <Text style={styles.forgotText}>忘记密码？</Text> : null}
-        <Pressable onPress={() => setAcceptedTerms(!acceptedTerms)} style={styles.termsRow}>
-          <View style={[styles.checkbox, acceptedTerms ? styles.checkboxActive : null]} />
-          <Text style={styles.termsText}>我已阅读并同意用户协议与隐私政策</Text>
-        </Pressable>
-        {errorText ? <Text style={styles.errorText}>{errorText}</Text> : null}
-        <PrimaryButton
-          label={busy ? (isSignUp ? "注册中" : "登录中") : isSignUp ? "注册" : "登录"}
-          onPress={() => submit(view)}
-          disabled={busy || !email.trim() || !password}
-          loading={busy}
-        />
-        <SecondaryButton label={isSignUp ? "已有账号，去登录" : "没有账号，去注册"} onPress={() => setView(isSignUp ? "signIn" : "signUp")} />
-        <Pressable onPress={() => setView("splash")} style={styles.backHomeButton}>
-          <Text style={styles.backHomeText}>回到首页</Text>
-        </Pressable>
-      </Card>
+      <View style={styles.authSurface}>
+        <View style={[styles.brandHeader, isSignUp ? styles.brandHeaderCompact : null]}>
+          <View style={styles.logoMark}>
+            <HeartHandshake color="rgba(210,116,148,0.64)" size={30} strokeWidth={2.25} />
+          </View>
+          <Text style={styles.brandName}>同频跳动</Text>
+        </View>
+
+        <Text style={[styles.title, isSignUp ? styles.titleCompact : null]}>{isSignUp ? "创建账号" : "欢迎回来"}</Text>
+
+        <View style={styles.authPanelShell}>
+          <View pointerEvents="none" style={[styles.panelShadow, isSignUp ? styles.panelShadowCompact : null]} />
+          <View style={[styles.authPanel, isSignUp ? styles.authPanelCompact : null]}>
+            <View pointerEvents="none" style={styles.panelShine} />
+            {isSignUp ? (
+              <AuthFieldRow
+                field="displayName"
+                focusedField={focusedField}
+                label="昵称"
+                value={displayName}
+                placeholder="请输入昵称"
+                onChangeText={setDisplayName}
+                onFieldFocus={setFocusedField}
+                onFieldBlur={setFocusedField}
+                icon={<UserRound color="rgba(116,105,111,0.42)" size={19} strokeWidth={1.9} />}
+                compact={isSignUp}
+              />
+            ) : null}
+            <AuthFieldRow
+              field="email"
+              focusedField={focusedField}
+              label="邮箱/账号"
+              value={email}
+              placeholder="请输入邮箱/账号"
+              onChangeText={setEmail}
+              onFieldFocus={setFocusedField}
+              onFieldBlur={setFocusedField}
+              autoCapitalize="none"
+              keyboardType="email-address"
+              icon={<Mail color="rgba(116,105,111,0.42)" size={19} strokeWidth={1.9} />}
+              compact={isSignUp}
+            />
+            <AuthFieldRow
+              field="password"
+              focusedField={focusedField}
+              label="密码"
+              value={password}
+              placeholder="请输入密码"
+              onChangeText={setPassword}
+              onFieldFocus={setFocusedField}
+              onFieldBlur={setFocusedField}
+              secureTextEntry
+              icon={<LockKeyhole color="rgba(116,105,111,0.42)" size={19} strokeWidth={1.9} />}
+              compact={isSignUp}
+            />
+
+            <View style={styles.formMetaRow}>
+              <Pressable
+                accessibilityRole="checkbox"
+                accessibilityState={{ checked: acceptedTerms }}
+                onPress={() => setAcceptedTerms(!acceptedTerms)}
+                style={styles.termsRow}
+              >
+                <View style={[styles.checkbox, acceptedTerms ? styles.checkboxActive : null]}>
+                  {acceptedTerms ? <View style={styles.checkboxDot} /> : null}
+                </View>
+                <Text style={styles.termsText}>同意协议</Text>
+              </Pressable>
+              {!isSignUp ? (
+                <Pressable accessibilityRole="button" disabled={resetBusy} onPress={sendPasswordReset} style={styles.forgotButton}>
+                  <Text style={styles.forgotText}>{resetBusy ? "发送中" : "忘记密码?"}</Text>
+                </Pressable>
+              ) : null}
+            </View>
+
+            {errorText ? <Text style={styles.errorText}>{errorText}</Text> : null}
+
+            <BouncyPressable
+              accessibilityRole="button"
+              disabled={busy || !email.trim() || !password}
+              disabledStyle={styles.primaryButtonDisabled}
+              haptic="light"
+              onPress={() => submit(view)}
+              style={styles.primaryButton}
+            >
+              <View pointerEvents="none" style={styles.primaryButtonGlow} />
+              {busy ? <ActivityIndicator color="#fff" size="small" /> : null}
+              <Text style={styles.primaryButtonText}>{primaryLabel}</Text>
+            </BouncyPressable>
+
+            <Pressable accessibilityRole="button" onPress={() => goTo(isSignUp ? "signIn" : "signUp")} style={styles.switchModeButton}>
+              <Text style={styles.switchModeText}>{isSignUp ? "已有账号登录" : "新用户注册"}</Text>
+            </Pressable>
+
+            <View style={styles.socialRow}>
+              <SocialButton
+                label="微信登录暂未开放"
+                onPress={() => showToast({ title: "暂未开放", message: "当前版本先使用邮箱密码登录。", tone: "info" })}
+                icon={<MessageCircleMore color="rgba(44,39,42,0.62)" size={20} fill="rgba(44,39,42,0.12)" />}
+              />
+              <SocialButton
+                label="Apple 登录暂未开放"
+                onPress={() => showToast({ title: "暂未开放", message: "当前版本先使用邮箱密码登录。", tone: "info" })}
+                icon={<Apple color="rgba(44,39,42,0.66)" size={21} fill="rgba(44,39,42,0.66)" />}
+              />
+              <SocialButton
+                label="更多登录暂未开放"
+                onPress={() => showToast({ title: "暂未开放", message: "当前版本先使用邮箱密码登录。", tone: "info" })}
+                icon={<UserRound color="rgba(44,39,42,0.62)" size={20} />}
+              />
+            </View>
+          </View>
+        </View>
+      </View>
     </View>
+  );
+}
+
+function AuthFieldRow({
+  field,
+  compact,
+  focusedField,
+  icon,
+  label,
+  onFieldBlur,
+  onChangeText,
+  onFieldFocus,
+  placeholder,
+  value,
+  ...props
+}: {
+  field: AuthField;
+  compact?: boolean;
+  focusedField: AuthField | null;
+  icon: ReactNode;
+  label: string;
+  onFieldBlur: (field: AuthField | null) => void;
+  onChangeText: (value: string) => void;
+  onFieldFocus: (field: AuthField) => void;
+  placeholder: string;
+  value: string;
+} & TextInputProps) {
+  const isFocused = focusedField === field;
+  return (
+    <View style={[styles.fieldGroup, compact ? styles.fieldGroupCompact : null]}>
+      <Text style={styles.fieldLabel}>{label}</Text>
+      <View style={[styles.inputShell, compact ? styles.inputShellCompact : null, isFocused ? styles.inputShellFocused : null]}>
+        <View style={styles.inputIcon}>{icon}</View>
+        <TextInput
+          value={value}
+          onChangeText={onChangeText}
+          placeholder={placeholder}
+          placeholderTextColor="rgba(121,111,116,0.38)"
+          onFocus={() => onFieldFocus(field)}
+          onBlur={() => onFieldBlur(null)}
+          style={styles.input}
+          {...props}
+        />
+      </View>
+    </View>
+  );
+}
+
+function SocialButton({ icon, label, onPress }: { icon: ReactNode; label: string; onPress: () => void }) {
+  return (
+    <BouncyPressable accessibilityLabel={label} accessibilityRole="button" haptic="selection" onPress={onPress} style={styles.socialButton}>
+      {icon}
+    </BouncyPressable>
   );
 }
 
 const styles = StyleSheet.create({
   screen: {
-    minHeight: 680,
-    justifyContent: "center",
-    gap: 14,
-    paddingVertical: 22,
+    minHeight: 720,
+    justifyContent: "flex-start",
+    alignItems: "center",
+    paddingHorizontal: 10,
+    paddingTop: 72,
+    paddingBottom: 26,
+    overflow: "visible",
   },
-  backdropWash: {
+  backgroundClip: {
     position: "absolute",
-    left: 18,
-    right: 18,
-    top: 36,
-    bottom: 72,
-    borderRadius: 36,
+    left: -10,
+    right: -10,
+    top: -72,
+    bottom: -26,
+    overflow: Platform.OS === "web" ? ("clip" as never) : "hidden",
+  },
+  meshBackground: {
+    position: "absolute",
+    left: -24,
+    right: -24,
+    top: -48,
+    bottom: -48,
+    backgroundColor: "#fffaf7",
+    backgroundImage:
+      "linear-gradient(145deg, rgba(255,250,247,0.98) 0%, rgba(255,246,250,0.92) 42%, rgba(250,251,255,0.96) 100%), radial-gradient(70% 56% at 76% 13%, rgba(255,238,211,0.64), rgba(255,238,211,0) 62%), radial-gradient(74% 58% at 22% 82%, rgba(255,216,229,0.38), rgba(255,216,229,0) 66%), radial-gradient(62% 48% at 57% 48%, rgba(230,238,246,0.5), rgba(230,238,246,0) 64%)" as never,
+  },
+  ambientWash: {
+    position: "absolute",
+    borderRadius: 999,
+    opacity: 0.7,
+    filter: "blur(32px)" as never,
+  },
+  ambientWashTop: {
+    width: 380,
+    height: 300,
+    right: -120,
+    top: -40,
+    backgroundColor: "rgba(255,236,214,0.42)",
+  },
+  ambientWashBottom: {
+    width: 360,
+    height: 340,
+    left: -110,
+    bottom: 18,
+    backgroundColor: "rgba(255,215,229,0.26)",
+  },
+  orbitLine: {
+    position: "absolute",
+    width: 620,
+    height: 620,
+    borderRadius: 310,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.42)",
+  },
+  orbitLineTop: {
+    right: -370,
+    top: -248,
+    transform: [{ rotate: "-16deg" }],
+  },
+  orbitLineBottom: {
+    left: -376,
+    bottom: -292,
+    transform: [{ rotate: "19deg" }],
+  },
+  authSurface: {
+    width: "100%",
+    maxWidth: 388,
+  },
+  authPanelShell: {
+    position: "relative",
+    borderRadius: 20,
+  },
+  panelShadow: {
+    position: "absolute",
+    left: 8,
+    right: 8,
+    top: 16,
+    bottom: -24,
+    borderRadius: 22,
+    backgroundColor: "rgba(209, 139, 164, 0.14)",
+    filter: "blur(24px)" as never,
+    opacity: 0.72,
+  },
+  panelShadowCompact: {
+    bottom: -20,
+  },
+  brandHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 12,
+    marginBottom: 42,
+  },
+  brandHeaderCompact: {
+    marginBottom: 20,
+  },
+  logoMark: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    alignItems: "center",
+    justifyContent: "center",
     backgroundColor: "rgba(255,255,255,0.34)",
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.56)",
-  },
-  splashHero: {
-    gap: 15,
-    paddingHorizontal: 6,
-  },
-  brandMark: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 12,
-    alignSelf: "center",
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 22,
-    backgroundColor: "rgba(255,255,255,0.72)",
-    borderWidth: 1,
-    borderColor: "rgba(243,95,137,0.12)",
-  },
-  brandTextBlock: {
-    gap: 2,
+    borderColor: "rgba(255,255,255,0.58)",
+    boxShadow: "0 8px 24px rgba(238,156,181,0.24), 0 0 18px rgba(255,255,255,0.52), inset 0 1px 1px rgba(255,255,255,0.78)" as never,
   },
   brandName: {
-    color: colors.ink,
-    fontSize: 17,
-    lineHeight: 22,
-    fontWeight: "900",
+    color: "rgba(67,59,64,0.72)",
+    fontSize: 23,
+    lineHeight: 30,
+    fontWeight: "850" as never,
   },
-  brandSub: {
-    color: colors.muted,
-    fontSize: 12,
-    lineHeight: 16,
-    fontWeight: "800",
-  },
-  copyBlock: {
-    alignItems: "center",
-    gap: 5,
-  },
-  heroTitle: {
-    color: colors.ink,
-    fontSize: 30,
-    lineHeight: 36,
+  title: {
+    color: "rgba(48,43,46,0.88)",
+    fontSize: 35,
+    lineHeight: 43,
     fontWeight: "900",
     textAlign: "center",
+    marginBottom: 34,
   },
-  appName: {
-    color: colors.ink,
-    fontSize: 30,
-    lineHeight: 36,
-    fontWeight: "900",
-    textAlign: "center",
+  titleCompact: {
+    fontSize: 32,
+    lineHeight: 38,
+    marginBottom: 18,
   },
-  slogan: {
-    color: colors.muted,
+  authPanel: {
+    position: "relative",
+    gap: 13,
+    padding: 24,
+    borderRadius: 20,
+    backgroundColor: "rgba(255,255,255,0.34)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.6)",
+    overflow: "hidden",
+    boxShadow:
+      "0 10px 28px rgba(191, 127, 151, 0.06), inset 0 1px 1px rgba(255,255,255,0.78), inset 0 -1px 1px rgba(159,118,133,0.06)" as never,
+    backdropFilter: "blur(24px) saturate(1.15)",
+    WebkitBackdropFilter: "blur(24px) saturate(1.15)",
+  } as never,
+  authPanelCompact: {
+    gap: 10,
+    paddingVertical: 20,
+  },
+  panelShine: {
+    position: "absolute",
+    left: -40,
+    right: -40,
+    top: -80,
+    height: 170,
+    backgroundImage: "linear-gradient(180deg, rgba(255,255,255,0.5), rgba(255,255,255,0))" as never,
+    transform: [{ rotate: "-8deg" }],
+  },
+  fieldGroup: {
+    gap: 8,
+  },
+  fieldGroupCompact: {
+    gap: 6,
+  },
+  fieldLabel: {
+    color: "rgba(49,43,47,0.78)",
     fontSize: 15,
-    lineHeight: 22,
-    textAlign: "center",
-    maxWidth: 320,
+    lineHeight: 20,
     fontWeight: "700",
   },
-  authCard: {
-    gap: 12,
-  },
-  actionStack: {
-    gap: 12,
-    paddingTop: 2,
-  },
-  illustration: {
-    width: "100%",
-    aspectRatio: 0.82,
-    maxHeight: 350,
-    borderRadius: 30,
-    backgroundColor: "rgba(255,255,255,0.74)",
+  inputShell: {
+    minHeight: 54,
+    borderRadius: 27,
     borderWidth: 1,
-    borderColor: "rgba(243,95,137,0.12)",
-    overflow: "hidden",
-    shadowColor: "#e58ca4",
-    shadowOpacity: 0.18,
-    shadowRadius: 28,
-    shadowOffset: { width: 0, height: 16 },
-  },
-  heroImage: {
-    width: "100%",
-    height: "100%",
-    resizeMode: "cover",
-  },
-  imageCaption: {
-    position: "absolute",
-    left: 14,
-    right: 14,
-    bottom: 14,
-    minHeight: 42,
-    borderRadius: 18,
-    backgroundColor: "rgba(255,255,255,0.78)",
-    alignItems: "center",
-    justifyContent: "center",
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.74)",
-  },
-  imageCaptionText: {
-    color: colors.accentDark,
-    fontSize: 14,
-    lineHeight: 18,
-    fontWeight: "900",
-  },
-  legalRow: {
+    borderColor: "rgba(255,255,255,0.66)",
+    backgroundColor: "rgba(255,255,255,0.22)",
     flexDirection: "row",
     alignItems: "center",
+    gap: 10,
+    paddingHorizontal: 17,
+    boxShadow: "inset 0 1px 1px rgba(255,255,255,0.66), 0 8px 20px rgba(181,128,145,0.06)" as never,
+  },
+  inputShellCompact: {
+    minHeight: 49,
+  },
+  inputShellFocused: {
+    borderColor: "rgba(216,125,153,0.5)",
+    backgroundColor: "rgba(255,255,255,0.34)",
+    boxShadow:
+      "0 0 0 3px rgba(216,125,153,0.08), 0 12px 28px rgba(216,125,153,0.12), inset 0 1px 1px rgba(255,255,255,0.72)" as never,
+  },
+  inputIcon: {
+    width: 20,
+    height: 20,
+    alignItems: "center",
     justifyContent: "center",
-    gap: 7,
   },
-  legalText: {
-    color: colors.accentDark,
-    fontSize: 13,
-    fontWeight: "800",
+  input: {
+    flex: 1,
+    minWidth: 0,
+    color: "rgba(46,40,44,0.88)",
+    fontSize: 15,
+    lineHeight: 20,
+    paddingVertical: 0,
+    outlineStyle: "none" as never,
+    backgroundColor: "transparent",
   },
-  dot: {
-    color: colors.faint,
-  },
-  formHeader: {
+  formMetaRow: {
+    minHeight: 24,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    gap: 14,
-    padding: 16,
-    borderRadius: 28,
-    backgroundColor: "rgba(255,255,255,0.62)",
-    borderWidth: 1,
-    borderColor: "rgba(243,95,137,0.1)",
+    gap: 12,
+    marginTop: -1,
   },
-  formTitleBlock: {
-    flex: 1,
-    gap: 4,
-  },
-  title: {
-    color: colors.ink,
-    fontSize: 28,
-    lineHeight: 34,
-    fontWeight: "900",
-  },
-  subtitle: {
-    color: colors.muted,
-    fontSize: 14,
-    lineHeight: 20,
-    maxWidth: 270,
+  forgotButton: {
+    alignSelf: "flex-end",
+    paddingHorizontal: 4,
+    paddingVertical: 2,
+    outlineStyle: "none" as never,
   },
   forgotText: {
-    color: colors.accentDark,
+    color: "rgba(146,116,127,0.78)",
     fontSize: 13,
     lineHeight: 18,
-    fontWeight: "800",
+    fontWeight: "700",
     textAlign: "right",
-  },
-  backHomeButton: {
-    alignItems: "center",
-    paddingTop: 2,
-  },
-  backHomeText: {
-    color: colors.accentDark,
-    fontSize: 13,
-    lineHeight: 18,
-    fontWeight: "800",
   },
   termsRow: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 10,
+    gap: 7,
+    flexShrink: 0,
+    outlineStyle: "none" as never,
   },
   checkbox: {
-    width: 18,
-    height: 18,
-    borderRadius: 7,
+    width: 17,
+    height: 17,
+    borderRadius: 999,
     borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: "#fff",
+    borderColor: "rgba(216,125,153,0.28)",
+    backgroundColor: "rgba(255,255,255,0.32)",
+    alignItems: "center",
+    justifyContent: "center",
   },
   checkboxActive: {
-    backgroundColor: colors.accent,
-    borderColor: colors.accent,
+    backgroundColor: "rgba(222,133,162,0.86)",
+    borderColor: "rgba(222,133,162,0.86)",
+  },
+  checkboxDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: "#fff",
   },
   termsText: {
-    flex: 1,
-    color: colors.muted,
-    fontSize: 13,
-    lineHeight: 18,
+    color: "rgba(129,112,120,0.72)",
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: "700",
+  },
+  primaryButton: {
+    minHeight: 54,
+    borderRadius: 999,
+    overflow: "hidden",
+    backgroundColor: "#f0a3b7",
+    backgroundImage: "linear-gradient(100deg, #f5b2c2 0%, #ee91aa 52%, #ffc8c7 100%)" as never,
+    alignItems: "center",
+    justifyContent: "center",
+    flexDirection: "row",
+    gap: 8,
+    marginTop: 2,
+    boxShadow:
+      "0 13px 28px rgba(222, 121, 151, 0.34), 0 0 26px rgba(247, 188, 204, 0.44), inset 0 1px 1px rgba(255,255,255,0.55)" as never,
+    outlineStyle: "none" as never,
+  },
+  primaryButtonGlow: {
+    position: "absolute",
+    left: 18,
+    right: 18,
+    top: 4,
+    height: 22,
+    borderRadius: 999,
+    backgroundColor: "rgba(255,255,255,0.24)",
+  },
+  primaryButtonDisabled: {
+    opacity: 0.62,
+  },
+  primaryButtonText: {
+    color: "#fff",
+    fontSize: 17,
+    lineHeight: 22,
+    fontWeight: "850" as never,
+  },
+  switchModeButton: {
+    minHeight: 30,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: 999,
+    outlineStyle: "none" as never,
+  },
+  switchModeText: {
+    color: "rgba(92,79,86,0.7)",
+    fontSize: 15,
+    lineHeight: 20,
+    fontWeight: "700",
+  },
+  socialRow: {
+    flexDirection: "row",
+    justifyContent: "center",
+    gap: 18,
+    paddingTop: 2,
+  },
+  socialButton: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(255,255,255,0.54)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.72)",
+    boxShadow:
+      "0 10px 22px rgba(141, 112, 123, 0.12), inset 0 1px 1px rgba(255,255,255,0.84)" as never,
+    outlineStyle: "none" as never,
   },
   errorText: {
-    color: colors.accentDark,
-    backgroundColor: "#fff2f0",
-    borderColor: "#eed2cc",
+    color: "#a45f75",
+    backgroundColor: "rgba(255,242,244,0.62)",
+    borderColor: "rgba(238,180,193,0.5)",
     borderWidth: 1,
-    borderRadius: 14,
-    padding: 12,
+    borderRadius: 999,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
     fontSize: 13,
     lineHeight: 18,
+    overflow: "hidden",
   },
 });
