@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Animated, Image, StyleSheet, View, type ImageProps, type StyleProp, type ViewStyle } from "react-native";
+import { Animated, StyleSheet, View, type ImageProps, type StyleProp, type ViewStyle } from "react-native";
 
 import { BreathingSkeleton } from "@/motion/BreathingSkeleton";
 import { useMotion } from "@/motion/MotionProvider";
@@ -7,6 +7,8 @@ import { motionTokens } from "@/motion/tokens";
 
 type CrossFadeImageProps = ImageProps & {
   containerStyle?: StyleProp<ViewStyle>;
+  fadeIn?: boolean;
+  prefetched?: boolean;
   showSkeleton?: boolean;
 };
 
@@ -25,29 +27,31 @@ function getSourceKey(source: ImageProps["source"]): string {
 
 export function CrossFadeImage({
   containerStyle,
+  fadeIn = true,
   onError,
   onLoad,
+  prefetched = false,
   showSkeleton = true,
   source,
   style,
   ...props
 }: CrossFadeImageProps) {
   const { reducedMotion } = useMotion();
-  const [loaded, setLoaded] = useState(false);
+  const [loaded, setLoaded] = useState(prefetched);
   const [failed, setFailed] = useState(false);
-  const [opacity] = useState(() => new Animated.Value(0));
+  const [opacity] = useState(() => new Animated.Value(prefetched ? 1 : 0));
   const sourceKey = getSourceKey(source);
   const wrapStyle = containerStyle ? containerStyle : (style as StyleProp<ViewStyle>);
 
   useEffect(() => {
-    setLoaded(false);
+    setLoaded(prefetched);
     setFailed(false);
-    opacity.setValue(0);
-  }, [opacity, sourceKey]);
+    opacity.setValue(prefetched ? 1 : 0);
+  }, [opacity, prefetched, sourceKey]);
 
   return (
     <View style={[styles.wrap, wrapStyle]}>
-      {showSkeleton && !loaded && !failed ? <BreathingSkeleton style={StyleSheet.absoluteFill} /> : null}
+      {showSkeleton && (!loaded || failed) ? <BreathingSkeleton style={StyleSheet.absoluteFill} /> : null}
       {!failed ? (
         <Animated.Image
           {...props}
@@ -55,11 +59,15 @@ export function CrossFadeImage({
           style={[styles.image, style, { opacity }]}
           onLoad={(event) => {
             setLoaded(true);
-            Animated.timing(opacity, {
-              toValue: 1,
-              duration: reducedMotion ? 80 : motionTokens.fadeMs,
-              useNativeDriver: false,
-            }).start();
+            if (!fadeIn || prefetched) {
+              opacity.setValue(1);
+            } else {
+              Animated.timing(opacity, {
+                toValue: 1,
+                duration: reducedMotion ? 80 : motionTokens.fadeMs,
+                useNativeDriver: false,
+              }).start();
+            }
             onLoad?.(event);
           }}
           onError={(event) => {
@@ -78,6 +86,6 @@ const styles = StyleSheet.create({
     overflow: "hidden",
   },
   image: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
   },
 });

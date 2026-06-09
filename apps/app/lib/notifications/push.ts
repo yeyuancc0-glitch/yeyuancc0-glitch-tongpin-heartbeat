@@ -11,6 +11,7 @@ type PushRegistrationResult =
   | { status: "unsupported" | "denied" | "missing_project_id" | "error"; message?: string };
 
 const notificationChannelId = "couple-updates";
+const latestPushTokenStorageKey = "tongpin-latest-expo-push-token";
 let latestExpoPushToken: string | null = null;
 
 if (Platform.OS !== "web") {
@@ -26,7 +27,7 @@ if (Platform.OS !== "web") {
 
 export async function registerForPushNotifications(): Promise<PushRegistrationResult> {
   if (Platform.OS === "web") {
-    return { status: "unsupported", message: "Web MVP 不注册系统推送。" };
+    return { status: "unsupported", message: "Web 端使用独立 Web Push 订阅，不注册原生 Expo 推送。" };
   }
 
   if (!Device.isDevice) {
@@ -55,7 +56,7 @@ export async function registerForPushNotifications(): Promise<PushRegistrationRe
     }
 
     const pushToken = await Notifications.getExpoPushTokenAsync({ projectId });
-    latestExpoPushToken = pushToken.data;
+    setLatestExpoPushToken(pushToken.data);
     const platform = Platform.OS === "ios" || Platform.OS === "android" ? Platform.OS : "unknown";
 
     const { error } = await supabase.rpc("register_push_token", {
@@ -75,14 +76,15 @@ export async function registerForPushNotifications(): Promise<PushRegistrationRe
 }
 
 export async function disableCurrentPushToken() {
-  if (!latestExpoPushToken) {
+  const token = latestExpoPushToken ?? readPersistedExpoPushToken();
+  if (!token) {
     return;
   }
 
   await supabase.rpc("disable_current_push_token", {
-    push_token: latestExpoPushToken,
+    push_token: token,
   });
-  latestExpoPushToken = null;
+  setLatestExpoPushToken(null);
 }
 
 export function subscribePushTokenRefresh() {
@@ -95,7 +97,7 @@ export function subscribePushTokenRefresh() {
     if (!tokenValue) {
       return;
     }
-    latestExpoPushToken = tokenValue;
+    setLatestExpoPushToken(tokenValue);
     const platform = Platform.OS === "ios" || Platform.OS === "android" ? Platform.OS : "unknown";
     void supabase.rpc("register_push_token", {
       push_token: tokenValue,
@@ -108,6 +110,33 @@ export function subscribePushTokenRefresh() {
 
 function getExpoProjectId() {
   return Constants.easConfig?.projectId ?? Constants.expoConfig?.extra?.eas?.projectId ?? process.env.EXPO_PUBLIC_EAS_PROJECT_ID;
+}
+
+function setLatestExpoPushToken(token: string | null) {
+  latestExpoPushToken = token;
+  if (Platform.OS === "web") {
+    return;
+  }
+  try {
+    if (token) {
+      globalThis.localStorage?.setItem(latestPushTokenStorageKey, token);
+    } else {
+      globalThis.localStorage?.removeItem(latestPushTokenStorageKey);
+    }
+  } catch {
+    // Native localStorage can be absent depending on runtime; push cleanup remains best-effort.
+  }
+}
+
+function readPersistedExpoPushToken() {
+  if (Platform.OS === "web") {
+    return null;
+  }
+  try {
+    return globalThis.localStorage?.getItem(latestPushTokenStorageKey) ?? null;
+  } catch {
+    return null;
+  }
 }
 
 async function getDeviceId() {

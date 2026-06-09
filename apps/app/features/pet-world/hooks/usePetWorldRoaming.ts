@@ -34,6 +34,7 @@ export function usePetWorldRoaming({
   onChanged: () => void;
 }) {
   const lastAppliedRef = useRef<string | null>(null);
+  const lastAppliedAtRef = useRef<Record<string, number>>({});
   const lastPartnerOnlineRef = useRef(false);
   const appOpenRandomSeedRef = useRef(createAppOpenRandomSeed());
 
@@ -57,6 +58,7 @@ export function usePetWorldRoaming({
       source: firstOpenForSession ? "app_open" : "route_effect",
       randomSeed: firstOpenForSession ? appOpenRandomSeedRef.current : undefined,
       lastAppliedRef,
+      lastAppliedAtRef,
       onChanged,
     });
   }, [
@@ -83,6 +85,7 @@ export function usePetWorldRoaming({
         trigger: "idle_tick",
         source: "idle_tick",
         lastAppliedRef,
+        lastAppliedAtRef,
         onChanged,
       });
     }, idleTickMs);
@@ -135,6 +138,7 @@ export function usePetWorldRoaming({
       trigger: "partner_online",
       source: "partner_presence",
       lastAppliedRef,
+      lastAppliedAtRef,
       onChanged,
     });
   }, [
@@ -161,6 +165,7 @@ export function usePetWorldRoaming({
         trigger,
         source: "user_interaction",
         lastAppliedRef,
+        lastAppliedAtRef,
         onChanged,
       });
     },
@@ -176,6 +181,7 @@ async function applyRuleRoam({
   trigger,
   source,
   lastAppliedRef,
+  lastAppliedAtRef,
   randomSeed,
   onChanged,
 }: {
@@ -188,6 +194,7 @@ async function applyRuleRoam({
   source: string;
   randomSeed?: string;
   lastAppliedRef: MutableRefObject<string | null>;
+  lastAppliedAtRef: MutableRefObject<Record<string, number>>;
   onChanged: () => void;
 }) {
   const petSurface = normalizePetWorldSurface(creationSpace.pet_world_surface);
@@ -217,7 +224,12 @@ async function applyRuleRoam({
   if (lastAppliedRef.current === dedupeKey) {
     return false;
   }
-  lastAppliedRef.current = dedupeKey;
+  const now = Date.now();
+  const intervalKey = `${coupleId}:${resolution.reason}`;
+  const lastAppliedAt = lastAppliedAtRef.current[intervalKey] ?? 0;
+  if (lastAppliedAt > 0 && now - lastAppliedAt < resolution.minIntervalMinutes * 60 * 1000) {
+    return false;
+  }
 
   try {
     if (resolution.reason === "outside_visible_rest_rule") {
@@ -233,6 +245,11 @@ async function applyRuleRoam({
         privacy: "rule_only_low_sensitive_pet_state",
       });
     }
+    lastAppliedRef.current = dedupeKey;
+    lastAppliedAtRef.current = {
+      ...lastAppliedAtRef.current,
+      [intervalKey]: now,
+    };
     onChanged();
     return true;
   } catch (error) {

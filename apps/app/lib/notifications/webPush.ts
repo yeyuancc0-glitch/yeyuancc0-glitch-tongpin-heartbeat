@@ -39,13 +39,21 @@ export async function registerForWebPushNotifications(): Promise<WebPushRegistra
       return { status: "denied", message: "浏览器通知权限未开启。" };
     }
 
-    const registration = await navigator.serviceWorker.register(serviceWorkerPath);
+    const registration = await getReadyServiceWorkerRegistration();
+    const applicationServerKey = urlBase64ToUint8Array(vapidPublicKey);
     const existingSubscription = await registration.pushManager.getSubscription();
+    if (existingSubscription && !subscriptionMatchesVapidKey(existingSubscription, applicationServerKey)) {
+      await supabase.rpc("disable_current_push_token", {
+        push_token: existingSubscription.endpoint,
+      });
+      await existingSubscription.unsubscribe();
+    }
+    const reusableSubscription = await registration.pushManager.getSubscription();
     const subscription =
-      existingSubscription ??
+      reusableSubscription ??
       await registration.pushManager.subscribe({
         userVisibleOnly: true,
-        applicationServerKey: urlBase64ToUint8Array(vapidPublicKey),
+        applicationServerKey,
       });
 
     const subscriptionJson = subscription.toJSON();
@@ -70,7 +78,7 @@ export async function registerForWebPushNotifications(): Promise<WebPushRegistra
 
     return { status: "registered", endpoint };
   } catch (error) {
-    return { status: "error", message: error instanceof Error ? error.message : "网页推送开启失败。" };
+    return { status: "error", message: formatWebPushRegistrationError(error) };
   }
 }
 
@@ -102,4 +110,46 @@ function urlBase64ToUint8Array(base64String: string) {
   }
 
   return outputArray;
+}
+
+async function getReadyServiceWorkerRegistration() {
+  await navigator.serviceWorker.register(serviceWorkerPath);
+  return await navigator.serviceWorker.ready;
+}
+
+function subscriptionMatchesVapidKey(subscription: PushSubscription, vapidKey: Uint8Array) {
+  const key = subscription.options.applicationServerKey;
+  if (!key) {
+    return false;
+  }
+  const existing = new Uint8Array(key);
+  if (existing.length !== vapidKey.length) {
+    return false;
+  }
+  return existing.every((value, index) => value === vapidKey[index]);
+}
+
+function formatWebPushRegistrationError(error: unknown) {
+  if (!(error instanceof Error)) {
+    return "网页推送开启失败。";
+  }
+
+  const message = error.message.trim();
+  if (message.includes("push service error") || message.includes("Registration failed")) {
+    return "浏览器推送服务注册失败。Android Edge 请先确认已从桌面图标打开本站、Edge 允许通知且网络可连接浏览器推送服务，然后重试。";
+  }
+
+  if (error.name === "NotAllowedError" || message.includes("permission")) {
+    return "浏览器通知权限未开启。";
+  }
+
+  if (error.name === "InvalidAccessError" || message.includes("applicationServerKey")) {
+    return "网页推送公钥无效，请检查 Web Push VAPID 公钥配置。";
+  }
+
+  if (error.name === "InvalidStateError" || message.includes("active Service Worker")) {
+    return "网页推送服务尚未准备好，请刷新页面后重试。";
+  }
+
+  return message || "网页推送开启失败。";
 }

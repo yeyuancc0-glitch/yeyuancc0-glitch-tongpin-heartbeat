@@ -1,6 +1,6 @@
 import { type PropsWithChildren } from "react";
 
-const viewportContent = "width=device-width, initial-scale=1, minimum-scale=1, maximum-scale=1, user-scalable=no, shrink-to-fit=no, viewport-fit=cover";
+const viewportContent = "width=device-width, initial-scale=1, shrink-to-fit=no, viewport-fit=cover";
 const baseStyle = `
 html,body,#root{
   min-height:100%;
@@ -30,23 +30,6 @@ textarea[placeholder*="把今天想说的话写在这里"] {
   line-height: 30px !important;
 }
 `;
-const preventPageZoomScript = `
-(function () {
-  function prevent(event) {
-    event.preventDefault();
-  }
-
-  document.addEventListener("gesturestart", prevent, { passive: false });
-  document.addEventListener("gesturechange", prevent, { passive: false });
-  document.addEventListener("gestureend", prevent, { passive: false });
-  document.addEventListener("wheel", function (event) {
-    if (event.ctrlKey || event.metaKey) {
-      event.preventDefault();
-    }
-  }, { passive: false });
-})();
-`;
-
 export default function RootHtml({ children }: PropsWithChildren) {
   return (
     <html lang="zh-CN">
@@ -64,7 +47,6 @@ export default function RootHtml({ children }: PropsWithChildren) {
         <link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png" />
         <link rel="icon" type="image/png" sizes="512x512" href="/icon-512.png" />
         <style dangerouslySetInnerHTML={{ __html: baseStyle }} />
-        <script dangerouslySetInnerHTML={{ __html: preventPageZoomScript }} />
       </head>
       <body>{children}</body>
     </html>

@@ -5,9 +5,20 @@ import { Camera } from "lucide-react-native";
 import { AppTextInput, Card, PrimaryButton, SecondaryButton, TopBar } from "@/components/app-ui/AppUI";
 import { DateField, useToast } from "@/components/ui";
 import { useAuth } from "@/features/auth/AuthProvider";
+import { PhotoUploadInput } from "@/features/media/PhotoUploadInput";
 import { supabase } from "@/lib/supabase/client";
 import type { Profile } from "@/lib/supabase/database.types";
-import { buildStoragePath, buildThumbnailStoragePath, createImageThumbnail, createSignedUrl, isSupportedImage, storageBuckets, uploadImage } from "@/lib/supabase/storage";
+import {
+  buildStoragePath,
+  buildThumbnailStoragePath,
+  createImageThumbnail,
+  createSignedUrl,
+  createTransformedImageUrl,
+  imageTransforms,
+  isSupportedImage,
+  storageBuckets,
+  uploadImage,
+} from "@/lib/supabase/storage";
 import { colors } from "@/styles/theme";
 
 export function ProfileScreen({ onSaved, onCancel, embedded = false }: { onSaved?: () => void; onCancel?: () => void; embedded?: boolean }) {
@@ -22,6 +33,14 @@ export function ProfileScreen({ onSaved, onCancel, embedded = false }: { onSaved
   const [avatarPreviewUrl, setAvatarPreviewUrl] = useState<string | null>(null);
   const [uploadingAvatar, setUploadingAvatar] = useState(false);
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    return () => {
+      if (avatarPreviewUrl?.startsWith("blob:")) {
+        URL.revokeObjectURL(avatarPreviewUrl);
+      }
+    };
+  }, [avatarPreviewUrl]);
 
   useEffect(() => {
     if (!user) {
@@ -40,7 +59,10 @@ export function ProfileScreen({ onSaved, onCancel, embedded = false }: { onSaved
         setAvatarPath(data?.avatar_url ?? null);
         setAvatarThumbnailPath(data?.avatar_thumbnail_url ?? null);
         if (data?.avatar_url) {
-          createSignedUrl(storageBuckets.avatars, data.avatar_thumbnail_url ?? data.avatar_url).then(setAvatarPreviewUrl);
+          const previewUrl = data.avatar_thumbnail_url
+            ? createSignedUrl(storageBuckets.avatars, data.avatar_thumbnail_url)
+            : createTransformedImageUrl(storageBuckets.avatars, data.avatar_url, imageTransforms.avatarThumb, { fallback: "local-thumbnail" });
+          previewUrl.then(setAvatarPreviewUrl);
         }
       });
 
@@ -65,39 +87,46 @@ export function ProfileScreen({ onSaved, onCancel, embedded = false }: { onSaved
       });
   }, [user]);
 
-  async function pickAvatar() {
+  function pickAvatar() {
     if (!user) {
       return;
     }
     if (Platform.OS !== "web") {
-      showToast({ title: "当前端暂不支持", message: "头像上传先在 Web MVP 中开放。", tone: "info" });
+      showToast({ title: "当前端暂不支持", message: "头像上传当前先在 Web 端开放。", tone: "info" });
+    }
+  }
+
+  async function handleAvatarFiles(files: FileList) {
+    if (!user) {
+      return;
+    }
+    const file = files[0];
+    if (!file) {
+      return;
+    }
+    if (!isSupportedImage(file, 4 * 1024 * 1024)) {
+      showToast({ title: "头像格式不支持", message: "请上传 4MB 以内的 JPG、PNG、WebP 或 GIF 图片。", tone: "error" });
       return;
     }
 
-    const input = document.createElement("input");
-    input.type = "file";
-    input.accept = "image/jpeg,image/png,image/webp,image/gif";
-    input.onchange = async () => {
-      const file = input.files?.[0];
-      if (!file) {
-        return;
-      }
-      if (!isSupportedImage(file, 4 * 1024 * 1024)) {
-        showToast({ title: "头像格式不支持", message: "请上传 4MB 以内的 JPG、PNG、WebP 或 GIF 图片。", tone: "error" });
-        return;
-      }
-
-      setUploadingAvatar(true);
+    setUploadingAvatar(true);
+    try {
       const path = buildStoragePath([user.id], file.type);
       const { error: uploadError } = await uploadImage(storageBuckets.avatars, path, file);
       if (uploadError) {
-        setUploadingAvatar(false);
         showToast({ title: "头像上传失败", message: uploadError.message, tone: "error" });
         return;
       }
 
       const thumbnailFile = await createImageThumbnail(file, 220, 0.76);
       let thumbnailPath = thumbnailFile ? buildThumbnailStoragePath(path) : null;
+      if (thumbnailFile && thumbnailPath) {
+        const { error: thumbnailUploadError } = await uploadImage(storageBuckets.avatars, thumbnailPath, thumbnailFile);
+        if (thumbnailUploadError) {
+          console.warn("Avatar thumbnail upload failed:", thumbnailUploadError.message);
+          thumbnailPath = null;
+        }
+      }
 
       const updatePayload = { avatar_url: path, avatar_thumbnail_url: thumbnailPath, updated_at: new Date().toISOString() };
       let { error: profileError } = await supabase.from("profiles").update(updatePayload).eq("id", user.id);
@@ -109,19 +138,11 @@ export function ProfileScreen({ onSaved, onCancel, embedded = false }: { onSaved
           thumbnailPath = null;
         }
       }
-      setUploadingAvatar(false);
       if (profileError) {
-        await supabase.storage.from(storageBuckets.avatars).remove([path]);
+        const pathsToRemove = [path, thumbnailPath].filter((avatarStoragePath): avatarStoragePath is string => Boolean(avatarStoragePath));
+        await supabase.storage.from(storageBuckets.avatars).remove(pathsToRemove);
         showToast({ title: "头像保存失败", message: profileError.message, tone: "error" });
         return;
-      }
-      if (thumbnailFile && thumbnailPath) {
-        const { error: thumbnailUploadError } = await uploadImage(storageBuckets.avatars, thumbnailPath, thumbnailFile);
-        if (thumbnailUploadError) {
-          console.warn("Avatar thumbnail upload failed:", thumbnailUploadError.message);
-          await supabase.from("profiles").update({ avatar_thumbnail_url: null }).eq("id", user.id);
-          thumbnailPath = null;
-        }
       }
 
       if (avatarPath) {
@@ -130,10 +151,19 @@ export function ProfileScreen({ onSaved, onCancel, embedded = false }: { onSaved
       }
       setAvatarPath(path);
       setAvatarThumbnailPath(thumbnailPath);
-      setAvatarPreviewUrl(URL.createObjectURL(file));
+      const nextPreviewUrl = URL.createObjectURL(file);
+      setAvatarPreviewUrl((current) => {
+        if (current?.startsWith("blob:")) {
+          URL.revokeObjectURL(current);
+        }
+        return nextPreviewUrl;
+      });
       showToast({ title: "头像已更新", tone: "success" });
-    };
-    input.click();
+    } catch (error) {
+      showToast({ title: "头像上传失败", message: error instanceof Error ? error.message : "请稍后重试。", tone: "error" });
+    } finally {
+      setUploadingAvatar(false);
+    }
   }
 
   async function removeAvatar() {
@@ -141,24 +171,29 @@ export function ProfileScreen({ onSaved, onCancel, embedded = false }: { onSaved
       return;
     }
     setUploadingAvatar(true);
-    let { error } = await supabase.from("profiles").update({ avatar_url: null, avatar_thumbnail_url: null, updated_at: new Date().toISOString() }).eq("id", user.id);
-    if (error && /avatar_thumbnail_url|schema cache|column/i.test(error.message)) {
-      const fallbackResult = await supabase.from("profiles").update({ avatar_url: null, updated_at: new Date().toISOString() }).eq("id", user.id);
-      error = fallbackResult.error;
+    try {
+      let { error } = await supabase.from("profiles").update({ avatar_url: null, avatar_thumbnail_url: null, updated_at: new Date().toISOString() }).eq("id", user.id);
+      if (error && /avatar_thumbnail_url|schema cache|column/i.test(error.message)) {
+        const fallbackResult = await supabase.from("profiles").update({ avatar_url: null, updated_at: new Date().toISOString() }).eq("id", user.id);
+        error = fallbackResult.error;
+      }
+      if (!error) {
+        const pathsToRemove = [avatarPath, avatarThumbnailPath].filter((path): path is string => Boolean(path));
+        await supabase.storage.from(storageBuckets.avatars).remove(pathsToRemove);
+      }
+      if (error) {
+        showToast({ title: "移除头像失败", message: error.message, tone: "error" });
+        return;
+      }
+      setAvatarPath(null);
+      setAvatarThumbnailPath(null);
+      setAvatarPreviewUrl(null);
+      showToast({ title: "头像已移除", tone: "success" });
+    } catch (error) {
+      showToast({ title: "移除头像失败", message: error instanceof Error ? error.message : "请稍后重试。", tone: "error" });
+    } finally {
+      setUploadingAvatar(false);
     }
-    if (!error) {
-      const pathsToRemove = [avatarPath, avatarThumbnailPath].filter((path): path is string => Boolean(path));
-      await supabase.storage.from(storageBuckets.avatars).remove(pathsToRemove);
-    }
-    setUploadingAvatar(false);
-    if (error) {
-      showToast({ title: "移除头像失败", message: error.message, tone: "error" });
-      return;
-    }
-    setAvatarPath(null);
-    setAvatarThumbnailPath(null);
-    setAvatarPreviewUrl(null);
-    showToast({ title: "头像已移除", tone: "success" });
   }
 
   async function saveProfile() {
@@ -167,79 +202,83 @@ export function ProfileScreen({ onSaved, onCancel, embedded = false }: { onSaved
     }
 
     setBusy(true);
-    const savedAt = new Date().toISOString();
-    const upsertPayload = {
-      id: user.id,
-      display_name: displayName.trim() || user.email?.split("@")[0] || "未命名",
-      avatar_url: avatarPath,
-      avatar_thumbnail_url: avatarThumbnailPath,
-      birthdate: birthdate.trim() || null,
-      updated_at: savedAt,
-    };
-    let { error } = await supabase.from("profiles").upsert(upsertPayload);
-    if (error && /avatar_thumbnail_url|schema cache|column/i.test(error.message)) {
-      const fallbackPayload = { ...upsertPayload };
-      delete (fallbackPayload as Partial<typeof upsertPayload>).avatar_thumbnail_url;
-      const fallbackResult = await supabase.from("profiles").upsert(fallbackPayload);
-      error = fallbackResult.error;
-    }
-
-    if (error) {
-      setBusy(false);
-      showToast({ title: "保存失败", message: error.message, tone: "error" });
-      return;
-    }
-
-    let dateMessage = "";
-    if (loveStartDate) {
-      // 暂存到本地，用于没有绑定时流转到 PairingScreen
-      if (Platform.OS === "web" && typeof window !== "undefined" && window.localStorage) {
-        window.localStorage.setItem("temp_love_start_date", loveStartDate);
+    try {
+      const savedAt = new Date().toISOString();
+      const upsertPayload = {
+        id: user.id,
+        display_name: displayName.trim() || user.email?.split("@")[0] || "未命名",
+        avatar_url: avatarPath,
+        avatar_thumbnail_url: avatarThumbnailPath,
+        birthdate: birthdate.trim() || null,
+        updated_at: savedAt,
+      };
+      let { error } = await supabase.from("profiles").upsert(upsertPayload);
+      if (error && /avatar_thumbnail_url|schema cache|column/i.test(error.message)) {
+        const fallbackPayload = { ...upsertPayload };
+        delete (fallbackPayload as Partial<typeof upsertPayload>).avatar_thumbnail_url;
+        const fallbackResult = await supabase.from("profiles").upsert(fallbackPayload);
+        error = fallbackResult.error;
       }
 
-      // 如果已有活跃的情侣关系，直接通过 RPC 同步更新情侣表的 started_at
-      const { data: coupleData } = await supabase
-        .from("couples")
-        .select("id, started_at")
-        .eq("status", "active")
-        .maybeSingle();
+      if (error) {
+        showToast({ title: "保存失败", message: error.message, tone: "error" });
+        return;
+      }
 
-      if (coupleData) {
-        if (coupleData.started_at !== loveStartDate) {
-          const { error: coupleError } = await supabase.rpc("update_active_couple_dates", {
-            relationship_started_at: loveStartDate,
-          });
-          if (coupleError) {
-            console.warn("Update couple date error:", coupleError);
+      let dateMessage = "";
+      if (loveStartDate) {
+        // 暂存到本地，用于没有绑定时流转到 PairingScreen
+        if (Platform.OS === "web" && typeof window !== "undefined" && window.localStorage) {
+          window.localStorage.setItem("temp_love_start_date", loveStartDate);
+        }
+
+        // 如果已有活跃的情侣关系，直接通过 RPC 同步更新情侣表的 started_at
+        const { data: coupleData } = await supabase
+          .from("couples")
+          .select("id, started_at")
+          .eq("status", "active")
+          .maybeSingle();
+
+        if (coupleData) {
+          if (coupleData.started_at !== loveStartDate) {
+            const { error: coupleError } = await supabase.rpc("update_active_couple_dates", {
+              relationship_started_at: loveStartDate,
+            });
+            if (coupleError) {
+              console.warn("Update couple date error:", coupleError);
+            } else {
+              dateMessage = "恋爱开始日期已同步更新。";
+            }
           } else {
-            dateMessage = "恋爱开始日期已同步更新。";
+            dateMessage = "恋爱开始日期已保存。";
           }
         } else {
-          dateMessage = "恋爱开始日期已保存。";
+          dateMessage = "恋爱开始日期已暂存，绑定后将自动同步。";
         }
       } else {
-        dateMessage = "恋爱开始日期已暂存，绑定后将自动同步。";
+        if (Platform.OS === "web" && typeof window !== "undefined" && window.localStorage) {
+          window.localStorage.removeItem("temp_love_start_date");
+        }
       }
-    } else {
-      if (Platform.OS === "web" && typeof window !== "undefined" && window.localStorage) {
-        window.localStorage.removeItem("temp_love_start_date");
-      }
-    }
 
-    setBusy(false);
-    showToast({
-      title: "资料已保存",
-      message: dateMessage || "下一步可以绑定另一半。",
-      tone: "success",
-    });
-    onSaved?.();
+      showToast({
+        title: "资料已保存",
+        message: dateMessage || "下一步可以绑定另一半。",
+        tone: "success",
+      });
+      onSaved?.();
+    } catch (error) {
+      showToast({ title: "保存失败", message: error instanceof Error ? error.message : "请稍后重试。", tone: "error" });
+    } finally {
+      setBusy(false);
+    }
   }
 
   return (
     <View style={styles.wrap}>
       {embedded ? null : <TopBar title={profile ? "完善资料" : "先认识一下你"} subtitle="头像和昵称会展示给另一半。" />}
       <Card>
-        <Pressable accessibilityRole="button" accessibilityLabel="上传头像" onPress={pickAvatar} style={styles.avatarUpload}>
+        <Pressable accessibilityRole="button" accessibilityLabel="上传头像" onPress={Platform.OS === "web" ? undefined : pickAvatar} style={styles.avatarUpload}>
           <View style={styles.avatarCircleOuter}>
             <View style={styles.avatarCircleInner}>
               {avatarPreviewUrl ? (
@@ -251,6 +290,7 @@ export function ProfileScreen({ onSaved, onCancel, embedded = false }: { onSaved
           </View>
           <Text style={styles.uploadText}>{uploadingAvatar ? "头像处理中" : avatarPreviewUrl ? "更换头像" : "上传头像"}</Text>
           <Text style={styles.hintText}>让 TA 一眼认出你</Text>
+          <PhotoUploadInput accessibilityLabel="上传头像" disabled={uploadingAvatar || !user} onFiles={handleAvatarFiles} />
         </Pressable>
         {avatarPath ? <SecondaryButton label="移除头像" onPress={removeAvatar} danger loading={uploadingAvatar} /> : null}
         <View style={styles.fieldGroup}>
@@ -278,6 +318,7 @@ const styles = StyleSheet.create({
     gap: 18,
   },
   avatarUpload: {
+    position: "relative",
     alignItems: "center",
     gap: 10,
     paddingVertical: 16,

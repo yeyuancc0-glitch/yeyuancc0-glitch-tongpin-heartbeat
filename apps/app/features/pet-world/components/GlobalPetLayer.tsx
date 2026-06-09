@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { createPortal } from "react-dom";
 import { Platform, StyleSheet, Text, View } from "react-native";
 import { ImagePlus, Mail } from "lucide-react-native";
 
@@ -10,6 +9,7 @@ import { petRigCueFromJson } from "@/features/pet/services/petAiBrain";
 import { petSizeScale, type PetUserSettings } from "@/features/pet/userPetSettings";
 import { sanitizeDirectPetText, sanitizePassivePetText } from "@/features/pet-world/logic/petExpression";
 import type { PetWorldSurface } from "@/features/pet-world/logic/petWorldRoutes";
+import { renderPortal } from "@/lib/platform/portal";
 import type { CreationSpace } from "@/lib/supabase/database.types";
 import { colors } from "@/styles/theme";
 
@@ -464,7 +464,7 @@ export function GlobalPetLayer({ visible, surface = "home", creationSpace, realt
     </div>
   );
 
-  return createPortal(layer, portalHost);
+  return renderPortal(layer, portalHost);
 }
 
 function petWorldDecisionFromJson(value: CreationSpace["last_world_decision"] | null | undefined): GlobalPetWorldDecision | null {
@@ -594,49 +594,42 @@ function globalPetBubbleWidth(text: string, hasSymbol: boolean) {
 }
 
 function resolveAnchorPosition(anchor: PetAnchorName, host: HTMLElement | null, size = { width: petWidth, height: petHeight }) {
-  const rect = document.querySelector(`[data-pet-anchor="${anchor}"]`)?.getBoundingClientRect();
+  const searchRoot: ParentNode = host && host !== document.body ? host : document;
+  const rect = searchRoot.querySelector(`[data-pet-anchor="${anchor}"]`)?.getBoundingClientRect();
   if (!rect) {
-    return clampPosition(window.innerWidth - size.width - 22, window.innerHeight * 0.52, host, size);
+    return resolveSafePetPosition(clampPosition(window.innerWidth - size.width - 22, window.innerHeight * 0.52, host, size), host, size);
   }
   const pageRect = rectToLocal(rect, host);
   const lane = anchorLane(anchor, host, size);
+  let target: { x: number; y: number };
   if (anchor === "home-quick-sync") {
-    return clampPosition(lane.x, pageRect.top + 18, host, size);
+    target = clampPosition(lane.x, pageRect.top + 18, host, size);
+  } else if (anchor === "home-photo-album") {
+    target = clampPosition(lane.x, pageRect.top + Math.min(180, pageRect.height * 0.4), host, size);
+  } else if (anchor === "home-message-board") {
+    target = clampPosition(lane.x, pageRect.top + 22, host, size);
+  } else if (anchor === "home-pet-stage") {
+    target = clampPosition(lane.x, pageRect.top + 28, host, size);
+  } else if (anchor === "home-love-letter") {
+    target = clampPosition(lane.x, pageRect.top - size.height * 0.28, host, size);
+  } else if (anchor === "home-creation-entry") {
+    target = clampPosition(pageRect.left - size.width * 0.64, pageRect.top - size.height * 0.72, host, size);
+  } else if (anchor === "share-capsule-composer") {
+    target = clampPosition(lane.x, pageRect.top + 4, host, size);
+  } else if (anchor === "share-today-capsule") {
+    target = clampPosition(lane.x, pageRect.top - size.height * 0.18, host, size);
+  } else if (anchor === "share-letter-delivery") {
+    target = clampPosition(lane.x, pageRect.top + 12, host, size);
+  } else if (anchor === "memory-hero") {
+    target = clampPosition(lane.x, pageRect.top + pageRect.height * 0.1, host, size);
+  } else if (anchor === "memory-pet-cue") {
+    target = clampPosition(lane.x, pageRect.top - size.height * 0.18, host, size);
+  } else if (anchor === "memory-calendar") {
+    target = clampPosition(lane.x, pageRect.top - size.height * 0.18, host, size);
+  } else {
+    target = clampPosition(lane.x, pageRect.top + pageRect.height * 0.42, host, size);
   }
-  if (anchor === "home-photo-album") {
-    return clampPosition(lane.x, pageRect.top + Math.min(180, pageRect.height * 0.4), host, size);
-  }
-  if (anchor === "home-message-board") {
-    return clampPosition(lane.x, pageRect.top + 22, host, size);
-  }
-  if (anchor === "home-pet-stage") {
-    return clampPosition(lane.x, pageRect.top + 28, host, size);
-  }
-  if (anchor === "home-love-letter") {
-    return clampPosition(lane.x, pageRect.top - size.height * 0.28, host, size);
-  }
-  if (anchor === "home-creation-entry") {
-    return clampPosition(pageRect.left - size.width * 0.64, pageRect.top - size.height * 0.72, host, size);
-  }
-  if (anchor === "share-capsule-composer") {
-    return clampPosition(lane.x, pageRect.top + 4, host, size);
-  }
-  if (anchor === "share-today-capsule") {
-    return clampPosition(lane.x, pageRect.top - size.height * 0.18, host, size);
-  }
-  if (anchor === "share-letter-delivery") {
-    return clampPosition(lane.x, pageRect.top + 12, host, size);
-  }
-  if (anchor === "memory-hero") {
-    return clampPosition(lane.x, pageRect.top + pageRect.height * 0.1, host, size);
-  }
-  if (anchor === "memory-pet-cue") {
-    return clampPosition(lane.x, pageRect.top - size.height * 0.18, host, size);
-  }
-  if (anchor === "memory-calendar") {
-    return clampPosition(lane.x, pageRect.top - size.height * 0.18, host, size);
-  }
-  return clampPosition(lane.x, pageRect.top + pageRect.height * 0.42, host, size);
+  return resolveSafePetPosition(target, host, size);
 }
 
 function clampPosition(x: number, y: number, host: HTMLElement | null = null, size = { width: petWidth, height: petHeight }) {
@@ -648,6 +641,76 @@ function clampPosition(x: number, y: number, host: HTMLElement | null = null, si
     x: Math.round(Math.max(margin, Math.min(x, maxX))),
     y: Math.round(Math.max(pageTopPadding, Math.min(y, maxY))),
   };
+}
+
+function resolveSafePetPosition(position: { x: number; y: number }, host: HTMLElement | null, size = { width: petWidth, height: petHeight }) {
+  const safeRects = safeZoneRects(host);
+  if (safeRects.length === 0) {
+    return position;
+  }
+  const offsets = [
+    { x: 0, y: 0 },
+    { x: size.width * 0.72, y: 0 },
+    { x: -size.width * 0.72, y: 0 },
+    { x: 0, y: -size.height * 0.58 },
+    { x: 0, y: size.height * 0.58 },
+    { x: size.width * 0.54, y: -size.height * 0.42 },
+    { x: -size.width * 0.54, y: -size.height * 0.42 },
+    { x: size.width * 0.54, y: size.height * 0.42 },
+    { x: -size.width * 0.54, y: size.height * 0.42 },
+  ];
+  let best = position;
+  let bestScore = safePositionScore(position, position, safeRects, size);
+  for (const offset of offsets) {
+    const candidate = clampPosition(position.x + offset.x, position.y + offset.y, host, size);
+    const score = safePositionScore(candidate, position, safeRects, size);
+    if (score < bestScore) {
+      best = candidate;
+      bestScore = score;
+    }
+  }
+  return best;
+}
+
+function safeZoneRects(host: HTMLElement | null) {
+  const searchRoot: ParentNode = host && host !== document.body ? host : document;
+  const nodes = Array.from(searchRoot.querySelectorAll<HTMLElement>("[data-pet-safe-zone]"));
+  return nodes.map((node) => rectToLocal(node.getBoundingClientRect(), host));
+}
+
+function safePositionScore(
+  candidate: { x: number; y: number },
+  origin: { x: number; y: number },
+  safeRects: ReturnType<typeof safeZoneRects>,
+  size = { width: petWidth, height: petHeight },
+) {
+  const petRect = {
+    left: candidate.x + size.width * 0.1,
+    right: candidate.x + size.width * 0.9,
+    top: candidate.y + size.height * 0.16,
+    bottom: candidate.y + size.height * 0.98,
+  };
+  const overlapPenalty = safeRects.reduce((total, rect) => total + rectOverlapArea(petRect, expandRect(rect, 8)), 0);
+  const travelPenalty = Math.hypot(candidate.x - origin.x, candidate.y - origin.y) * 0.08;
+  return overlapPenalty + travelPenalty;
+}
+
+function expandRect(rect: ReturnType<typeof rectToLocal>, amount: number) {
+  return {
+    left: rect.left - amount,
+    right: rect.right + amount,
+    top: rect.top - amount,
+    bottom: rect.bottom + amount,
+  };
+}
+
+function rectOverlapArea(
+  first: { left: number; right: number; top: number; bottom: number },
+  second: { left: number; right: number; top: number; bottom: number },
+) {
+  const width = Math.max(0, Math.min(first.right, second.right) - Math.max(first.left, second.left));
+  const height = Math.max(0, Math.min(first.bottom, second.bottom) - Math.max(first.top, second.top));
+  return width * height;
 }
 
 function randomAnchorIndex(length: number) {
@@ -718,6 +781,8 @@ function rectToLocal(rect: DOMRect, host: HTMLElement | null) {
       left: rect.left - hostRect.left,
       right: rect.right - hostRect.left,
       top: rect.top - hostRect.top,
+      bottom: rect.bottom - hostRect.top,
+      width: rect.width,
       height: rect.height,
     };
   }
@@ -725,6 +790,8 @@ function rectToLocal(rect: DOMRect, host: HTMLElement | null) {
     left: rect.left + window.scrollX,
     right: rect.right + window.scrollX,
     top: rect.top + window.scrollY,
+    bottom: rect.bottom + window.scrollY,
+    width: rect.width,
     height: rect.height,
   };
 }

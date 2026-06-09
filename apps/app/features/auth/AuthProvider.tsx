@@ -9,6 +9,8 @@ type AuthContextValue = {
   session: Session | null;
   user: User | null;
   loading: boolean;
+  passwordRecovery: boolean;
+  clearPasswordRecovery: () => void;
   signOut: () => Promise<void>;
 };
 
@@ -34,6 +36,7 @@ function readAuthHashError() {
 export function AuthProvider({ children }: PropsWithChildren) {
   const { showToast } = useToast();
   const [session, setSession] = useState<Session | null>(null);
+  const [passwordRecovery, setPasswordRecovery] = useState(false);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -76,10 +79,15 @@ export function AuthProvider({ children }: PropsWithChildren) {
         }
       });
 
-    const { data } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+    const { data } = supabase.auth.onAuthStateChange((event, nextSession) => {
       const hashError = readAuthHashError();
       if (hashError) {
         showToast({ ...hashError, tone: "error" });
+      }
+      if (event === "PASSWORD_RECOVERY") {
+        setPasswordRecovery(true);
+      } else if (event === "SIGNED_OUT") {
+        setPasswordRecovery(false);
       }
       setSession(nextSession);
       setLoading(false);
@@ -112,23 +120,44 @@ export function AuthProvider({ children }: PropsWithChildren) {
     };
   }, [session?.user]);
 
+  useEffect(() => {
+    if (!session?.user) {
+      return undefined;
+    }
+
+    let subscription: { remove: () => void } | null = null;
+    void import("@/lib/notifications/openEvents").then(({ registerNotificationOpenBridge }) => {
+      subscription = registerNotificationOpenBridge();
+    });
+
+    return () => {
+      subscription?.remove();
+    };
+  }, [session?.user]);
+
   const value = useMemo<AuthContextValue>(
     () => ({
       session,
       user: session?.user ?? null,
       loading,
+      passwordRecovery,
+      clearPasswordRecovery: () => setPasswordRecovery(false),
       signOut: async () => {
-        if (Platform.OS === "web") {
-          const { disableCurrentWebPushSubscription } = await import("@/lib/notifications/webPush");
-          await disableCurrentWebPushSubscription();
-        } else {
-          const { disableCurrentPushToken } = await import("@/lib/notifications/push");
-          await disableCurrentPushToken();
+        try {
+          if (Platform.OS === "web") {
+            const { disableCurrentWebPushSubscription } = await import("@/lib/notifications/webPush");
+            await disableCurrentWebPushSubscription();
+          } else {
+            const { disableCurrentPushToken } = await import("@/lib/notifications/push");
+            await disableCurrentPushToken();
+          }
+        } catch (error) {
+          console.warn("Push cleanup before sign out failed:", error);
         }
         await supabase.auth.signOut();
       },
     }),
-    [loading, session]
+    [loading, passwordRecovery, session]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

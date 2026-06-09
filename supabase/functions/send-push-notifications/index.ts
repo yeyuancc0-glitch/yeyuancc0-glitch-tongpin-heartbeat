@@ -22,8 +22,13 @@ type PushDeliveryRow = {
   notification: NotificationRow | null;
 };
 
+type ClaimedPushDeliveryRow = Omit<PushDeliveryRow, "notification"> & {
+  notification: NotificationRow | Record<string, unknown> | null;
+};
+
 type PushTokenRow = {
   id: string;
+  user_id: string;
   token: string;
   provider: "expo" | "web_push";
   web_p256dh: string | null;
@@ -48,6 +53,10 @@ type ExpoTicket = {
 const expoPushEndpoint = "https://exp.host/--/api/v2/push/send";
 const pushTtlSeconds = 60 * 5;
 const maxDeliveriesPerRun = 50;
+const maxPushTokensPerUser = 10;
+const expoPushBatchSize = 100;
+const webPushConcurrency = 6;
+const deliveryConcurrency = 8;
 const maxBodyLength = 90;
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -93,15 +102,11 @@ Deno.serve(async (request) => {
     return jsonResponse({ error: authError }, 401);
   }
 
-  const { data: deliveries, error } = await supabase
-    .from("push_deliveries")
-    .select(
-      "id, notification_id, user_id, attempt_count, created_at, notification:notifications(id, couple_id, user_id, actor_id, type, title, body, related_table, related_id)"
-    )
-    .in("status", ["pending", "failed"])
-    .lt("attempt_count", 3)
-    .order("created_at", { ascending: true })
-    .limit(maxDeliveriesPerRun);
+  await supabase.rpc("requeue_stale_push_deliveries", {});
+
+  const { data: deliveries, error } = await supabase.rpc("claim_push_deliveries", {
+    max_count: maxDeliveriesPerRun,
+  });
 
   if (error) {
     return jsonResponse({ error: error.message }, 500);
@@ -111,41 +116,49 @@ Deno.serve(async (request) => {
   let skipped = 0;
   let failed = 0;
 
-  for (const delivery of (deliveries ?? []) as PushDeliveryRow[]) {
-    const notification = delivery.notification;
-    if (!notification) {
+  const claimedDeliveries = normalizeClaimedDeliveries(deliveries as ClaimedPushDeliveryRow[] | null);
+  const deliveriesNeedingTokens: PushDeliveryRow[] = [];
+
+  await runWithConcurrency(claimedDeliveries, deliveryConcurrency, async (delivery) => {
+    if (!delivery.notification) {
       await markDelivery(delivery.id, "skipped", delivery.attempt_count, "notification_missing");
       skipped += 1;
-      continue;
+      return;
     }
 
     if (isDeliveryExpired(delivery)) {
       await markDelivery(delivery.id, "skipped", delivery.attempt_count, "push_delivery_expired");
       skipped += 1;
-      continue;
+      return;
     }
 
-    const { data: tokens, error: tokensError } = await supabase
-      .from("push_tokens")
-      .select("id, token, provider, web_p256dh, web_auth")
-      .eq("user_id", delivery.user_id)
-      .in("provider", ["expo", "web_push"])
-      .eq("enabled", true)
-      .is("revoked_at", null)
-      .order("last_seen_at", { ascending: false })
-      .limit(10);
+    deliveriesNeedingTokens.push(delivery);
+  });
 
-    if (tokensError) {
-      await markDelivery(delivery.id, "failed", delivery.attempt_count, tokensError.message);
-      failed += 1;
-      continue;
-    }
+  let tokensByUserId: Map<string, PushTokenRow[]>;
+  try {
+    tokensByUserId = await loadPushTokensByUserId(deliveriesNeedingTokens);
+  } catch (error) {
+    await runWithConcurrency(deliveriesNeedingTokens, deliveryConcurrency, async (delivery) => {
+      await markDelivery(delivery.id, "failed", delivery.attempt_count, error instanceof Error ? error.message : "push_token_query_failed");
+    });
+    failed = deliveriesNeedingTokens.length;
+    return jsonResponse({
+      processed: claimedDeliveries.length,
+      sent,
+      skipped,
+      failed,
+      error: error instanceof Error ? error.message : "push_token_query_failed",
+    }, 500);
+  }
 
-    const pushTokens = (tokens ?? []) as PushTokenRow[];
+  await runWithConcurrency(deliveriesNeedingTokens, deliveryConcurrency, async (delivery) => {
+    const notification = delivery.notification as NotificationRow;
+    const pushTokens = tokensByUserId.get(delivery.user_id) ?? [];
     if (!pushTokens.length) {
       await markDelivery(delivery.id, "skipped", delivery.attempt_count, "no_active_push_tokens");
       skipped += 1;
-      continue;
+      return;
     }
 
     const payload = buildPushPayload(notification);
@@ -186,16 +199,12 @@ Deno.serve(async (request) => {
       }
 
       if (successfulDeliveries > 0) {
-        await supabase
-          .from("push_deliveries")
-          .update({
-            status: "sent",
-            attempt_count: delivery.attempt_count + 1,
-            expo_ticket_id: null,
-            last_error: tokenErrors[0] ?? null,
-            sent_at: new Date().toISOString(),
-          })
-          .eq("id", delivery.id);
+        await supabase.rpc("mark_push_delivery_result", {
+          delivery_id: delivery.id,
+          next_status: "sent",
+          previous_attempt_count: delivery.attempt_count,
+          error_message: tokenErrors[0] ?? null,
+        });
         sent += 1;
       } else {
         await markDelivery(delivery.id, "failed", delivery.attempt_count, tokenErrors[0] ?? "push_delivery_failed");
@@ -205,40 +214,109 @@ Deno.serve(async (request) => {
       await markDelivery(delivery.id, "failed", delivery.attempt_count, error instanceof Error ? error.message : "expo_request_failed");
       failed += 1;
     }
-  }
-
-  return jsonResponse({ processed: deliveries?.length ?? 0, sent, skipped, failed });
-});
-
-async function sendExpoPushMessages(messages: unknown[], pushTokens: PushTokenRow[]) {
-  const response = await fetch(expoPushEndpoint, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Accept: "application/json",
-      "Accept-encoding": "gzip, deflate",
-    },
-    body: JSON.stringify(messages),
   });
 
-  const body = await response.json().catch(() => null) as { data?: ExpoTicket[]; errors?: unknown[] } | null;
-  if (!response.ok) {
-    return { sentCount: 0, errors: [`expo_http_${response.status}`] };
+  return jsonResponse({ processed: claimedDeliveries.length, sent, skipped, failed });
+});
+
+function normalizeClaimedDeliveries(deliveries: ClaimedPushDeliveryRow[] | null): PushDeliveryRow[] {
+  return (deliveries ?? []).map((delivery) => ({
+    ...delivery,
+    notification: normalizeNotificationRow(delivery.notification),
+  }));
+}
+
+function normalizeNotificationRow(value: ClaimedPushDeliveryRow["notification"]): NotificationRow | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const row = value as Record<string, unknown>;
+  return {
+    id: String(row.id ?? ""),
+    couple_id: typeof row.couple_id === "string" ? row.couple_id : null,
+    user_id: String(row.user_id ?? ""),
+    actor_id: typeof row.actor_id === "string" ? row.actor_id : null,
+    type: normalizeNotificationType(row.type),
+    title: String(row.title ?? ""),
+    body: typeof row.body === "string" ? row.body : null,
+    related_table: typeof row.related_table === "string" ? row.related_table : null,
+    related_id: typeof row.related_id === "string" ? row.related_id : null,
+  };
+}
+
+function normalizeNotificationType(value: unknown): NotificationRow["type"] {
+  return typeof value === "string" && ["letter", "message", "checkin", "calendar_event", "system"].includes(value)
+    ? value as NotificationRow["type"]
+    : "system";
+}
+
+async function loadPushTokensByUserId(deliveries: PushDeliveryRow[]) {
+  const userIds = Array.from(new Set(deliveries.map((delivery) => delivery.user_id).filter(Boolean)));
+  if (!userIds.length) {
+    return new Map<string, PushTokenRow[]>();
   }
 
-  const tickets = body?.data ?? [];
+  const { data, error } = await supabase
+    .from("push_tokens")
+    .select("id, user_id, token, provider, web_p256dh, web_auth")
+    .in("user_id", userIds)
+    .in("provider", ["expo", "web_push"])
+    .eq("enabled", true)
+    .is("revoked_at", null)
+    .order("last_seen_at", { ascending: false });
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  const tokensByUserId = new Map<string, PushTokenRow[]>();
+  for (const token of (data ?? []) as PushTokenRow[]) {
+    const tokens = tokensByUserId.get(token.user_id) ?? [];
+    if (tokens.length >= maxPushTokensPerUser) {
+      continue;
+    }
+    tokens.push(token);
+    tokensByUserId.set(token.user_id, tokens);
+  }
+
+  return tokensByUserId;
+}
+
+async function sendExpoPushMessages(messages: unknown[], pushTokens: PushTokenRow[]) {
+  let sentCount = 0;
+  const errors: string[] = [];
   const invalidTokenIds: string[] = [];
-  const errors = tickets
-    .map((ticket, index) => {
+
+  for (const batch of chunkWithIndexes(messages, expoPushBatchSize)) {
+    const response = await fetch(expoPushEndpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+        "Accept-encoding": "gzip, deflate",
+      },
+      body: JSON.stringify(batch.items),
+    });
+
+    const body = await response.json().catch(() => null) as { data?: ExpoTicket[]; errors?: unknown[] } | null;
+    if (!response.ok) {
+      errors.push(`expo_http_${response.status}`);
+      continue;
+    }
+
+    const tickets = body?.data ?? [];
+    tickets.forEach((ticket, batchIndex) => {
+      const originalIndex = batch.startIndex + batchIndex;
       if (ticket.status === "ok") {
-        return null;
+        sentCount += 1;
+        return;
       }
-      if (ticket.details?.error === "DeviceNotRegistered" && pushTokens[index]) {
-        invalidTokenIds.push(pushTokens[index].id);
+      if (ticket.details?.error === "DeviceNotRegistered" && pushTokens[originalIndex]) {
+        invalidTokenIds.push(pushTokens[originalIndex].id);
       }
-      return ticket.message || ticket.details?.error || "expo_ticket_error";
-    })
-    .filter(Boolean) as string[];
+      errors.push(ticket.message || ticket.details?.error || "expo_ticket_error");
+    });
+  }
 
   if (invalidTokenIds.length) {
     await supabase
@@ -247,10 +325,7 @@ async function sendExpoPushMessages(messages: unknown[], pushTokens: PushTokenRo
       .in("id", invalidTokenIds);
   }
 
-  return {
-    sentCount: tickets.filter((ticket) => ticket.status === "ok").length,
-    errors,
-  };
+  return { sentCount, errors };
 }
 
 async function sendWebPushMessages(
@@ -267,23 +342,23 @@ async function sendWebPushMessages(
   const errors: string[] = [];
   let sentCount = 0;
 
-  for (const token of pushTokens) {
+  await runWithConcurrency(pushTokens, webPushConcurrency, async (token) => {
     if (!token.web_p256dh || !token.web_auth) {
       errors.push("web_push_subscription_incomplete");
-      continue;
+      return;
     }
 
     const result = await sendWebPushMessage(token, notification, payload, deliveryWindow);
     if (result.ok) {
       sentCount += 1;
-      continue;
+      return;
     }
 
     errors.push(result.error);
     if (result.revoke) {
       invalidTokenIds.push(token.id);
     }
-  }
+  });
 
   if (invalidTokenIds.length) {
     await supabase
@@ -359,7 +434,7 @@ function buildPushPayload(notification: NotificationRow) {
   if (notification.type === "checkin") {
     return {
       title: "TA 存下了今日胶囊",
-      body: body || "有一颗新的心情胶囊等你查看。",
+      body: body && !looksLikePrivateBody(body) ? body : "有一颗新的心情胶囊等你查看。",
     };
   }
 
@@ -380,7 +455,7 @@ function buildPushPayload(notification: NotificationRow) {
   if (notification.type === "message") {
     return {
       title: `${actor} 给你留了一句话`,
-      body: body || "打开看看这条留言。",
+      body: "打开看看这条留言。",
     };
   }
 
@@ -388,6 +463,10 @@ function buildPushPayload(notification: NotificationRow) {
     title: notification.title,
     body: body || "同频跳动有一条新提醒。",
   };
+}
+
+function looksLikePrivateBody(value: string) {
+  return value.includes("｜") || value.length > 36;
 }
 
 function truncate(value: string) {
@@ -418,6 +497,27 @@ function isDeliveryExpired(delivery: PushDeliveryRow) {
   return Date.now() - queuedAtMs > pushTtlSeconds * 1000;
 }
 
+async function runWithConcurrency<T>(
+  items: T[],
+  concurrency: number,
+  worker: (item: T, index: number) => Promise<void>,
+) {
+  const workers = Array.from({ length: Math.min(Math.max(1, concurrency), items.length) }, async (_, workerIndex) => {
+    for (let index = workerIndex; index < items.length; index += concurrency) {
+      await worker(items[index], index);
+    }
+  });
+  await Promise.all(workers);
+}
+
+function chunkWithIndexes<T>(items: T[], size: number) {
+  const chunks: Array<{ startIndex: number; items: T[] }> = [];
+  for (let index = 0; index < items.length; index += size) {
+    chunks.push({ startIndex: index, items: items.slice(index, index + size) });
+  }
+  return chunks;
+}
+
 async function authorizeRequest(request: Request) {
   const authorization = request.headers.get("Authorization") ?? "";
   const token = authorization.replace(/^Bearer\s+/i, "");
@@ -434,23 +534,16 @@ async function authorizeRequest(request: Request) {
     return null;
   }
 
-  const { data, error } = await supabase.auth.getUser(token);
-  if (error || !data.user) {
-    return "invalid_authorization";
-  }
-
-  return null;
+  return "invalid_authorization";
 }
 
 async function markDelivery(id: string, status: "skipped" | "failed", attemptCount: number, error: string) {
-  await supabase
-    .from("push_deliveries")
-    .update({
-      status,
-      attempt_count: attemptCount + 1,
-      last_error: error.slice(0, 240),
-    })
-    .eq("id", id);
+  await supabase.rpc("mark_push_delivery_result", {
+    delivery_id: id,
+    next_status: status,
+    previous_attempt_count: attemptCount,
+    error_message: error.slice(0, 240),
+  });
 }
 
 function jsonResponse(body: unknown, status = 200) {

@@ -154,10 +154,10 @@ Deno.serve(async (request) => {
 
   const todayAiCount = Number((context as { today_ai_count?: unknown } | null)?.today_ai_count ?? 0);
   if (!siliconFlowApiKey) {
-    return fallback(userClient, coupleId, triggerType, "missing_api_key");
+    return fallback(adminClient, coupleId, triggerType, "missing_api_key", userData.user.id, context);
   }
   if (Number.isFinite(todayAiCount) && todayAiCount >= dailyLimit) {
-    return fallback(userClient, coupleId, triggerType, "daily_limit");
+    return fallback(adminClient, coupleId, triggerType, "daily_limit", userData.user.id, context);
   }
 
   const inputSummary = buildInputSummary(context, localHint);
@@ -169,23 +169,7 @@ Deno.serve(async (request) => {
       timeoutMs: Number.isFinite(timeoutMs) ? Math.max(1800, Math.min(timeoutMs, 4500)) : 3500,
     });
     const durationMs = Date.now() - startedAt;
-    const { data: space, error: applyError } = await userClient.rpc("apply_pet_ai_decision", {
-      target_couple_id: coupleId,
-      trigger_type: triggerType,
-      decision,
-      generation_meta: {
-        model: siliconFlowModel,
-        fallback_used: false,
-        duration_ms: durationMs,
-        input_summary: inputSummary,
-      },
-    }).maybeSingle();
-
-    if (applyError) {
-      return fallback(userClient, coupleId, triggerType, `apply_${applyError.message}`.slice(0, 60));
-    }
-
-    const { data: worldSpace, error: worldApplyError } = await userClient.rpc("apply_pet_world_decision", {
+    const { data: worldSpace, error: worldApplyError } = await adminClient.rpc("apply_pet_world_decision", {
       target_couple_id: coupleId,
       decision: decision.world,
       generation_meta: {
@@ -194,22 +178,31 @@ Deno.serve(async (request) => {
         duration_ms: durationMs,
         trigger: triggerType,
         source: "edge_ai_success",
+        actor_user_id: userData.user.id,
         input_summary: inputSummary,
+        room_decision: {
+          action: decision.action,
+          mood: decision.mood,
+          bubble: decision.bubble,
+          state_delta: decision.state_delta,
+          memory: decision.memory,
+          rig_cue: decision.rig_cue,
+        },
       },
     }).maybeSingle();
 
     if (worldApplyError) {
-      return fallback(userClient, coupleId, triggerType, `world_${worldApplyError.message}`.slice(0, 60));
+      return fallback(adminClient, coupleId, triggerType, `world_${worldApplyError.message}`.slice(0, 60), userData.user.id, context);
     }
 
     return jsonResponse({
-      space: worldSpace ?? space ?? null,
+      space: worldSpace ?? null,
       decision,
       fallback: false,
     });
   } catch (error) {
     const errorCode = error instanceof Error ? error.message : "ai_failed";
-    return fallback(userClient, coupleId, triggerType, errorCode.slice(0, 60));
+    return fallback(adminClient, coupleId, triggerType, errorCode.slice(0, 60), userData.user.id, context);
   }
 });
 
@@ -304,28 +297,33 @@ async function requestSiliconFlowDecision({
   }
 }
 
-async function fallback(userClient: ReturnType<typeof createClient>, coupleId: string, triggerType: string, errorCode: string) {
-  const { data: space, error } = await userClient.rpc("apply_pet_brain_fallback", {
-    target_couple_id: coupleId,
-    trigger_type: triggerType,
-  }).maybeSingle();
-
-  if (error) {
-    return jsonResponse({ error: error.message, fallback: true, errorCode }, 500);
-  }
+async function fallback(
+  client: ReturnType<typeof createClient>,
+  coupleId: string,
+  triggerType: string,
+  errorCode: string,
+  actorUserId: string,
+  context: unknown,
+) {
+  const compactContext = buildCompactPetContext(context);
+  const space = compactContext.space && typeof compactContext.space === "object"
+    ? compactContext.space as Record<string, unknown>
+    : {};
+  const fallbackAction = enumValue(space.current_action, ["idle", "walk", "eat", "pet", "clean", "play", "sleep", "sad", "happy"], "idle");
+  const fallbackBubble = typeof space.last_ai_bubble === "string" && space.last_ai_bubble.trim()
+    ? space.last_ai_bubble
+    : naturalFallbackLine(triggerType, fallbackAction, "bubble");
   const fallbackWorld = normalizeWorldDecision(
     null,
     triggerType,
     {},
-    space && typeof space === "object" ? space as Record<string, unknown> : {},
+    space,
     {
-      action: enumValue((space as { current_action?: unknown } | null)?.current_action, ["idle", "walk", "eat", "pet", "clean", "play", "sleep", "sad", "happy"], "idle"),
-      bubble: typeof (space as { last_ai_bubble?: unknown } | null)?.last_ai_bubble === "string"
-        ? (space as { last_ai_bubble: string }).last_ai_bubble
-        : naturalFallbackLine(triggerType, "idle", "bubble"),
+      action: fallbackAction,
+      bubble: fallbackBubble,
     },
   );
-  const { data: worldSpace, error: worldError } = await userClient.rpc("apply_pet_world_decision", {
+  const { data: worldSpace, error: worldError } = await client.rpc("apply_pet_world_decision", {
     target_couple_id: coupleId,
     decision: fallbackWorld,
     generation_meta: {
@@ -333,6 +331,7 @@ async function fallback(userClient: ReturnType<typeof createClient>, coupleId: s
       error_code: errorCode,
       trigger: triggerType,
       source: "edge_fallback",
+      actor_user_id: actorUserId,
     },
   }).maybeSingle();
 
@@ -344,11 +343,13 @@ async function fallback(userClient: ReturnType<typeof createClient>, coupleId: s
     }, 500);
   }
 
+  const resultSpace = worldSpace && typeof worldSpace === "object" ? worldSpace as Record<string, unknown> : space;
+
   return jsonResponse({
-    space: worldSpace ?? space ?? null,
+    space: worldSpace ?? null,
     decision: {
-      action: enumValue((space as { current_action?: unknown } | null)?.current_action, ["idle", "walk", "eat", "pet", "clean", "play", "sleep", "sad", "happy"], "idle"),
-      mood: typeof (space as { pet_mood?: unknown } | null)?.pet_mood === "string" ? (space as { pet_mood: string }).pet_mood : fallbackWorld.bubble,
+      action: enumValue(resultSpace.current_action, ["idle", "walk", "eat", "pet", "clean", "play", "sleep", "sad", "happy"], fallbackAction),
+      mood: typeof resultSpace.pet_mood === "string" ? resultSpace.pet_mood : fallbackWorld.mood,
       bubble: fallbackWorld.bubble,
       state_delta: {
         fullness: 0,
@@ -738,7 +739,7 @@ function buildInputSummary(context: unknown, localHint: Record<string, unknown> 
     pet_level: space.pet_level,
     memories_count: Array.isArray(contextObject.memories) ? contextObject.memories.length : 0,
     recent_actions_count: Array.isArray(contextObject.recent_actions) ? contextObject.recent_actions.length : 0,
-    recent_footprints_count: Array.isArray(contextObject.recent_footprints) ? contextObject.recent_footprints.length : 0,
+    recent_footprints_count: footprintCountForContext(contextObject),
     local_hint_keys: localHint ? Object.keys(localHint).slice(0, 12) : [],
   };
 }
@@ -748,7 +749,10 @@ function buildCompactPetContext(context: unknown) {
   const space = contextObject.space && typeof contextObject.space === "object" ? contextObject.space as Record<string, unknown> : {};
   const memories = Array.isArray(contextObject.memories) ? contextObject.memories.slice(0, 5) : [];
   const recentActions = Array.isArray(contextObject.recent_actions) ? contextObject.recent_actions.slice(0, 5) : [];
-  const recentFootprints = Array.isArray(contextObject.recent_footprints) ? contextObject.recent_footprints.slice(0, 3) : [];
+  const footprints = contextObject.footprints && typeof contextObject.footprints === "object" ? contextObject.footprints : {
+    count: footprintCountForContext(contextObject),
+    recent_months: [],
+  };
   return {
     trigger_type: contextObject.trigger_type,
     today_ai_count: contextObject.today_ai_count,
@@ -772,8 +776,16 @@ function buildCompactPetContext(context: unknown) {
     },
     memories,
     recent_actions: recentActions,
-    recent_footprints: recentFootprints,
+    footprints,
   };
+}
+
+function footprintCountForContext(contextObject: Record<string, unknown>) {
+  const footprints = contextObject.footprints && typeof contextObject.footprints === "object" ? contextObject.footprints as Record<string, unknown> : null;
+  if (typeof footprints?.count === "number") {
+    return footprints.count;
+  }
+  return Array.isArray(contextObject.recent_footprints) ? contextObject.recent_footprints.length : 0;
 }
 
 function jsonResponse(body: unknown, status = 200) {

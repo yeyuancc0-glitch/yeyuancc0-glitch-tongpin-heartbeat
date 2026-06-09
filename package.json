@@ -8,11 +8,19 @@
   ],
   "scripts": {
     "web": "npm run web -w apps/app",
-    "typecheck": "npm run typecheck -w apps/app",
+    "typecheck": "npm run typecheck -w apps/app && npm run typecheck -w @tongpin/shared",
     "build:web": "npm run build:web -w apps/app",
     "check:env": "node scripts/check-env.mjs",
     "db:apply": "node scripts/apply-supabase-migration.mjs",
     "verify": "npm run check:env && npm run typecheck && npm run build:web"
+  },
+  "overrides": {
+    "pixi-live2d-display": {
+      "gh-pages": "6.3.0"
+    },
+    "xcode": {
+      "uuid": "11.1.1"
+    }
   },
   "engines": {
     "node": ">=20"

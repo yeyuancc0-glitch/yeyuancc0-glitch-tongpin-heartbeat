@@ -20,6 +20,9 @@ export type Profile = {
   updated_at: string;
 };
 
+export type DashboardProfile = Omit<Profile, "account_status" | "deletion_requested_at"> &
+  Partial<Pick<Profile, "account_status" | "deletion_requested_at">>;
+
 export type PairInvite = {
   id: string;
   code: string;
@@ -48,7 +51,7 @@ export type CoupleMember = {
   role: "member";
   joined_at: string;
   left_at: string | null;
-  profile?: Profile;
+  profile?: DashboardProfile;
 };
 
 export type Checkin = {
@@ -59,6 +62,7 @@ export type Checkin = {
   content: string | null;
   created_at: string;
   updated_at: string;
+  deleted_at: string | null;
 };
 
 export type Message = {
@@ -69,7 +73,7 @@ export type Message = {
   created_at: string;
   updated_at: string;
   deleted_at: string | null;
-  sender?: Profile;
+  sender?: DashboardProfile;
 };
 
 export type CalendarEvent = {
@@ -79,6 +83,7 @@ export type CalendarEvent = {
   title: string;
   event_date: string;
   type: "anniversary" | "date" | "todo" | "other";
+  note: string | null;
   created_at: string;
   updated_at: string;
   deleted_at: string | null;
@@ -213,6 +218,16 @@ export type Report = {
   created_at: string;
 };
 
+export type AppFeedback = {
+  id: string;
+  user_id: string;
+  couple_id: string | null;
+  body: string;
+  status: "open" | "reviewed" | "closed";
+  metadata: Json;
+  created_at: string;
+};
+
 export type Block = {
   id: string;
   blocker_id: string;
@@ -265,7 +280,7 @@ export type CreationSpace = {
   decor_slot_3: string;
   last_interaction_at: string | null;
   last_world_decision: Json;
-  pet_world_surface: "home" | "share" | "memory" | "creation_hub" | "pet_room" | "footprints" | "playground";
+  pet_world_surface: "home" | "share" | "memory" | "creation_hub" | "pet_room";
   pet_world_state: "idle" | "walk" | "run" | "hop" | "float" | "eat" | "pet" | "clean" | "play" | "sleep" | "sad" | "happy" | "curious" | "hide" | "peek" | "found" | "summon" | "return_home" | "inspect" | "visit_partner";
   pet_world_mood: "happy" | "curious" | "sleepy" | "lonely" | "excited" | "calm" | "hungry";
   pet_hidden: boolean;
@@ -416,6 +431,7 @@ export type Database = {
           content?: string | null;
           created_at?: string;
           updated_at?: string;
+          deleted_at?: string | null;
         };
         Update: Partial<Omit<Checkin, "id" | "couple_id" | "user_id" | "created_at">>;
         Relationships: [];
@@ -443,6 +459,7 @@ export type Database = {
           title: string;
           event_date: string;
           type?: CalendarEvent["type"];
+          note?: string | null;
           created_at?: string;
           updated_at?: string;
           deleted_at?: string | null;
@@ -590,6 +607,20 @@ export type Database = {
           created_at?: string;
         };
         Update: Partial<Omit<Report, "id" | "reporter_id" | "created_at">>;
+        Relationships: [];
+      };
+      app_feedback: {
+        Row: AppFeedback;
+        Insert: {
+          id?: string;
+          user_id: string;
+          couple_id?: string | null;
+          body: string;
+          status?: AppFeedback["status"];
+          metadata?: Json;
+          created_at?: string;
+        };
+        Update: Partial<Omit<AppFeedback, "id" | "user_id" | "created_at">>;
         Relationships: [];
       };
       blocks: {
@@ -763,6 +794,12 @@ export type Database = {
           couple_id: string;
         }[];
       };
+      create_pair_invite: {
+        Args: {
+          invite_expires_at?: string;
+        };
+        Returns: PairInvite[];
+      };
       end_active_couple: {
         Args: Record<PropertyKey, never>;
         Returns: {
@@ -804,6 +841,39 @@ export type Database = {
         Returns: {
           id: string;
         }[];
+      };
+      create_future_letter: {
+        Args: {
+          target_couple_id: string;
+          recipient_id: string;
+          letter_title: string;
+          letter_body: string;
+          unlock_at: string;
+        };
+        Returns: {
+          id: string;
+        }[];
+      };
+      create_partner_notification: {
+        Args: {
+          target_couple_id: string;
+          notification_type: Notification["type"];
+          notification_title: string;
+          notification_body?: string | null;
+          related_table?: string | null;
+          related_id?: string | null;
+        };
+        Returns: {
+          notification_id: string;
+        }[];
+      };
+      submit_feedback: {
+        Args: {
+          feedback_body: string;
+          target_couple_id?: string | null;
+          feedback_metadata?: Json;
+        };
+        Returns: AppFeedback;
       };
       mark_notification_read: {
         Args: {
@@ -954,6 +1024,17 @@ export type Database = {
         };
         Returns: CreationSpace[];
       };
+      record_creation_action: {
+        Args: {
+          target_couple_id: string;
+          action_type: CreationAction["action_type"];
+          action_label: string;
+          action_metadata?: Json;
+        };
+        Returns: {
+          id: string;
+        }[];
+      };
       update_creation_home: {
         Args: {
           target_couple_id: string;
@@ -1006,6 +1087,14 @@ export type Database = {
         Returns: PetMemory[];
       };
       apply_pet_world_decision: {
+        Args: {
+          target_couple_id: string;
+          decision: Json;
+          generation_meta?: Json;
+        };
+        Returns: CreationSpace[];
+      };
+      apply_pet_rule_world_decision: {
         Args: {
           target_couple_id: string;
           decision: Json;

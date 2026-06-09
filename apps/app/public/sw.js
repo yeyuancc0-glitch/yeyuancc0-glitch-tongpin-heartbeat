@@ -42,12 +42,23 @@ self.addEventListener("push", (event) => {
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
   const targetUrl = new URL(event.notification.data?.url || "/", self.location.origin).href;
+  const payload = {
+    notificationId: event.notification.data?.notificationId || null,
+    type: event.notification.data?.type || null,
+    relatedTable: event.notification.data?.relatedTable || null,
+    relatedId: event.notification.data?.relatedId || null,
+  };
 
   event.waitUntil(
-    self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clientList) => {
+    self.clients.matchAll({ type: "window", includeUncontrolled: true }).then(async (clientList) => {
       for (const client of clientList) {
         if ("focus" in client && new URL(client.url).origin === self.location.origin) {
-          return client.focus();
+          const focusedClient = await client.focus();
+          client.postMessage({ type: "tongpin:notification-open", payload });
+          if ("navigate" in client && new URL(client.url).href !== targetUrl) {
+            return client.navigate(targetUrl);
+          }
+          return focusedClient;
         }
       }
 

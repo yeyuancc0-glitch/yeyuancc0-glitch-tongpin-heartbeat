@@ -12,7 +12,7 @@ export function SetupRequiredScreen() {
           <Database color={colors.accent} size={30} strokeWidth={2.4} />
         </View>
         <H1>需要先连接 Supabase</H1>
-        <Body style={styles.lead}>V0.1A 的注册、绑定和情侣数据都依赖 Supabase Auth、Postgres、RLS 和 RPC。</Body>
+        <Body style={styles.lead}>注册、情侣空间、相册、信件、推送和云宠数据都依赖 Supabase Auth、Postgres、Storage、RLS 和 RPC。</Body>
       </View>
 
       <Panel style={styles.panel}>
@@ -30,9 +30,11 @@ export function SetupRequiredScreen() {
 
       <Panel style={styles.panel}>
         <H2>数据库初始化</H2>
-        <Body>在 Supabase SQL Editor 执行 migration，然后重新启动 Web。</Body>
+        <Body>按文件名顺序应用全部 migration，然后重新启动 Web。</Body>
         <View style={styles.codeBlock}>
-          <Text style={styles.code}>packages/db/migrations/001_v01a_schema.sql</Text>
+          <Text style={styles.code}>npm run db:apply</Text>
+          <Text style={styles.code}>npm run check:env</Text>
+          <Text style={styles.code}>npm run typecheck</Text>
         </View>
       </Panel>
     </View>

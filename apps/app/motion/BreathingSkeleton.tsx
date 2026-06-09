@@ -39,7 +39,7 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(247,226,232,0.48)",
   },
   sheen: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     backgroundColor: "rgba(255,255,255,0.52)",
     ...(Platform.OS === "web"
       ? ({

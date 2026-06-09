@@ -15,9 +15,18 @@ const hasCommand = (command) =>
   spawnSync("sh", ["-lc", `command -v ${command}`], { stdio: "ignore" }).status === 0;
 
 if (hasCommand("supabase")) {
-  console.log("Applying migration with Supabase CLI. Make sure the project is linked first.");
-  const result = spawnSync("supabase", ["db", "push"], { stdio: "inherit" });
-  process.exit(result.status ?? 1);
+  console.log("Applying migrations with Supabase CLI linked query. Make sure the project is linked first.");
+  for (const file of migrationFiles) {
+    const filePath = resolve(migrationsDir, file);
+    console.log(`Applying ${file}.`);
+    const result = spawnSync("supabase", ["db", "query", "--linked", "--file", filePath], {
+      stdio: "inherit",
+    });
+    if (result.status !== 0) {
+      process.exit(result.status ?? 1);
+    }
+  }
+  process.exit(0);
 }
 
 if (hasCommand("psql")) {

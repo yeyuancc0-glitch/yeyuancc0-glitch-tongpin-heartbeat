@@ -17,7 +17,7 @@ export type PetWorldEvent = {
 };
 
 export async function applyPetWorldDecision(targetCoupleId: string, decision: PetWorldDecision, generationMeta: Json = {}) {
-  const { data, error } = await supabase.rpc("apply_pet_world_decision", {
+  const { data, error } = await supabase.rpc("apply_pet_rule_world_decision", {
     target_couple_id: targetCoupleId,
     decision,
     generation_meta: generationMeta,

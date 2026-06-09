@@ -1,9 +1,10 @@
-import { cp, mkdir, readdir, stat } from "node:fs/promises";
+import { cp, mkdir, readdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const distDir = path.join(rootDir, "apps", "app", "dist");
+const appAssetsDir = path.join(rootDir, "apps", "app", "assets");
 
 async function exists(filePath) {
   try {
@@ -22,6 +23,130 @@ if (!(await exists(distDir))) {
 const entries = await readdir(distDir, { withFileTypes: true });
 let copied = 0;
 
+async function copyMisnamedExpoStaticDir() {
+  const expoDir = path.join(distDir, "_expo");
+  if (!(await exists(expoDir))) {
+    return false;
+  }
+
+  const expoEntries = await readdir(expoDir, { withFileTypes: true });
+  const staticDir = path.join(expoDir, "static");
+  let repaired = false;
+
+  for (const entry of expoEntries) {
+    if (!entry.isDirectory() || !/^static\s+\d+$/.test(entry.name)) {
+      continue;
+    }
+
+    await cp(path.join(expoDir, entry.name), staticDir, { recursive: true });
+    repaired = true;
+  }
+
+  return repaired;
+}
+
+async function assertReferencedAssetsExist() {
+  const htmlEntries = await readdir(distDir, { withFileTypes: true });
+  const missingAssets = [];
+  const assetPattern = /(?:src|href)="(\/_expo\/static\/[^"]+)"/g;
+
+  for (const entry of htmlEntries) {
+    if (!entry.isFile() || !entry.name.endsWith(".html")) {
+      continue;
+    }
+
+    const html = await readFile(path.join(distDir, entry.name), "utf8");
+    for (const match of html.matchAll(assetPattern)) {
+      const assetPath = path.join(distDir, match[1].slice(1));
+      if (!(await exists(assetPath))) {
+        missingAssets.push(`${entry.name}: ${match[1]}`);
+        continue;
+      }
+
+      const assetStat = await stat(assetPath);
+      if (!assetStat.isFile() || assetStat.size === 0) {
+        missingAssets.push(`${entry.name}: ${match[1]} (${assetStat.size} bytes)`);
+      }
+    }
+  }
+
+  if (missingAssets.length > 0) {
+    throw new Error(`Web dist has missing or empty referenced asset(s):\n${missingAssets.join("\n")}`);
+  }
+}
+
+async function collectFiles(dir, predicate) {
+  const files = [];
+  if (!(await exists(dir))) {
+    return files;
+  }
+
+  const visit = async (currentDir) => {
+    const currentEntries = await readdir(currentDir, { withFileTypes: true });
+    await Promise.all(
+      currentEntries.map(async (entry) => {
+        const entryPath = path.join(currentDir, entry.name);
+        if (entry.isDirectory()) {
+          await visit(entryPath);
+          return;
+        }
+        if (entry.isFile() && predicate(entryPath)) {
+          files.push(entryPath);
+        }
+      })
+    );
+  };
+
+  await visit(dir);
+  return files;
+}
+
+function sourceAssetPathForBundledUri(uri) {
+  const match = uri.match(/^\/assets\/assets\/(.+)\.[a-f0-9]{32}\.([a-z0-9]+)$/i);
+  if (!match) {
+    return null;
+  }
+
+  return path.join(appAssetsDir, `${match[1]}.${match[2]}`);
+}
+
+async function copyBundledAssetUris() {
+  const jsFiles = await collectFiles(distDir, (filePath) => filePath.endsWith(".js"));
+  const assetUris = new Set();
+  const assetUriPattern = /"((?:\/assets\/assets\/)[^"]+\.(?:png|jpe?g|webp|gif|svg))"/g;
+
+  for (const jsFile of jsFiles) {
+    const source = await readFile(jsFile, "utf8");
+    for (const match of source.matchAll(assetUriPattern)) {
+      assetUris.add(match[1]);
+    }
+  }
+
+  const missingAssets = [];
+  let copiedAssets = 0;
+  for (const uri of assetUris) {
+    const sourcePath = sourceAssetPathForBundledUri(uri);
+    const targetPath = path.join(distDir, uri.slice(1));
+    if (!sourcePath || !(await exists(sourcePath))) {
+      missingAssets.push(`${uri}: source asset not found`);
+      continue;
+    }
+
+    await mkdir(path.dirname(targetPath), { recursive: true });
+    await cp(sourcePath, targetPath);
+    copiedAssets += 1;
+  }
+
+  if (missingAssets.length > 0) {
+    throw new Error(`Web dist has bundled asset URI(s) that cannot be copied:\n${missingAssets.join("\n")}`);
+  }
+
+  return copiedAssets;
+}
+
+const repairedExpoStaticDir = await copyMisnamedExpoStaticDir();
+const copiedBundledAssets = await copyBundledAssetUris();
+
 for (const entry of entries) {
   if (!entry.isFile() || !entry.name.endsWith(".html") || entry.name === "index.html") {
     continue;
@@ -36,4 +161,10 @@ for (const entry of entries) {
   copied += 1;
 }
 
-console.log(`Web dist post-processing complete: prepared ${copied} extensionless route(s).`);
+await assertReferencedAssetsExist();
+
+console.log(
+  `Web dist post-processing complete: prepared ${copied} extensionless route(s), copied ${copiedBundledAssets} bundled asset(s)${
+    repairedExpoStaticDir ? ", repaired Expo static assets" : ""
+  }.`
+);

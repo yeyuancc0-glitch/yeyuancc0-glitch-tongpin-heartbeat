@@ -1,118 +1,62 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { startTransition, useCallback, useEffect, useRef, useState } from "react";
 
 import { supabase } from "@/lib/supabase/client";
 import type {
   ActiveCouple,
   CalendarEvent,
   Checkin,
+  CoupleFootprint,
   CreationAction,
   CreationSpace,
+  DashboardProfile,
   LetterPreview,
   MediaFile,
   Message,
   MoodStatus,
   Notification,
-  PairInvite,
   PetMemory,
-  CoupleFootprint,
-  Profile,
 } from "@/lib/supabase/database.types";
-import { createSignedUrl, createTransformedImageUrl, imageTransforms, storageBuckets } from "@/lib/supabase/storage";
-
-export type CoupleDashboard = {
-  profile: Profile | null;
-  couple: ActiveCouple | null;
-  pendingInvites: PairInvite[];
-  checkins: Checkin[];
-  messages: Message[];
-  events: CalendarEvent[];
-  letters: LetterPreview[];
-  mediaFiles: MediaFile[];
-  moodStatuses: MoodStatus[];
-  notifications: Notification[];
-  creationSpace: CreationSpace | null;
-  creationActions: CreationAction[];
-  petMemories: PetMemory[];
-  footprints: CoupleFootprint[];
-};
-
-function createEmptyDashboard(): CoupleDashboard {
-  return {
-    profile: null,
-    couple: null,
-    pendingInvites: [],
-    checkins: [],
-    messages: [],
-    events: [],
-    letters: [],
-    mediaFiles: [],
-    moodStatuses: [],
-    notifications: [],
-    creationSpace: null,
-    creationActions: [],
-    petMemories: [],
-    footprints: [],
-  };
-}
+import { prefetchImageUrls } from "@/lib/supabase/storage";
+import {
+  coupleAvatarHydrationMatches,
+  createAvatarUrlMap,
+  profileAvatarHydrationMatches,
+  withHydratedProfileAvatar,
+} from "@/features/home/homeAvatarHydration";
+import { readCachedDashboard, writeCachedDashboard } from "@/features/home/homeDashboardCache";
+import {
+  activeCoupleDashboardSelect,
+  calendarEventDashboardSelect,
+  checkinDashboardSelect,
+  creationActionDashboardSelect,
+  footprintDashboardSelect,
+  mediaFileDashboardSelect,
+  messageDashboardSelect,
+  moodStatusDashboardSelect,
+  notificationDashboardSelect,
+  pairInviteDashboardSelect,
+  petMemoryDashboardSelect,
+  profileDashboardSelect,
+} from "@/features/home/homeDashboardSelects";
+import { type QueryResult, queryDataOrFallback, waitForIdle } from "@/features/home/homeDashboardUtils";
+import { createEmptyDashboard, type CoupleDashboard } from "@/features/home/homeDashboardTypes";
+import { hydrateMediaFile, mergeHydratedMediaFiles } from "@/features/home/homeMediaHydration";
+import { notificationsMatch } from "@/features/home/homeNotificationRefresh";
 
 const emptyDashboard = createEmptyDashboard();
-const dashboardCachePrefix = "couple-dashboard:v3:";
-
-function stripVolatileSignedUrls(data: CoupleDashboard): CoupleDashboard {
-  return {
-    ...data,
-    profile: data.profile ? { ...data.profile, avatar_signed_url: null, avatar_thumb_signed_url: null } : null,
-    couple: data.couple
-      ? {
-          ...data.couple,
-          couple_members: data.couple.couple_members.map((member) => ({
-            ...member,
-            profile: member.profile ? { ...member.profile, avatar_signed_url: null, avatar_thumb_signed_url: null } : member.profile,
-          })),
-        }
-      : null,
-    messages: data.messages.map((message) => ({
-      ...message,
-      sender: message.sender ? { ...message.sender, avatar_signed_url: null, avatar_thumb_signed_url: null } : message.sender,
-    })),
-    mediaFiles: data.mediaFiles.map((file) => ({ ...file, signedUrl: null, thumbnailSignedUrl: null })),
-  };
-}
-
-function readCachedDashboard(userId: string) {
-  if (typeof window === "undefined") {
-    return null;
-  }
-
-  try {
-    const raw = window.localStorage.getItem(`${dashboardCachePrefix}${userId}`);
-    if (!raw) {
-      return null;
-    }
-    const cached = JSON.parse(raw) as { data?: CoupleDashboard };
-    if (cached.data?.profile?.id !== userId) {
-      return null;
-    }
-    return stripVolatileSignedUrls(cached.data);
-  } catch {
-    return null;
-  }
-}
-
-function writeCachedDashboard(userId: string, data: CoupleDashboard) {
-  if (typeof window === "undefined" || data.profile?.id !== userId) {
-    return;
-  }
-
-  try {
-    window.localStorage.setItem(`${dashboardCachePrefix}${userId}`, JSON.stringify({ savedAt: Date.now(), data: stripVolatileSignedUrls(data) }));
-  } catch {
-    // Cache writes are only for refresh UX; storage quota/private mode failures should not affect the app.
-  }
-}
+const homeAlbumPreviewLimit = 9;
+const mediaHydrationChunkSize = 3;
+const notificationFallbackRefreshMs = 90000;
+const dashboardFallbackRefreshMs = 120000;
+const maxDashboardFallbackRefreshMs = 10 * 60 * 1000;
+const notificationRealtimeDebounceMs = 1200;
 
 export function useCoupleData(userId?: string) {
   const requestIdRef = useRef(0);
+  const loadingRequestRef = useRef(false);
+  const notificationRefreshInFlightRef = useRef(false);
+  const notificationRealtimeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const dashboardRefreshDelayRef = useRef(dashboardFallbackRefreshMs);
   const [data, setData] = useState<CoupleDashboard>(() => createEmptyDashboard());
   const dataRef = useRef<CoupleDashboard>(createEmptyDashboard());
   const [loadedUserId, setLoadedUserId] = useState<string | undefined>(undefined);
@@ -126,13 +70,18 @@ export function useCoupleData(userId?: string) {
   }, []);
 
   const load = useCallback(async (options: { initial?: boolean } = {}) => {
+    if (!options.initial && loadingRequestRef.current) {
+      return;
+    }
     const requestId = ++requestIdRef.current;
+    loadingRequestRef.current = true;
 
     if (!userId) {
       saveData(createEmptyDashboard());
       setLoadedUserId(undefined);
       setLoading(false);
       setRefreshing(false);
+      loadingRequestRef.current = false;
       return;
     }
 
@@ -152,27 +101,39 @@ export function useCoupleData(userId?: string) {
 
     try {
       const [profileResult, coupleResult] = await Promise.all([
-        supabase.from("profiles").select("*").eq("id", userId).maybeSingle(),
+        supabase.from("profiles").select(profileDashboardSelect).eq("id", userId).maybeSingle(),
         supabase
           .from("couples")
-          .select("*, couple_members(*, profile:profiles(*))")
+          .select(activeCoupleDashboardSelect)
           .eq("status", "active")
           .order("created_at", { ascending: false })
           .limit(1)
           .maybeSingle(),
       ]);
 
+      const currentDashboard = dataRef.current;
+      if (profileResult.error || coupleResult.error) {
+        console.warn("Couple dashboard base load failed:", profileResult.error?.message ?? coupleResult.error?.message);
+        if (currentDashboard.profile?.id === userId) {
+          saveData(currentDashboard);
+          setLoadedUserId(userId);
+        }
+        setLoading(false);
+        setRefreshing(false);
+        loadingRequestRef.current = false;
+        return;
+      }
+
       const couple = coupleResult.data as ActiveCouple | null;
       const coupleMembers = couple?.couple_members ?? [];
       const coupleId = couple?.id;
-      const currentDashboard = dataRef.current;
 
       const avatarStateByUserId = new Map(
         [
           ...(currentDashboard.profile ? [currentDashboard.profile] : []),
           ...(currentDashboard.couple?.couple_members.map((member) => member.profile).filter(Boolean) ?? []),
         ]
-          .filter((avatarProfile): avatarProfile is Profile => Boolean(avatarProfile))
+          .filter((avatarProfile): avatarProfile is DashboardProfile => Boolean(avatarProfile))
           .map((avatarProfile) => [
             avatarProfile.id,
             {
@@ -228,22 +189,68 @@ export function useCoupleData(userId?: string) {
         letters: currentDashboard.profile?.id === userId ? currentDashboard.letters : [],
         mediaFiles: currentDashboard.profile?.id === userId ? currentDashboard.mediaFiles : [],
         moodStatuses: currentDashboard.profile?.id === userId ? currentDashboard.moodStatuses : [],
-      notifications: currentDashboard.profile?.id === userId ? currentDashboard.notifications : [],
-      creationSpace: currentDashboard.profile?.id === userId ? currentDashboard.creationSpace : null,
-      creationActions: currentDashboard.profile?.id === userId ? currentDashboard.creationActions : [],
-      petMemories: currentDashboard.profile?.id === userId ? currentDashboard.petMemories : [],
-      footprints: currentDashboard.profile?.id === userId ? currentDashboard.footprints : [],
-    };
+        notifications: currentDashboard.profile?.id === userId ? currentDashboard.notifications : [],
+        creationSpace: currentDashboard.profile?.id === userId ? currentDashboard.creationSpace : null,
+        creationActions: currentDashboard.profile?.id === userId ? currentDashboard.creationActions : [],
+        petMemories: currentDashboard.profile?.id === userId ? currentDashboard.petMemories : [],
+        footprints: currentDashboard.profile?.id === userId ? currentDashboard.footprints : [],
+      };
       saveData(baseData);
       writeCachedDashboard(userId, baseData);
       setLoadedUserId(userId);
       setLoading(false);
       setRefreshing(false);
+      dashboardRefreshDelayRef.current = dashboardFallbackRefreshMs;
+
+      const avatarProfiles = [profileResult.data, ...coupleMembers.map((member) => member.profile).filter(Boolean)].filter(
+        (avatarProfile): avatarProfile is DashboardProfile => Boolean(avatarProfile)
+      );
+      if (avatarProfiles.some((avatarProfile) => Boolean(avatarProfile.avatar_url))) {
+        void (async () => {
+          const avatarUrlByPath = await createAvatarUrlMap(avatarProfiles);
+          const hydratedProfile = profileResult.data ? withHydratedProfileAvatar(profileResult.data, avatarUrlByPath) : null;
+          const hydratedCouple = couple
+            ? {
+                ...couple,
+                couple_members: coupleMembers.map((member) => ({
+                  ...member,
+                  profile: member.profile ? withHydratedProfileAvatar(member.profile, avatarUrlByPath) : member.profile,
+                })),
+              }
+            : null;
+
+          if (requestId !== requestIdRef.current) {
+            return;
+          }
+
+          void prefetchImageUrls(Array.from(avatarUrlByPath.values()).map((urls) => urls.thumbSignedUrl ?? urls.signedUrl), 2);
+
+          startTransition(() => {
+            saveData((current) => {
+              if (current.profile?.id !== userId) {
+                return current;
+              }
+              if (profileAvatarHydrationMatches(current.profile, hydratedProfile) && coupleAvatarHydrationMatches(current.couple, hydratedCouple)) {
+                return current;
+              }
+              const hydratedAvatarData = {
+                ...current,
+                profile: hydratedProfile,
+                couple: hydratedCouple ?? current.couple,
+              };
+              writeCachedDashboard(userId, hydratedAvatarData);
+              return hydratedAvatarData;
+            });
+          });
+        })().catch((error) => {
+          console.warn("Couple dashboard avatar hydration failed:", error);
+        });
+      }
 
       if (!coupleId) {
         const { data: pendingInvites } = await supabase
           .from("pair_invites")
-          .select("*")
+          .select(pairInviteDashboardSelect)
           .eq("created_by", userId)
           .eq("status", "pending")
           .order("created_at", { ascending: false });
@@ -263,223 +270,197 @@ export function useCoupleData(userId?: string) {
           writeCachedDashboard(userId, pairingData);
           return pairingData;
         });
+        loadingRequestRef.current = false;
         return;
       }
 
       void (async () => {
-      const [
-        checkinsResult,
-        messagesResult,
-        eventsResult,
-        mediaFilesResult,
-        moodStatusesResult,
-        notificationsResult,
-        creationSpaceResult,
-        creationActionsResult,
-        petMemoriesResult,
-        footprintsResult,
-        lettersResult,
-      ] = await Promise.all([
-        supabase
-          .from("checkins")
-          .select("*")
-          .eq("couple_id", coupleId)
-          .order("checkin_date", { ascending: false })
-          .limit(8),
-        supabase
-          .from("messages")
-          .select("*, sender:profiles(*)")
-          .eq("couple_id", coupleId)
-          .is("deleted_at", null)
-          .order("created_at", { ascending: false })
-          .limit(12),
-        supabase
-          .from("calendar_events")
-          .select("*")
-          .eq("couple_id", coupleId)
-          .is("deleted_at", null)
-          .order("event_date", { ascending: true })
-          .limit(8),
-        supabase
-          .from("media_files")
-          .select("*")
-          .eq("couple_id", coupleId)
-          .is("deleted_at", null)
-          .order("created_at", { ascending: false })
-          .limit(12),
-        supabase
-          .from("mood_status")
-          .select("*")
-          .eq("couple_id", coupleId)
-          .order("updated_at", { ascending: false }),
-        supabase
-          .from("notifications")
-          .select("*")
-          .is("dismissed_at", null)
-          .order("created_at", { ascending: false })
-          .limit(16),
-        supabase.from("creation_spaces").select("*").eq("couple_id", coupleId).maybeSingle(),
-        supabase
-          .from("creation_actions")
-          .select("*")
-          .eq("couple_id", coupleId)
-          .order("created_at", { ascending: false })
-          .limit(12),
-        supabase
-          .from("pet_memories")
-          .select("*")
-          .eq("couple_id", coupleId)
-          .is("archived_at", null)
-          .or(`memory_scope.eq.core,expires_at.gt.${new Date().toISOString()}`)
-          .order("created_at", { ascending: false })
-          .limit(12),
-        supabase
-          .from("couple_footprints")
-          .select("*")
-          .eq("couple_id", coupleId)
-          .is("deleted_at", null)
-          .order("visited_at", { ascending: false })
-          .order("created_at", { ascending: false })
-          .limit(12),
-        supabase.rpc("list_letters", {}),
-      ]);
+        const [
+          checkinsResult,
+          messagesResult,
+          eventsResult,
+          mediaFilesResult,
+          moodStatusesResult,
+          notificationsResult,
+          creationSpaceResult,
+          creationActionsResult,
+          petMemoriesResult,
+          footprintsResult,
+          lettersResult,
+        ] = await Promise.all([
+          supabase
+            .from("checkins")
+            .select(checkinDashboardSelect)
+            .eq("couple_id", coupleId)
+            .is("deleted_at", null)
+            .order("checkin_date", { ascending: false })
+            .limit(8),
+          supabase
+            .from("messages")
+            .select(messageDashboardSelect)
+            .eq("couple_id", coupleId)
+            .is("deleted_at", null)
+            .order("created_at", { ascending: false })
+            .limit(12),
+          supabase
+            .from("calendar_events")
+            .select(calendarEventDashboardSelect)
+            .eq("couple_id", coupleId)
+            .is("deleted_at", null)
+            .order("event_date", { ascending: true })
+            .limit(8),
+          supabase
+            .from("media_files")
+            .select(mediaFileDashboardSelect)
+            .eq("couple_id", coupleId)
+            .is("deleted_at", null)
+            .order("created_at", { ascending: false })
+            .limit(12),
+          supabase
+            .from("mood_status")
+            .select(moodStatusDashboardSelect)
+            .eq("couple_id", coupleId)
+            .order("updated_at", { ascending: false }),
+          supabase
+            .from("notifications")
+            .select(notificationDashboardSelect)
+            .is("dismissed_at", null)
+            .order("created_at", { ascending: false })
+            .limit(16),
+          supabase.rpc("ensure_creation_space", { target_couple_id: coupleId }).maybeSingle(),
+          supabase
+            .from("creation_actions")
+            .select(creationActionDashboardSelect)
+            .eq("couple_id", coupleId)
+            .order("created_at", { ascending: false })
+            .limit(12),
+          supabase
+            .from("pet_memories")
+            .select(petMemoryDashboardSelect)
+            .eq("couple_id", coupleId)
+            .is("archived_at", null)
+            .or(`memory_scope.eq.core,expires_at.gt.${new Date().toISOString()}`)
+            .order("created_at", { ascending: false })
+            .limit(12),
+          supabase
+            .from("couple_footprints")
+            .select(footprintDashboardSelect)
+            .eq("couple_id", coupleId)
+            .is("deleted_at", null)
+            .order("visited_at", { ascending: false })
+            .order("created_at", { ascending: false })
+            .limit(12),
+          supabase.rpc("list_letters", {}),
+        ]);
 
-      const mediaRows = ((mediaFilesResult.data as MediaFile[] | null) ?? []);
-      const signedMediaUrlById = new Map(
-        dataRef.current.mediaFiles
-          .filter((file) => file.storage_path)
-          .map((file) => [
-            file.id,
-            {
-              path: file.storage_path,
-              signedUrl: file.signedUrl ?? null,
-              thumbnailSignedUrl: file.thumbnailSignedUrl ?? null,
-            },
-          ] as const)
-      );
-      const mediaFiles = mediaRows.map((file) => {
-        const existingMediaUrl = signedMediaUrlById.get(file.id);
-        const shouldPreserve = existingMediaUrl?.path === file.storage_path;
-        return {
-          ...file,
-          signedUrl: shouldPreserve ? existingMediaUrl.signedUrl : null,
-          thumbnailSignedUrl: shouldPreserve ? existingMediaUrl.thumbnailSignedUrl : null,
-        };
-      });
-
-      if (requestId !== requestIdRef.current) {
-        return;
-      }
-
-      const contentData: CoupleDashboard = {
-        ...baseData,
-        checkins: checkinsResult.data ?? [],
-        messages: (messagesResult.data as Message[] | null) ?? [],
-        events: eventsResult.data ?? [],
-        letters: (lettersResult.data as LetterPreview[] | null) ?? [],
-        mediaFiles,
-        moodStatuses: moodStatusesResult.data ?? [],
-        notifications: notificationsResult.data ?? [],
-        creationSpace: (creationSpaceResult.data as CreationSpace | null) ?? null,
-        creationActions: (creationActionsResult.data as CreationAction[] | null) ?? [],
-        petMemories: (petMemoriesResult.data as PetMemory[] | null) ?? [],
-        footprints: (footprintsResult.data as CoupleFootprint[] | null) ?? [],
-      };
-      saveData(contentData);
-      writeCachedDashboard(userId, contentData);
-
-      const avatarProfiles = [profileResult.data, ...coupleMembers.map((member) => member.profile).filter(Boolean)] as Profile[];
-      const avatarPathByOriginalPath = new Map<string, { originalPath: string; thumbnailPath: string | null }>();
-      avatarProfiles.forEach((avatarProfile) => {
-        if (avatarProfile.avatar_url && !avatarPathByOriginalPath.has(avatarProfile.avatar_url)) {
-          avatarPathByOriginalPath.set(avatarProfile.avatar_url, {
-            originalPath: avatarProfile.avatar_url,
-            thumbnailPath: avatarProfile.avatar_thumbnail_url ?? null,
-          });
-        }
-      });
-      const avatarPaths = Array.from(avatarPathByOriginalPath.values());
-      const avatarUrlByPathPromise = (async () => {
-        const avatarUrlByPath = new Map<string, { signedUrl: string | null; thumbSignedUrl: string | null }>();
-        await Promise.all(
-          avatarPaths.map(async ({ originalPath, thumbnailPath }) => {
-            const thumbSignedUrl = thumbnailPath
-              ? await createSignedUrl(storageBuckets.avatars, thumbnailPath)
-              : await createTransformedImageUrl(storageBuckets.avatars, originalPath, imageTransforms.avatarThumb);
-            const signedUrl = thumbSignedUrl ?? await createSignedUrl(storageBuckets.avatars, originalPath);
-            avatarUrlByPath.set(originalPath, {
-              signedUrl,
-              thumbSignedUrl: thumbSignedUrl ?? signedUrl,
-            });
-          })
+        const currentContent = dataRef.current;
+        const mediaRows = queryDataOrFallback("media files", mediaFilesResult as QueryResult<MediaFile[]>, currentContent.mediaFiles, []);
+        const signedMediaUrlById = new Map(
+          currentContent.mediaFiles
+            .filter((file) => file.storage_path)
+            .map((file) => [
+              file.id,
+              {
+                path: file.storage_path,
+                signedUrl: file.signedUrl ?? null,
+                thumbnailSignedUrl: file.thumbnailSignedUrl ?? null,
+              },
+            ] as const)
         );
-        return avatarUrlByPath;
-      })();
-      const hydratedMediaFilesPromise = Promise.all(
-        mediaRows.map(async (file) => {
+        const mediaFiles = mediaRows.map((file) => {
           const existingMediaUrl = signedMediaUrlById.get(file.id);
           const shouldPreserve = existingMediaUrl?.path === file.storage_path;
-          const existingSignedUrl = shouldPreserve ? existingMediaUrl.signedUrl : null;
-          const existingThumbnailSignedUrl = shouldPreserve ? existingMediaUrl.thumbnailSignedUrl : null;
-          const thumbnailSignedUrl =
-            existingThumbnailSignedUrl ??
-            (file.thumbnail_storage_path
-              ? await createSignedUrl(storageBuckets.coupleMedia, file.thumbnail_storage_path)
-              : await createTransformedImageUrl(storageBuckets.coupleMedia, file.storage_path, imageTransforms.albumThumb));
-          const fallbackSignedUrl = thumbnailSignedUrl || existingSignedUrl ? existingSignedUrl : await createSignedUrl(storageBuckets.coupleMedia, file.storage_path);
           return {
             ...file,
-            signedUrl: fallbackSignedUrl,
-            thumbnailSignedUrl: thumbnailSignedUrl ?? fallbackSignedUrl,
+            signedUrl: shouldPreserve ? existingMediaUrl.signedUrl : null,
+            thumbnailSignedUrl: shouldPreserve ? existingMediaUrl.thumbnailSignedUrl : null,
           };
-        })
-      );
-      const [avatarUrlByPath, hydratedMediaFiles] = await Promise.all([
-        avatarUrlByPathPromise,
-        hydratedMediaFilesPromise,
-      ]);
+        });
 
-      const avatarUrlsForPath = (path?: string | null) => (path ? avatarUrlByPath.get(path) ?? { signedUrl: null, thumbSignedUrl: null } : { signedUrl: null, thumbSignedUrl: null });
-      const hydratedProfile = profileResult.data
-        ? {
-            ...profileResult.data,
-            avatar_signed_url: avatarUrlsForPath(profileResult.data.avatar_url).signedUrl,
-            avatar_thumb_signed_url: avatarUrlsForPath(profileResult.data.avatar_url).thumbSignedUrl,
-          }
-        : null;
-      const hydratedCouple = couple
-        ? {
-            ...couple,
-            couple_members: coupleMembers.map((member) => ({
-              ...member,
-              profile: member.profile
-                ? {
-                    ...member.profile,
-                    avatar_signed_url: avatarUrlsForPath(member.profile.avatar_url).signedUrl,
-                    avatar_thumb_signed_url: avatarUrlsForPath(member.profile.avatar_url).thumbSignedUrl,
-                  }
-                : member.profile,
-            })),
-          }
-        : null;
-
-      if (requestId !== requestIdRef.current) {
-        return;
-      }
-
-      saveData((current) => {
-        if (current.profile?.id !== userId) {
-          return current;
+        if (requestId !== requestIdRef.current) {
+          return;
         }
-        const hydratedData = {
-          ...current,
-          profile: hydratedProfile,
-          couple: hydratedCouple,
-          mediaFiles: hydratedMediaFiles,
+
+        saveData((current) => {
+          if (current.profile?.id !== userId) {
+            return current;
+          }
+          const contentData: CoupleDashboard = {
+            ...current,
+            checkins: queryDataOrFallback("checkins", checkinsResult as QueryResult<Checkin[]>, current.checkins, []),
+            messages: queryDataOrFallback("messages", messagesResult as QueryResult<Message[]>, current.messages, []),
+            events: queryDataOrFallback("events", eventsResult as QueryResult<CalendarEvent[]>, current.events, []),
+            letters: queryDataOrFallback("letters", lettersResult as QueryResult<LetterPreview[]>, current.letters, []),
+            mediaFiles,
+            moodStatuses: queryDataOrFallback("mood statuses", moodStatusesResult as QueryResult<MoodStatus[]>, current.moodStatuses, []),
+            notifications: queryDataOrFallback("notifications", notificationsResult as QueryResult<Notification[]>, current.notifications, []),
+            creationSpace: queryDataOrFallback("creation space", creationSpaceResult as QueryResult<CreationSpace | null>, current.creationSpace, null),
+            creationActions: queryDataOrFallback("creation actions", creationActionsResult as QueryResult<CreationAction[]>, current.creationActions, []),
+            petMemories: queryDataOrFallback("pet memories", petMemoriesResult as QueryResult<PetMemory[]>, current.petMemories, []),
+            footprints: queryDataOrFallback("footprints", footprintsResult as QueryResult<CoupleFootprint[]>, current.footprints, []),
+          };
+          writeCachedDashboard(userId, contentData);
+          return contentData;
+        });
+
+        const hydrateMediaBatch = async (files: MediaFile[], shouldPrefetch: boolean) => {
+          const hydratedFiles = await Promise.all(files.map((file) => hydrateMediaFile(file, signedMediaUrlById)));
+          if (shouldPrefetch) {
+            await prefetchImageUrls(hydratedFiles.map((file) => file.thumbnailSignedUrl ?? file.signedUrl), 3);
+          }
+          return hydratedFiles;
         };
-        writeCachedDashboard(userId, hydratedData);
-        return hydratedData;
-      });
+
+        const visibleMediaRows = mediaRows.slice(0, homeAlbumPreviewLimit);
+        const deferredMediaRows = mediaRows.slice(homeAlbumPreviewLimit);
+        const visibleHydratedMediaFiles = await hydrateMediaBatch(visibleMediaRows, true);
+
+        if (requestId !== requestIdRef.current) {
+          return;
+        }
+
+        startTransition(() => {
+          saveData((current) => {
+            if (current.profile?.id !== userId) {
+              return current;
+            }
+            const nextMediaFiles = mergeHydratedMediaFiles(current.mediaFiles, visibleHydratedMediaFiles);
+            if (nextMediaFiles === current.mediaFiles) {
+              return current;
+            }
+            const hydratedData = {
+              ...current,
+              mediaFiles: nextMediaFiles,
+            };
+            writeCachedDashboard(userId, hydratedData);
+            return hydratedData;
+          });
+        });
+
+        for (let index = 0; index < deferredMediaRows.length; index += mediaHydrationChunkSize) {
+          await waitForIdle();
+          const hydratedChunk = await hydrateMediaBatch(deferredMediaRows.slice(index, index + mediaHydrationChunkSize), false);
+          if (requestId !== requestIdRef.current) {
+            return;
+          }
+          startTransition(() => {
+            saveData((current) => {
+              if (current.profile?.id !== userId) {
+                return current;
+              }
+              const nextMediaFiles = mergeHydratedMediaFiles(current.mediaFiles, hydratedChunk);
+              if (nextMediaFiles === current.mediaFiles) {
+                return current;
+              }
+              const hydratedData = {
+                ...current,
+                mediaFiles: nextMediaFiles,
+              };
+              writeCachedDashboard(userId, hydratedData);
+              return hydratedData;
+            });
+          });
+        }
       })().catch((error) => {
         console.warn("Couple dashboard background load failed:", error);
       });
@@ -491,6 +472,11 @@ export function useCoupleData(userId?: string) {
       setLoadedUserId(userId);
       setLoading(false);
       setRefreshing(false);
+      dashboardRefreshDelayRef.current = Math.min(dashboardRefreshDelayRef.current * 2, maxDashboardFallbackRefreshMs);
+    } finally {
+      if (requestId === requestIdRef.current || !options.initial) {
+        loadingRequestRef.current = false;
+      }
     }
   }, [saveData, userId]);
 
@@ -502,25 +488,42 @@ export function useCoupleData(userId?: string) {
     if (!userId || !data.couple?.id) {
       return;
     }
+    if (notificationRefreshInFlightRef.current) {
+      return;
+    }
+    notificationRefreshInFlightRef.current = true;
 
-    const { data: notifications } = await supabase
-      .from("notifications")
-      .select("*")
-      .is("dismissed_at", null)
-      .order("created_at", { ascending: false })
-      .limit(16);
+    try {
+      const { data: notifications, error } = await supabase
+        .from("notifications")
+        .select(notificationDashboardSelect)
+        .is("dismissed_at", null)
+        .order("created_at", { ascending: false })
+        .limit(16);
 
-    saveData((current) => {
-      if (loadedUserId !== userId) {
-        return current;
+      if (error) {
+        console.warn("Couple dashboard notifications refresh failed:", error.message);
+        return;
       }
-      const nextData = {
-        ...current,
-        notifications: notifications ?? current.notifications,
-      };
-      writeCachedDashboard(userId, nextData);
-      return nextData;
-    });
+
+      saveData((current) => {
+        if (loadedUserId !== userId) {
+          return current;
+        }
+        const nextNotifications = notifications ?? current.notifications;
+        if (notificationsMatch(current.notifications, nextNotifications)) {
+          return current;
+        }
+        const nextData = {
+          ...current,
+          notifications: nextNotifications,
+        };
+        writeCachedDashboard(userId, nextData);
+        return nextData;
+      });
+    } finally {
+      notificationRefreshInFlightRef.current = false;
+    }
   }, [data.couple?.id, loadedUserId, saveData, userId]);
 
   useEffect(() => {
@@ -528,11 +531,36 @@ export function useCoupleData(userId?: string) {
       return undefined;
     }
 
-    const intervalId = setInterval(() => {
-      void load();
-    }, 30000);
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+    let cancelled = false;
 
-    return () => clearInterval(intervalId);
+    const schedule = () => {
+      if (cancelled) {
+        return;
+      }
+      timeoutId = setTimeout(() => {
+        if (typeof document !== "undefined" && document.visibilityState !== "visible") {
+          schedule();
+          return;
+        }
+        const beforeDelay = dashboardRefreshDelayRef.current;
+        void load().finally(() => {
+          if (dashboardRefreshDelayRef.current === beforeDelay) {
+            dashboardRefreshDelayRef.current = dashboardFallbackRefreshMs;
+          }
+          schedule();
+        });
+      }, dashboardRefreshDelayRef.current);
+    };
+
+    schedule();
+
+    return () => {
+      cancelled = true;
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+    };
   }, [data.couple?.id, load, loadedUserId, userId]);
 
   useEffect(() => {
@@ -541,8 +569,11 @@ export function useCoupleData(userId?: string) {
     }
 
     const intervalId = setInterval(() => {
+      if (typeof document !== "undefined" && document.visibilityState !== "visible") {
+        return;
+      }
       void refreshNotifications();
-    }, 2500);
+    }, notificationFallbackRefreshMs);
 
     return () => clearInterval(intervalId);
   }, [data.couple?.id, loadedUserId, refreshNotifications, userId]);
@@ -563,12 +594,22 @@ export function useCoupleData(userId?: string) {
           filter: `user_id=eq.${userId}`,
         },
         () => {
-          void refreshNotifications();
+          if (notificationRealtimeTimerRef.current) {
+            clearTimeout(notificationRealtimeTimerRef.current);
+          }
+          notificationRealtimeTimerRef.current = setTimeout(() => {
+            notificationRealtimeTimerRef.current = null;
+            void refreshNotifications();
+          }, notificationRealtimeDebounceMs);
         }
       )
       .subscribe();
 
     return () => {
+      if (notificationRealtimeTimerRef.current) {
+        clearTimeout(notificationRealtimeTimerRef.current);
+        notificationRealtimeTimerRef.current = null;
+      }
       void supabase.removeChannel(channel);
     };
   }, [data.couple?.id, loadedUserId, refreshNotifications, userId]);

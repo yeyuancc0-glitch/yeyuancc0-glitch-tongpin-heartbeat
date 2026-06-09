@@ -1,6 +1,5 @@
 import { useEffect } from "react";
-import { createPortal } from "react-dom";
-import { Image, Platform, StyleSheet, Text, View, type ImageSourcePropType } from "react-native";
+import { Image, StyleSheet, Text, View, type ImageSourcePropType } from "react-native";
 import Reanimated, {
   Easing,
   interpolate,
@@ -10,6 +9,7 @@ import Reanimated, {
   withTiming,
 } from "react-native-reanimated";
 
+import { renderPortal } from "@/lib/platform/portal";
 import { haptics } from "@/motion/haptics";
 import { motionTokens } from "@/motion/tokens";
 import { colors } from "@/styles/theme";
@@ -51,11 +51,7 @@ export function MotionLayer({
     </View>
   );
 
-  if (Platform.OS === "web" && typeof document !== "undefined") {
-    return createPortal(layer, document.body);
-  }
-
-  return layer;
+  return renderPortal(layer);
 }
 
 function QuickInteractionFlight({

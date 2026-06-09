@@ -20,17 +20,20 @@ import {
 } from "lucide-react-native";
 
 import { useToast } from "@/components/ui";
+import { useAuth } from "@/features/auth/AuthProvider";
 import { supabase } from "@/lib/supabase/client";
 import { BouncyPressable } from "@/motion/BouncyPressable";
 
 type AuthView = "signIn" | "signUp";
-type AuthField = "displayName" | "email" | "password";
+type AuthField = "displayName" | "email" | "password" | "confirmPassword";
 
 export function AuthScreen() {
   const { showToast } = useToast();
+  const { passwordRecovery, clearPasswordRecovery, signOut } = useAuth();
   const [view, setView] = useState<AuthView>("signIn");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [acceptedTerms, setAcceptedTerms] = useState(false);
   const [focusedField, setFocusedField] = useState<AuthField | null>(null);
@@ -89,6 +92,34 @@ export function AuthScreen() {
     }
   }
 
+  async function updateRecoveryPassword() {
+    setErrorText("");
+    if (password.length < 6) {
+      setErrorText("新密码至少需要 6 位。");
+      return;
+    }
+    if (password !== confirmPassword) {
+      setErrorText("两次输入的新密码不一致。");
+      return;
+    }
+
+    setBusy(true);
+    try {
+      const { error } = await supabase.auth.updateUser({ password });
+      if (error) {
+        throw error;
+      }
+      clearPasswordRecovery();
+      setPassword("");
+      setConfirmPassword("");
+      showToast({ title: "密码已更新", message: "你可以继续使用同频跳动。", tone: "success" });
+    } catch (error) {
+      setErrorText(error instanceof Error ? error.message : "请稍后重试。");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function sendPasswordReset() {
     const normalizedEmail = email.trim();
     setErrorText("");
@@ -121,7 +152,9 @@ export function AuthScreen() {
   }
 
   const isSignUp = view === "signUp";
-  const primaryLabel = busy ? (isSignUp ? "注册中" : "登录中") : isSignUp ? "注册" : "登录";
+  const primaryLabel = passwordRecovery
+    ? busy ? "保存中" : "保存新密码"
+    : busy ? (isSignUp ? "注册中" : "登录中") : isSignUp ? "注册" : "登录";
 
   return (
     <View style={styles.screen}>
@@ -142,13 +175,42 @@ export function AuthScreen() {
           <Text style={styles.brandName}>同频跳动</Text>
         </View>
 
-        <Text style={[styles.title, isSignUp ? styles.titleCompact : null]}>{isSignUp ? "创建账号" : "欢迎回来"}</Text>
+        <Text style={[styles.title, isSignUp || passwordRecovery ? styles.titleCompact : null]}>
+          {passwordRecovery ? "设置新密码" : isSignUp ? "创建账号" : "欢迎回来"}
+        </Text>
 
         <View style={styles.authPanelShell}>
           <View pointerEvents="none" style={[styles.panelShadow, isSignUp ? styles.panelShadowCompact : null]} />
           <View style={[styles.authPanel, isSignUp ? styles.authPanelCompact : null]}>
             <View pointerEvents="none" style={styles.panelShine} />
-            {isSignUp ? (
+            {passwordRecovery ? (
+              <>
+                <AuthFieldRow
+                  field="password"
+                  focusedField={focusedField}
+                  label="新密码"
+                  value={password}
+                  placeholder="请输入新密码"
+                  onChangeText={setPassword}
+                  onFieldFocus={setFocusedField}
+                  onFieldBlur={setFocusedField}
+                  secureTextEntry
+                  icon={<LockKeyhole color="rgba(116,105,111,0.42)" size={19} strokeWidth={1.9} />}
+                />
+                <AuthFieldRow
+                  field="confirmPassword"
+                  focusedField={focusedField}
+                  label="确认新密码"
+                  value={confirmPassword}
+                  placeholder="请再次输入新密码"
+                  onChangeText={setConfirmPassword}
+                  onFieldFocus={setFocusedField}
+                  onFieldBlur={setFocusedField}
+                  secureTextEntry
+                  icon={<LockKeyhole color="rgba(116,105,111,0.42)" size={19} strokeWidth={1.9} />}
+                />
+              </>
+            ) : isSignUp ? (
               <AuthFieldRow
                 field="displayName"
                 focusedField={focusedField}
@@ -162,35 +224,39 @@ export function AuthScreen() {
                 compact={isSignUp}
               />
             ) : null}
-            <AuthFieldRow
-              field="email"
-              focusedField={focusedField}
-              label="邮箱/账号"
-              value={email}
-              placeholder="请输入邮箱/账号"
-              onChangeText={setEmail}
-              onFieldFocus={setFocusedField}
-              onFieldBlur={setFocusedField}
-              autoCapitalize="none"
-              keyboardType="email-address"
-              icon={<Mail color="rgba(116,105,111,0.42)" size={19} strokeWidth={1.9} />}
-              compact={isSignUp}
-            />
-            <AuthFieldRow
-              field="password"
-              focusedField={focusedField}
-              label="密码"
-              value={password}
-              placeholder="请输入密码"
-              onChangeText={setPassword}
-              onFieldFocus={setFocusedField}
-              onFieldBlur={setFocusedField}
-              secureTextEntry
-              icon={<LockKeyhole color="rgba(116,105,111,0.42)" size={19} strokeWidth={1.9} />}
-              compact={isSignUp}
-            />
+            {passwordRecovery ? null : (
+              <>
+                <AuthFieldRow
+                  field="email"
+                  focusedField={focusedField}
+                  label="邮箱/账号"
+                  value={email}
+                  placeholder="请输入邮箱/账号"
+                  onChangeText={setEmail}
+                  onFieldFocus={setFocusedField}
+                  onFieldBlur={setFocusedField}
+                  autoCapitalize="none"
+                  keyboardType="email-address"
+                  icon={<Mail color="rgba(116,105,111,0.42)" size={19} strokeWidth={1.9} />}
+                  compact={isSignUp}
+                />
+                <AuthFieldRow
+                  field="password"
+                  focusedField={focusedField}
+                  label="密码"
+                  value={password}
+                  placeholder="请输入密码"
+                  onChangeText={setPassword}
+                  onFieldFocus={setFocusedField}
+                  onFieldBlur={setFocusedField}
+                  secureTextEntry
+                  icon={<LockKeyhole color="rgba(116,105,111,0.42)" size={19} strokeWidth={1.9} />}
+                  compact={isSignUp}
+                />
+              </>
+            )}
 
-            <View style={styles.formMetaRow}>
+            {passwordRecovery ? null : <View style={styles.formMetaRow}>
               <Pressable
                 accessibilityRole="checkbox"
                 accessibilityState={{ checked: acceptedTerms }}
@@ -207,16 +273,22 @@ export function AuthScreen() {
                   <Text style={styles.forgotText}>{resetBusy ? "发送中" : "忘记密码?"}</Text>
                 </Pressable>
               ) : null}
-            </View>
+            </View>}
 
             {errorText ? <Text style={styles.errorText}>{errorText}</Text> : null}
 
             <BouncyPressable
               accessibilityRole="button"
-              disabled={busy || !email.trim() || !password}
+              disabled={busy || (passwordRecovery ? !password || !confirmPassword : !email.trim() || !password)}
               disabledStyle={styles.primaryButtonDisabled}
               haptic="light"
-              onPress={() => submit(view)}
+              onPress={() => {
+                if (passwordRecovery) {
+                  void updateRecoveryPassword();
+                  return;
+                }
+                void submit(view);
+              }}
               style={styles.primaryButton}
             >
               <View pointerEvents="none" style={styles.primaryButtonGlow} />
@@ -224,11 +296,24 @@ export function AuthScreen() {
               <Text style={styles.primaryButtonText}>{primaryLabel}</Text>
             </BouncyPressable>
 
-            <Pressable accessibilityRole="button" onPress={() => goTo(isSignUp ? "signIn" : "signUp")} style={styles.switchModeButton}>
-              <Text style={styles.switchModeText}>{isSignUp ? "已有账号登录" : "新用户注册"}</Text>
-            </Pressable>
+            {passwordRecovery ? (
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => {
+                  clearPasswordRecovery();
+                  void signOut();
+                }}
+                style={styles.switchModeButton}
+              >
+                <Text style={styles.switchModeText}>返回登录</Text>
+              </Pressable>
+            ) : (
+              <Pressable accessibilityRole="button" onPress={() => goTo(isSignUp ? "signIn" : "signUp")} style={styles.switchModeButton}>
+                <Text style={styles.switchModeText}>{isSignUp ? "已有账号登录" : "新用户注册"}</Text>
+              </Pressable>
+            )}
 
-            <View style={styles.socialRow}>
+            {passwordRecovery ? null : <View style={styles.socialRow}>
               <SocialButton
                 label="微信登录暂未开放"
                 onPress={() => showToast({ title: "暂未开放", message: "当前版本先使用邮箱密码登录。", tone: "info" })}
@@ -244,7 +329,7 @@ export function AuthScreen() {
                 onPress={() => showToast({ title: "暂未开放", message: "当前版本先使用邮箱密码登录。", tone: "info" })}
                 icon={<UserRound color="rgba(44,39,42,0.62)" size={20} />}
               />
-            </View>
+            </View>}
           </View>
         </View>
       </View>

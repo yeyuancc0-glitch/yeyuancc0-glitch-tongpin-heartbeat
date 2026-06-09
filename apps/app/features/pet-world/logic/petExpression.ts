@@ -1,4 +1,4 @@
-import type { CreationLivePetAction, LivePetVisualAction } from "@/features/pet/components/PetStage";
+import type { LivePetVisualAction } from "@/features/pet/components/PetStage";
 import type { PetWorldDecision, PetWorldIntent } from "@/features/pet/services/petAiBrain";
 
 export type PetExpressionMode = "animal" | "human";

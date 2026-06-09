@@ -1,4 +1,5 @@
 import type { CreationLivePetAction } from "@/features/pet/components/PetStage";
+import { localDateKey } from "@/lib/dates/date";
 import type { CreationAction, CreationSpace } from "@/lib/supabase/database.types";
 
 export type PetMoodRuleInput = {
@@ -48,12 +49,12 @@ export function petActionForState(space: CreationSpace | null, partnerOnline?: b
 }
 
 export function todayPetCareCount(actions: CreationAction[], now = new Date()) {
-  const today = now.toISOString().slice(0, 10);
+  const today = localDateKey(now);
   return actions.filter((action) => {
     if (!["feed", "pet", "clean", "play"].includes(action.action_type)) {
       return false;
     }
-    return action.created_at.slice(0, 10) === today;
+    return localDateKey(new Date(action.created_at)) === today;
   }).length;
 }
 

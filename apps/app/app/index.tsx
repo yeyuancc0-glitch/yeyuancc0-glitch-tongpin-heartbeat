@@ -8,7 +8,7 @@ import { SetupRequiredScreen } from "@/features/setup/SetupRequiredScreen";
 import { isSupabaseConfigured } from "@/lib/supabase/client";
 
 export default function IndexPage() {
-  const { user, loading } = useAuth();
+  const { user, loading, passwordRecovery } = useAuth();
 
   return (
     <Screen>
@@ -19,6 +19,8 @@ export default function IndexPage() {
               <SetupRequiredScreen />
             ) : loading ? (
               <HomeScreenShell />
+            ) : passwordRecovery ? (
+              <AuthScreen />
             ) : user ? (
               <HomeScreen />
             ) : (

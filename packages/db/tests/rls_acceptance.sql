@@ -156,26 +156,26 @@
 -- select * from public.archive_pet_memory('<PET_MEMORY_ID>'); -- as User A, expect archived_at set and row disappears from active UI query
 -- select * from public.archive_pet_memory('<OTHER_COUPLE_PET_MEMORY_ID>'); -- as User A, expect active_couple_not_found
 
--- 28. Global pet world RPCs validate active couple membership and surface allowlists.
--- select * from public.apply_pet_world_decision(
+-- 28. Global pet world RPCs validate active couple membership, service-only AI writes, and surface allowlists.
+-- select * from public.apply_pet_rule_world_decision(
 --   '<COUPLE_AB_UUID>',
 --   '{"intent":"wander","target_surface":"home","mood":"calm","animation":"walk","expression":"soft","symbol":"heart","sound_cue":"soft_chime","speech":"我在你旁边慢慢走","prop":"none","state_delta":{"affection":1},"memory_policy":{"should_write":false,"importance":0,"summary":""}}'::jsonb,
---   '{"source":"rls_acceptance"}'::jsonb
--- ); -- as User A, expect success, Step 8 world fields preserved in last_world_decision, and one pet_world_events decision row
--- select * from public.apply_pet_world_decision(
+--   '{"source":"user_interaction","rule_reason":"manual_rule"}'::jsonb
+-- ); -- as User A, expect success, sanitized state_delta/memory_policy, Step 8 world fields preserved in last_world_decision, and one pet_world_events decision row
+-- select * from public.apply_pet_rule_world_decision(
 --   '<COUPLE_AB_UUID>',
 --   '{"intent":"visit_partner","target_surface":"share","mood":"happy","animation":"run","expression":"happy","symbol":"letter","sound_cue":"letter","speech":"我叼着信来找你啦","prop":"letter","memory_policy":{"should_write":true,"memory_type":"milestone","memory_scope":"core","importance":98,"summary":"第一次帮你们送出一封信","dedupe_key":"first_letter_delivery"}}'::jsonb,
---   '{"source":"rls_acceptance","trigger":"letter_delivery"}'::jsonb
--- ); -- as User A, expect success and at most one core milestone memory with dedupe_key first_letter_delivery
--- select * from public.apply_pet_world_decision(
+--   '{"source":"write_letter","trigger":"letter_delivery","rule_reason":"ritual_rule_fallback"}'::jsonb
+-- ); -- as User A, expect success but no direct client memory write because rule wrapper strips memory_policy
+-- select * from public.apply_pet_rule_world_decision(
 --   '<COUPLE_AB_UUID>',
 --   '{"intent":"wander","target_surface":"profile","mood":"calm","animation":"walk","bubble":"","memory_policy":{"should_write":false,"importance":0,"summary":""}}'::jsonb,
---   '{}'::jsonb
+--   '{"source":"user_interaction","rule_reason":"manual_rule"}'::jsonb
 -- ); -- as User A, expect unsupported_surface
--- select * from public.apply_pet_world_decision(
+-- select * from public.apply_pet_rule_world_decision(
 --   '<COUPLE_AB_UUID>',
 --   '{"intent":"wander","target_surface":"footprints","mood":"calm","animation":"walk","speech":"我去足迹页看看","memory_policy":{"should_write":false,"importance":0,"summary":""}}'::jsonb,
---   '{}'::jsonb
+--   '{"source":"user_interaction","rule_reason":"manual_rule"}'::jsonb
 -- ); -- as User A, expect target_surface normalized to pet_room, not footprints
 -- select * from public.find_creation_pet('<COUPLE_AB_UUID>', 'memory'); -- as User A, expect success, pet_hidden false, current_action happy, affection +4, boredom -8, comfort +5, and found event metadata.state_delta
 -- select * from public.find_creation_pet('<COUPLE_AB_UUID>', 'settings'); -- as User A, expect unsupported_surface
@@ -183,8 +183,13 @@
 -- select * from public.mark_pet_surface_seen('<COUPLE_AB_UUID>', 'profile'); -- as User A, expect unsupported_surface
 -- select * from public.summon_creation_pet('<COUPLE_AB_UUID>', 'share'); -- as User A, expect success, current_action happy, affection +1, boredom -3, and summon event metadata.state_delta on share
 -- select * from public.summon_creation_pet('<COUPLE_AB_UUID>', 'settings'); -- as User A, expect unsupported_surface
--- select * from public.apply_pet_world_decision(
+-- select * from public.apply_pet_rule_world_decision(
 --   '<COUPLE_CD_UUID>',
 --   '{"intent":"wander","target_surface":"home","mood":"calm","animation":"walk","bubble":"","memory_policy":{"should_write":false,"importance":0,"summary":""}}'::jsonb,
---   '{}'::jsonb
+--   '{"source":"user_interaction","rule_reason":"manual_rule"}'::jsonb
 -- ); -- as User A, expect active_couple_not_found
+-- select * from public.apply_pet_world_decision(
+--   '<COUPLE_AB_UUID>',
+--   '{"intent":"wander","target_surface":"home","mood":"calm","animation":"walk","bubble":"","memory_policy":{"should_write":false,"importance":0,"summary":""}}'::jsonb,
+--   '{"source":"edge_ai_success","actor_user_id":"<USER_A_UUID>"}'::jsonb
+-- ); -- as User A, expect permission denied; service_role only

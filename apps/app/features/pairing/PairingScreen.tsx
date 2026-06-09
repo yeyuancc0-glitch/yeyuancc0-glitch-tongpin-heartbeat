@@ -1,5 +1,5 @@
 import { Copy, Link as LinkIcon, Send } from "lucide-react-native";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Platform, StyleSheet, Text, View } from "react-native";
 import Reanimated from "react-native-reanimated";
 
@@ -13,19 +13,11 @@ import {
 } from "@/components/app-ui/AppUI";
 import { DateField, InlineNotice, useToast } from "@/components/ui";
 import { useAuth } from "@/features/auth/AuthProvider";
+import { localIsoDate } from "@/lib/dates/date";
 import { supabase } from "@/lib/supabase/client";
 import type { PairInvite } from "@/lib/supabase/database.types";
 import { useErrorShake } from "@/motion/useErrorShake";
 import { colors } from "@/styles/theme";
-
-function makeCode() {
-  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-  let code = "";
-  for (let i = 0; i < 8; i += 1) {
-    code += alphabet[Math.floor(Math.random() * alphabet.length)];
-  }
-  return code;
-}
 
 export function PairingScreen({
   pendingInvites,
@@ -50,6 +42,19 @@ export function PairingScreen({
   const { triggerShake, shakeStyle } = useErrorShake();
   const latestInvite = pendingInvites[0];
 
+  useEffect(() => {
+    if (Platform.OS !== "web" || typeof window === "undefined") {
+      return;
+    }
+    const params = new URLSearchParams(window.location.search);
+    const inviteParam = params.get("invite")?.trim().toUpperCase();
+    if (!inviteParam) {
+      return;
+    }
+    setInviteCode(inviteParam);
+    setMode("accept");
+  }, []);
+
   async function createInvite() {
     if (!user) {
       return;
@@ -59,10 +64,8 @@ export function PairingScreen({
     const expiresAt = new Date();
     expiresAt.setDate(expiresAt.getDate() + 7);
 
-    const { error } = await supabase.from("pair_invites").insert({
-      created_by: user.id,
-      code: makeCode(),
-      expires_at: expiresAt.toISOString(),
+    const { error } = await supabase.rpc("create_pair_invite", {
+      invite_expires_at: expiresAt.toISOString(),
     });
 
     setCreating(false);
@@ -80,7 +83,7 @@ export function PairingScreen({
     let usedLegacyBinding = false;
     let { error } = await supabase.rpc("accept_pair_invite", {
       invite_code: inviteCode.trim().toUpperCase(),
-      relationship_started_at: relationshipStartDate || new Date().toISOString().slice(0, 10),
+      relationship_started_at: relationshipStartDate || localIsoDate(),
     });
 
     if (isRelationshipDateRpcMissing(error)) {

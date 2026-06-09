@@ -31,36 +31,41 @@ export function CheckinCard({
     }
 
     setBusy(true);
-    const insertPayload = {
-      couple_id: coupleId,
-      user_id: user.id,
-      checkin_date: today,
-      content: content.trim() || null,
-      updated_at: new Date().toISOString(),
-    };
-    const result = mineToday
-      ? await supabase
-          .from("checkins")
-          .update({
-            checkin_date: today,
-            content: content.trim() || null,
-            updated_at: new Date().toISOString(),
-          })
-          .eq("id", mineToday.id)
-      : await supabase.from("checkins").insert(insertPayload);
+    try {
+      const insertPayload = {
+        couple_id: coupleId,
+        user_id: user.id,
+        checkin_date: today,
+        content: content.trim() || null,
+        updated_at: new Date().toISOString(),
+      };
+      const result = mineToday
+        ? await supabase
+            .from("checkins")
+            .update({
+              checkin_date: today,
+              content: content.trim() || null,
+              updated_at: new Date().toISOString(),
+            })
+            .eq("id", mineToday.id)
+        : await supabase.from("checkins").insert(insertPayload);
 
-    setBusy(false);
-    if (result.error) {
-      showToast({ title: "分享失败", message: result.error.message, tone: "error" });
-      return;
+      if (result.error) {
+        showToast({ title: "分享失败", message: result.error.message, tone: "error" });
+        return;
+      }
+      setContent("");
+      showToast({
+        title: mineToday ? "今日分享已更新" : "今日已分享",
+        message: "页面会在后台同步最新记录。",
+        tone: "success",
+      });
+      onChanged();
+    } catch (error) {
+      showToast({ title: "分享失败", message: error instanceof Error ? error.message : "请稍后重试。", tone: "error" });
+    } finally {
+      setBusy(false);
     }
-    setContent("");
-    showToast({
-      title: mineToday ? "今日分享已更新" : "今日已分享",
-      message: "页面会在后台同步最新记录。",
-      tone: "success",
-    });
-    onChanged();
   }
 
   return (
