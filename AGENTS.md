@@ -53,6 +53,14 @@
 - 触感反馈使用 `expo-haptics` 经 `apps/app/motion/haptics.ts` 封装；Web 或不支持设备必须静默降级。
 - Web portal 统一通过 `apps/app/lib/platform/portal` 调用；跨端组件不要顶层直接导入 `react-dom`。
 
+## Android / 原生端状态
+
+- Android APK 目前按预览包看待，不应宣称与 Web 正式版功能完全等价；完成移动端前需要专项验收原生图片、云宠、底部导航、浮层和安全区。
+- 头像、相册、记忆配图和今日胶囊图片上传仍以 Web `File` / `FileList` / DOM canvas 流程为主；Android 端完成前需接入原生图片选择、压缩/缩略图生成和 Supabase Storage 上传链路。
+- `Live2DCanvas`、`GlobalPetLayer` 和云宠全局游走当前是 Web / DOM / Pixi 实现；Android 端需要原生可用的云宠渲染或明确降级方案。
+- 共享 RN 样式不要直接依赖 Web CSS：`position: "fixed"`、`calc/env/vh/vw`、`backgroundImage`、`boxShadow`、`backdropFilter`、`filter`、`outlineStyle` 等必须按平台隔离或替换为 RN 安全区、absolute 布局、`elevation` / 原生阴影等实现。
+- Android / EAS 构建入口以 `apps/app/app.json` 为准；不要让根目录空 `app.json` 作为 Expo 项目配置参与原生构建。
+
 ## 首页、相册与记忆
 
 - 当前首页结构：此刻同频卡片内合并快捷心情投递；相册卡片位于此刻同频下方；留言板在首页一级界面直接提供输入框；首页不展示最近纪念日和今日胶囊卡片。
@@ -64,6 +72,7 @@
 - 首页本地缓存只保存低敏骨架数据；不要持久化留言、通知、胶囊、信件、足迹、宠物记忆、caption、signed URL、AI 气泡或 world decision 正文。头像和相册只缓存 Storage path，刷新后后台重新签名。
 - 头像和相册使用 Supabase private Storage；数据库只保存 Storage path，前端展示时生成 signed URL，不能把 signed URL 写回数据库。
 - 头像与相册缩略图使用独立 Storage path：`profiles.avatar_thumbnail_url`、`media_files.thumbnail_storage_path`；列表/九宫格/记忆流优先展示缩略图，点开预览才按需读取原图。
+- 相册大图预览应保留缩略图托底，并对当前与相邻照片的原图 signed URL 做预签名和图片预取；已加载图片 URL 需要跨组件实例记忆，避免切图后立即重复闪加载。
 - 旧头像缺少 `avatar_thumbnail_url` 时，小尺寸头像只能使用 Storage transform / 本地缩略图 blob 兜底，不要回退到原图 signed URL。
 - 用户只需选择一次图片；前端负责自动上传原图和缩略图。缩略图失败时不要写入缩略图 path；数据库保存失败要清理本次上传对象。
 - `apps/app/lib/supabase/storage.ts` 生成的 transformed image `blob:` URL 必须在替换或过期时 revoke。
@@ -93,6 +102,7 @@
 
 - 原生 iOS / Android 使用 Expo Notifications；网页版使用标准 Web Push（Service Worker + Push API + VAPID），不能依靠 `expo-notifications` 在浏览器页面关闭时收到推送。
 - Web Push 订阅使用 `push_tokens.provider = 'web_push'`，endpoint 存 `token`，密钥存 `web_p256dh` / `web_auth`；Service Worker 位于 `apps/app/public/sw.js`，PWA manifest 位于 `apps/app/public/site.webmanifest` 且需保留 Chromium/Edge Android 使用的 `gcm_sender_id: "103953800507"`。
+- Android Edge 在中国大陆环境下不作为可用网页后台推送渠道；即使通知权限已允许，`PushManager.subscribe()` 仍可能报 `Registration failed - push service error`。前端应提示使用站内通知，可靠系统推送需要后续接入原生 Android 国内厂商推送通道。
 - iPhone 网页推送要求 iOS 16.4+，且用户先将网站添加到主屏幕，再从主屏幕图标打开并授权。
 - Web 构建时不要让 `expo export` 直接解析原生推送依赖；平台拆分逻辑用于绕开 `expo-application` / `expo-device` / `expo-notifications`。
 - `send-push-notifications` 只接受 service role key 或 `PUSH_DELIVERY_WORKER_SECRET`；前端客户端不要直接调用该函数。
@@ -125,6 +135,15 @@
 - 恋爱开始日期由 `accept_pair_invite(invite_code, relationship_started_at)` 和 `update_active_couple_dates(relationship_started_at)` 处理。
 - Web 正式版使用 Expo Web 静态导出；Vercel 构建命令为 `npm run build:web`，输出目录为 `apps/app/dist`。
 - Supabase 配置通过 `EXPO_PUBLIC_SUPABASE_URL` 和 `EXPO_PUBLIC_SUPABASE_ANON_KEY` 注入。
+- 完全脱离 Supabase 的自建服务器迁移方案见 `docs/self-host-migration-plan.md`，优化执行路线见 `docs/self-host-optimized-roadmap.md`，Supabase 依赖清单见 `docs/self-host-supabase-replacement-map.md`；实施时需全量替换 Auth、Postgres/RPC、Storage、Realtime、Edge Functions、Cron 和 Push worker，不要只改数据库地址。
+- 自建服务器迁移第一阶段走旁路 staging，不切生产；空服务器优先 Docker Compose + API 内置轻量 Auth，Keycloak 作为后续可选增强。
+- 自建 staging 基建模板位于 `infra/self-host/staging/`，远端部署目录为 `/opt/tongpin`；模板不含真实 secrets，服务器 `.env` 不要提交或写进聊天。
+- 自建 staging 执行前先看 `docs/self-host-staging-preflight.md` 和 `infra/self-host/staging/RUNBOOK.md`；服务器重启自恢复验证、真实自建 API 替换和生产切换都要单独确认。
+- 腾讯云轻量服务器已配置 Docker registry mirror：`https://mirror.ccs.tencentyun.com`；回滚脚本在 `infra/self-host/staging/scripts/rollback-docker-mirror.sh`。
+- `/opt/tongpin` staging 栈已启动并通过本机健康检查：API `/health`、PostgreSQL `pg_isready`、Redis `PONG`；PostgreSQL dump 与 MinIO 对象清单备份演练已通过；服务器 MinIO 备份脚本已改为 `ls -1R`，0 字节演练残留已清理；临时 `codex-tongpin-staging` SSH 公钥标记和上传临时包已清理。
+- 腾讯云轻量防火墙已开放 `HTTPS (443)`；Cloudflare staging DNS 已设置 `api-staging.fanch.tech` / `assets-staging.fanch.tech` 指向 `81.71.9.118`；Caddy 已为 `api-staging.fanch.tech` 获取 Let's Encrypt 证书，服务器内部 HTTPS 返回 HTTP/2 `200` 和 `status: ok`。
+- 当前腾讯云公网入口会将未备案 staging 域名的 HTTP 请求拦到 `dnspod.qcloud.com/static/webblock.html?d=api-staging.fanch.tech`，HTTPS SNI 会表现为 TLS EOF；这不是 Caddy、Docker 或 Cloudflare DNS 故障。解决需完成 ICP 备案，或改用 Cloudflare Tunnel / 境外入口作为 staging 公网访问路径。
+- 用户当前正在等待 ICP 备案结果；备案下来前不要主动开始自建服务器迁移、生产切换或真实自建 API 替换实施。
 - Vercel 项目：`yeyuancc0-glitchs-projects/tongpin-heartbeat`；生产地址：`https://tongpin-heartbeat.vercel.app`；自定义应用域名：`https://app.fanch.tech`。
 - 用户明确说“推送更新 / 发布 / 部署 / 上线”时，按生产发布处理：`npx vercel --prod -y`；否则不要部署。
 

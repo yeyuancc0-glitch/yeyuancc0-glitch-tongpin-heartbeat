@@ -41,8 +41,8 @@
 
 ## Web Push 兼容项
 
-- Android Edge / Chromium PWA 的 manifest 需要保留 `gcm_sender_id: "103953800507"`，否则 `PushManager.subscribe()` 可能抛出 `Registration failed - push service error`。
-- Android Edge 验收时，从桌面图标打开 `https://app.fanch.tech`，确认 Edge 站点通知权限已允许，再进入通知设置点击“开启当前网页推送”。
+- Android Edge 在中国大陆环境下不作为可用网页后台推送渠道。即使站点通知权限已允许，`PushManager.subscribe()` 仍可能抛出 `Registration failed - push service error`，失败点是浏览器推送服务订阅，不是普通站点权限。
+- Chromium PWA 的 manifest 仍保留 `gcm_sender_id: "103953800507"`，但中国大陆 Android 可靠系统推送应走后续原生 Android 国内厂商推送通道；网页端只保证站内通知。
 
 ## 真机验收
 

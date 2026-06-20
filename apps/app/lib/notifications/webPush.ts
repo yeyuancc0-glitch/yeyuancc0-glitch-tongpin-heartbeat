@@ -2,9 +2,18 @@ import { supabase } from "@/lib/supabase/client";
 
 type WebPushRegistrationResult =
   | { status: "registered"; endpoint: string }
-  | { status: "unsupported" | "denied" | "missing_vapid_key" | "error"; message?: string };
+  | { status: "unsupported" | "denied" | "missing_vapid_key" | "service_unavailable" | "error"; message?: string };
+
+type WebPushEnvironment = {
+  supported: boolean;
+  permission: NotificationPermission | "unsupported";
+  isAndroidEdge: boolean;
+  isStandalone: boolean;
+  userAgent: string;
+};
 
 const serviceWorkerPath = "/sw.js";
+const chromiumGcmSenderId = "103953800507";
 
 export function isWebPushSupported() {
   return (
@@ -12,7 +21,8 @@ export function isWebPushSupported() {
     "serviceWorker" in navigator &&
     "PushManager" in window &&
     "Notification" in window &&
-    window.isSecureContext
+    window.isSecureContext &&
+    !isAndroidEdgeBrowser()
   );
 }
 
@@ -23,7 +33,25 @@ export function getWebPushPermission() {
   return Notification.permission;
 }
 
+export function getWebPushEnvironment(): WebPushEnvironment {
+  const userAgent = typeof navigator === "undefined" ? "" : navigator.userAgent;
+  return {
+    supported: isWebPushSupported(),
+    permission: getWebPushPermission(),
+    isAndroidEdge: /\bEdgA\//.test(userAgent) || (/\bEdg\//.test(userAgent) && /Android/i.test(userAgent)),
+    isStandalone: isStandaloneWebApp(),
+    userAgent,
+  };
+}
+
 export async function registerForWebPushNotifications(): Promise<WebPushRegistrationResult> {
+  if (getWebPushEnvironment().isAndroidEdge) {
+    return {
+      status: "unsupported",
+      message: "Android Edge 在中国大陆环境下无法稳定完成网页后台推送订阅。当前只能使用站内通知；可靠系统推送需要后续接入原生 Android 国内厂商推送通道。",
+    };
+  }
+
   if (!isWebPushSupported()) {
     return { status: "unsupported", message: "当前浏览器不支持网页系统推送，或页面不是 HTTPS 安全环境。" };
   }
@@ -37,6 +65,14 @@ export async function registerForWebPushNotifications(): Promise<WebPushRegistra
     const permission = Notification.permission === "granted" ? "granted" : await Notification.requestPermission();
     if (permission !== "granted") {
       return { status: "denied", message: "浏览器通知权限未开启。" };
+    }
+
+    const manifestReady = await hasChromiumPushManifestSenderId();
+    if (!manifestReady) {
+      return {
+        status: "service_unavailable",
+        message: "当前桌面图标可能仍在使用旧版网页配置。请删除桌面图标，清除 Edge 中本站的存储数据，再从 https://app.fanch.tech 重新添加到桌面后重试。",
+      };
     }
 
     const registration = await getReadyServiceWorkerRegistration();
@@ -78,7 +114,11 @@ export async function registerForWebPushNotifications(): Promise<WebPushRegistra
 
     return { status: "registered", endpoint };
   } catch (error) {
-    return { status: "error", message: formatWebPushRegistrationError(error) };
+    const message = formatWebPushRegistrationError(error);
+    return {
+      status: isWebPushServiceError(error) ? "unsupported" : "error",
+      message,
+    };
   }
 }
 
@@ -112,6 +152,24 @@ function urlBase64ToUint8Array(base64String: string) {
   return outputArray;
 }
 
+async function hasChromiumPushManifestSenderId() {
+  if (!isChromiumBasedBrowser()) {
+    return true;
+  }
+
+  try {
+    const manifestHref = document.querySelector<HTMLLinkElement>('link[rel="manifest"]')?.href ?? "/site.webmanifest";
+    const response = await fetch(manifestHref, { cache: "no-store" });
+    if (!response.ok) {
+      return false;
+    }
+    const manifest = await response.json() as { gcm_sender_id?: unknown };
+    return manifest.gcm_sender_id === chromiumGcmSenderId;
+  } catch {
+    return false;
+  }
+}
+
 async function getReadyServiceWorkerRegistration() {
   await navigator.serviceWorker.register(serviceWorkerPath);
   return await navigator.serviceWorker.ready;
@@ -135,8 +193,11 @@ function formatWebPushRegistrationError(error: unknown) {
   }
 
   const message = error.message.trim();
-  if (message.includes("push service error") || message.includes("Registration failed")) {
-    return "浏览器推送服务注册失败。Android Edge 请先确认已从桌面图标打开本站、Edge 允许通知且网络可连接浏览器推送服务，然后重试。";
+  if (isWebPushServiceError(error)) {
+    if (getWebPushEnvironment().isAndroidEdge) {
+      return "权限已经允许，但 Android Edge 无法完成网页后台推送订阅。这不是站点权限问题；在中国大陆环境下请使用站内通知，可靠系统推送需要后续接入原生 Android 国内厂商推送通道。";
+    }
+    return "权限已经允许，但浏览器推送服务注册失败。请清除本站数据后重新添加到桌面再试；如果仍失败，只能使用站内通知。";
   }
 
   if (error.name === "NotAllowedError" || message.includes("permission")) {
@@ -152,4 +213,34 @@ function formatWebPushRegistrationError(error: unknown) {
   }
 
   return message || "网页推送开启失败。";
+}
+
+function isWebPushServiceError(error: unknown) {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  const message = error.message.trim();
+  return message.includes("push service error") || message.includes("Registration failed");
+}
+
+function isChromiumBasedBrowser() {
+  if (typeof navigator === "undefined") {
+    return false;
+  }
+  return /Chrome|Chromium|CriOS|Edg|EdgA/i.test(navigator.userAgent);
+}
+
+function isAndroidEdgeBrowser() {
+  if (typeof navigator === "undefined") {
+    return false;
+  }
+  return /\bEdgA\//.test(navigator.userAgent) || (/\bEdg\//.test(navigator.userAgent) && /Android/i.test(navigator.userAgent));
+}
+
+function isStandaloneWebApp() {
+  if (typeof window === "undefined") {
+    return false;
+  }
+  const navigatorLike = navigator as Navigator & { standalone?: boolean };
+  return window.matchMedia?.("(display-mode: standalone)").matches || navigatorLike.standalone === true;
 }

@@ -335,7 +335,8 @@ export function AppScroll({ children }: PropsWithChildren) {
   const scrollMotionStyle = useAnimatedStyle(() => ({
     transform: [{ translateY: rubberBand.value }],
   }));
-  const refreshText = refreshing ? "正在刷新" : pullState === "ready" ? "松开刷新" : "下拉刷新";
+  const showPullRefreshIndicator = Platform.OS === "web" && pullState !== "idle";
+  const refreshText = pullState === "ready" ? "松开刷新" : "下拉刷新";
   const scrollContentWebProps =
     Platform.OS === "web" ? ({ dataSet: { appScrollContent: "true" } } as Record<string, unknown>) : {};
 
@@ -366,7 +367,7 @@ export function AppScroll({ children }: PropsWithChildren) {
         }}
         {...webPullHandlers}
       >
-        {Platform.OS === "web" && (pullState !== "idle" || refreshing) ? (
+        {showPullRefreshIndicator ? (
           <View style={styles.pullRefreshIndicator}>
             <Text style={styles.pullRefreshText}>{refreshText}</Text>
           </View>

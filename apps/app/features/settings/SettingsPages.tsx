@@ -9,7 +9,7 @@ import { styles } from "@/features/home/homeStyles";
 import type { NotificationPreferenceToggleKey, SettingPage } from "@/features/home/homeShared";
 import { ProfileScreen } from "@/features/profile/ProfileScreen";
 import { formatShortDate } from "@/lib/dates/date";
-import { getWebPushPermission, isWebPushSupported, registerForWebPushNotifications } from "@/lib/notifications/webPush";
+import { getWebPushEnvironment, getWebPushPermission, isWebPushSupported, registerForWebPushNotifications } from "@/lib/notifications/webPush";
 import { supabase } from "@/lib/supabase/client";
 import type { Notification, NotificationPreference } from "@/lib/supabase/database.types";
 import type { PetUserSettings, PetUserSize } from "@/features/pet/userPetSettings";
@@ -415,6 +415,8 @@ function NotificationSettingsPanel({
   const [activeTokens, setActiveTokens] = useState(0);
   const [currentWebPushEnabled, setCurrentWebPushEnabled] = useState(false);
   const [webPushPermission, setWebPushPermission] = useState<string>(Platform.OS === "web" ? getWebPushPermission() : "native");
+  const [webPushServiceUnavailable, setWebPushServiceUnavailable] = useState(false);
+  const [webPushEnvironment, setWebPushEnvironment] = useState(() => (Platform.OS === "web" ? getWebPushEnvironment() : null));
   const [loading, setLoading] = useState(true);
   const [savingKey, setSavingKey] = useState<NotificationPreferenceToggleKey | null>(null);
   const [registeringWebPush, setRegisteringWebPush] = useState(false);
@@ -443,11 +445,13 @@ function NotificationSettingsPanel({
         setActiveTokens(count ?? 0);
         if (Platform.OS === "web") {
           setWebPushPermission(getWebPushPermission());
+          setWebPushEnvironment(getWebPushEnvironment());
           if (isWebPushSupported()) {
             const registration = await navigator.serviceWorker.getRegistration("/sw.js");
             const subscription = await registration?.pushManager.getSubscription();
             if (!mounted) return;
             setCurrentWebPushEnabled(Boolean(subscription));
+            setWebPushServiceUnavailable(false);
           } else {
             setCurrentWebPushEnabled(false);
           }
@@ -510,11 +514,14 @@ function NotificationSettingsPanel({
     try {
       const result = await registerForWebPushNotifications();
       setWebPushPermission(getWebPushPermission());
+      setWebPushEnvironment(Platform.OS === "web" ? getWebPushEnvironment() : null);
       if (result.status !== "registered") {
+        setWebPushServiceUnavailable(result.status === "service_unavailable");
         showToast({ title: "网页推送未开启", message: result.message ?? "当前浏览器暂时不能注册网页推送。", tone: "error" });
         return;
       }
       setCurrentWebPushEnabled(true);
+      setWebPushServiceUnavailable(false);
       setActiveTokens((count) => Math.max(1, count));
       showToast({ title: "网页推送已开启", message: "之后对方留言、互动和胶囊信会尝试推送到这台设备。", tone: "success" });
     } catch (error) {
@@ -525,11 +532,23 @@ function NotificationSettingsPanel({
   }
 
   const webPushReady = Platform.OS !== "web" || isWebPushSupported();
+  const webPushNotice =
+    Platform.OS !== "web"
+      ? "会推送：对方新留言、快捷互动、今日胶囊和胶囊信。默认不推送：自己触发的提醒、删除/已读/设置变更、普通日历事件、宠物喂养和相册上传。"
+      : webPushServiceUnavailable && webPushEnvironment?.isAndroidEdge
+        ? "当前 Android Edge 已允许通知，但浏览器后台推送订阅不可用。中国大陆环境下请使用站内通知；可靠系统推送需要后续接入原生 Android 国内厂商推送通道。"
+        : webPushServiceUnavailable
+          ? "当前浏览器已允许通知，但推送服务注册失败。请清除本站数据、重新添加到桌面，或换用支持 Web Push 的浏览器。"
+          : webPushEnvironment?.isAndroidEdge
+            ? "Android Edge 当前不作为可用网页后台推送渠道。站内通知仍可正常使用；可靠系统推送需要后续原生 Android 国内厂商推送。"
+            : "会推送：对方新留言、快捷互动、今日胶囊和胶囊信。iPhone 网页推送需要先把网站添加到主屏幕，再从主屏幕图标打开后授权。";
   const deviceStatus =
     Platform.OS === "web"
       ? currentWebPushEnabled
         ? "当前网页已开启"
-        : webPushPermission === "denied"
+        : webPushServiceUnavailable || webPushEnvironment?.isAndroidEdge
+          ? "推送服务不可用"
+          : webPushPermission === "denied"
           ? "浏览器已拒绝通知"
           : webPushReady
             ? "当前网页可开启"
@@ -558,16 +577,14 @@ function NotificationSettingsPanel({
               <SecondaryButton
                 label={registeringWebPush ? "开启中" : "开启当前网页推送"}
                 onPress={() => void enableWebPush()}
-                disabled={!preferences.push_enabled || !webPushReady || webPushPermission === "denied"}
+                disabled={!preferences.push_enabled || !webPushReady || webPushPermission === "denied" || Boolean(webPushEnvironment?.isAndroidEdge)}
                 loading={registeringWebPush}
                 icon={<Bell color={colors.accentDark} size={16} />}
               />
             ) : null}
           </>
         )}
-        <InlineNotice tone="info">
-          会推送：对方新留言、快捷互动、今日胶囊和胶囊信。默认不推送：自己触发的提醒、删除/已读/设置变更、普通日历事件、宠物喂养和相册上传。iPhone 网页推送需要先把网站添加到主屏幕，再从主屏幕图标打开后授权。
-        </InlineNotice>
+        <InlineNotice tone={webPushServiceUnavailable || webPushEnvironment?.isAndroidEdge ? "error" : "info"}>{webPushNotice}</InlineNotice>
       </Card>
       <Card>
         <Text style={styles.sectionTitle}>站内通知</Text>

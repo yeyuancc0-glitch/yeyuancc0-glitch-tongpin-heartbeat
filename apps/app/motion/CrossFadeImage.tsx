@@ -12,6 +12,20 @@ type CrossFadeImageProps = ImageProps & {
   showSkeleton?: boolean;
 };
 
+const maxLoadedImageSourceKeys = 400;
+const loadedImageSourceKeys = new Set<string>();
+
+function rememberLoadedImageSourceKey(sourceKey: string) {
+  loadedImageSourceKeys.add(sourceKey);
+  if (loadedImageSourceKeys.size <= maxLoadedImageSourceKeys) {
+    return;
+  }
+  const oldestSourceKey = loadedImageSourceKeys.values().next().value;
+  if (oldestSourceKey) {
+    loadedImageSourceKeys.delete(oldestSourceKey);
+  }
+}
+
 function getSourceKey(source: ImageProps["source"]): string {
   if (!source) {
     return "";
@@ -37,16 +51,18 @@ export function CrossFadeImage({
   ...props
 }: CrossFadeImageProps) {
   const { reducedMotion } = useMotion();
-  const [loaded, setLoaded] = useState(prefetched);
-  const [failed, setFailed] = useState(false);
-  const [opacity] = useState(() => new Animated.Value(prefetched ? 1 : 0));
   const sourceKey = getSourceKey(source);
+  const sourceAlreadyLoaded = prefetched || (sourceKey ? loadedImageSourceKeys.has(sourceKey) : false);
+  const [loaded, setLoaded] = useState(sourceAlreadyLoaded);
+  const [failed, setFailed] = useState(false);
+  const [opacity] = useState(() => new Animated.Value(sourceAlreadyLoaded ? 1 : 0));
   const wrapStyle = containerStyle ? containerStyle : (style as StyleProp<ViewStyle>);
 
   useEffect(() => {
-    setLoaded(prefetched);
+    const sourceLoaded = prefetched || (sourceKey ? loadedImageSourceKeys.has(sourceKey) : false);
+    setLoaded(sourceLoaded);
     setFailed(false);
-    opacity.setValue(prefetched ? 1 : 0);
+    opacity.setValue(sourceLoaded ? 1 : 0);
   }, [opacity, prefetched, sourceKey]);
 
   return (
@@ -58,6 +74,9 @@ export function CrossFadeImage({
           source={source}
           style={[styles.image, style, { opacity }]}
           onLoad={(event) => {
+            if (sourceKey) {
+              rememberLoadedImageSourceKey(sourceKey);
+            }
             setLoaded(true);
             if (!fadeIn || prefetched) {
               opacity.setValue(1);

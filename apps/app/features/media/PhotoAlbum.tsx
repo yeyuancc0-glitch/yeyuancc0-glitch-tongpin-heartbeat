@@ -12,7 +12,7 @@ import { PhotoUploadInput } from "@/features/media/PhotoUploadInput";
 import { imagePreviewUrl, mediaCaptionLabel } from "@/features/media/mediaUtils";
 import type { MediaFile } from "@/lib/supabase/database.types";
 import { renderPortal } from "@/lib/platform/portal";
-import { createSignedUrl, storageBuckets } from "@/lib/supabase/storage";
+import { createSignedUrl, prefetchImageUrls, storageBuckets } from "@/lib/supabase/storage";
 import { BouncyPressable } from "@/motion/BouncyPressable";
 import { BreathingSkeleton } from "@/motion/BreathingSkeleton";
 import { CrossFadeImage } from "@/motion/CrossFadeImage";
@@ -20,6 +20,29 @@ import { haptics } from "@/motion/haptics";
 import { useMotion } from "@/motion/MotionProvider";
 import { motionTokens } from "@/motion/tokens";
 import { colors } from "@/styles/theme";
+
+const photoPreviewOriginalPrefetchRadius = 1;
+
+function hasOriginalUrlCacheEntry(cache: Record<string, string | null>, id: string) {
+  return Object.prototype.hasOwnProperty.call(cache, id);
+}
+
+function photoPreviewOriginalCandidates(files: MediaFile[], currentIndex: number) {
+  const candidates: MediaFile[] = [];
+  const addCandidate = (index: number) => {
+    const file = files[index];
+    if (file && !candidates.some((candidate) => candidate.id === file.id)) {
+      candidates.push(file);
+    }
+  };
+
+  addCandidate(currentIndex);
+  for (let offset = 1; offset <= photoPreviewOriginalPrefetchRadius; offset += 1) {
+    addCandidate(currentIndex + offset);
+    addCandidate(currentIndex - offset);
+  }
+  return candidates;
+}
 
 export function PhotoAlbumCard({
   mediaFiles,
@@ -138,9 +161,11 @@ export function PhotoPreviewPopup({
   const canGoNext = currentIndex < files.length - 1;
   const [originalUrlById, setOriginalUrlById] = useState<Record<string, string | null>>({});
 
-  const cachedOriginalUrl = file ? originalUrlById[file.id] : null;
-  const originalUrl = file ? cachedOriginalUrl ?? file.signedUrl ?? null : null;
-  const previewUrl = file ? originalUrl ?? imagePreviewUrl(file) : null;
+  const hasCachedOriginalUrl = file ? hasOriginalUrlCacheEntry(originalUrlById, file.id) : false;
+  const cachedOriginalUrl = file && hasCachedOriginalUrl ? originalUrlById[file.id] : null;
+  const originalUrl = file && hasCachedOriginalUrl ? cachedOriginalUrl : null;
+  const previewUrl = file ? originalUrl ?? file.thumbnailSignedUrl ?? file.signedUrl ?? null : null;
+  const previewIsPrefetchedOriginal = Boolean(originalUrl);
 
   useEffect(() => {
     intro.value = reducedMotion ? 1 : 0;
@@ -151,23 +176,44 @@ export function PhotoPreviewPopup({
 
   useEffect(() => {
     let active = true;
-    if (!file?.storage_path || cachedOriginalUrl || file.signedUrl) {
+    const candidates = photoPreviewOriginalCandidates(files, currentIndex).filter(
+      (candidate) => candidate.storage_path && !hasOriginalUrlCacheEntry(originalUrlById, candidate.id)
+    );
+    if (!candidates.length) {
       return () => {
         active = false;
       };
     }
 
-    void createSignedUrl(storageBuckets.coupleMedia, file.storage_path).then((url) => {
+    void (async () => {
+      const resolvedEntries = await Promise.all(
+        candidates.map(async (candidate) => {
+          const url = candidate.signedUrl ?? (await createSignedUrl(storageBuckets.coupleMedia, candidate.storage_path));
+          return [candidate.id, url] as const;
+        })
+      );
+      await prefetchImageUrls(resolvedEntries.map(([, url]) => url), 2);
       if (!active) {
         return;
       }
-      setOriginalUrlById((current) => ({ ...current, [file.id]: url }));
-    });
+      setOriginalUrlById((current) => {
+        let changed = false;
+        const next = { ...current };
+        resolvedEntries.forEach(([id, url]) => {
+          if (hasOriginalUrlCacheEntry(current, id)) {
+            return;
+          }
+          next[id] = url;
+          changed = true;
+        });
+        return changed ? next : current;
+      });
+    })();
 
     return () => {
       active = false;
     };
-  }, [cachedOriginalUrl, file?.id, file?.signedUrl, file?.storage_path]);
+  }, [currentIndex, files, originalUrlById]);
 
   if (!file) {
     return null;
@@ -231,7 +277,7 @@ export function PhotoPreviewPopup({
           </BouncyPressable>
         </View>
         <View style={styles.photoPreviewFrame}>
-          {previewUrl ? <CrossFadeImage source={{ uri: previewUrl }} style={styles.photoPreviewImage} resizeMode="contain" /> : <BreathingSkeleton style={styles.photoPreviewImage} />}
+          {previewUrl ? <CrossFadeImage source={{ uri: previewUrl }} style={styles.photoPreviewImage} resizeMode="contain" prefetched={previewIsPrefetchedOriginal} /> : <BreathingSkeleton style={styles.photoPreviewImage} />}
           {canGoPrev ? (
             <BouncyPressable
               accessibilityRole="button"
