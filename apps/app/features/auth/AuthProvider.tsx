@@ -1,20 +1,43 @@
-import type { Session, User } from "@supabase/supabase-js";
 import { createContext, type PropsWithChildren, useContext, useEffect, useMemo, useState } from "react";
 import { Platform } from "react-native";
 
 import { useToast } from "@/components/ui";
-import { supabase } from "@/lib/supabase/client";
+import { SelfHostApiError } from "@/lib/selfHost/apiClient";
+import {
+  confirmSelfHostPasswordReset,
+  loadSelfHostMe,
+  loginSelfHost,
+  logoutSelfHost,
+  refreshSelfHostSession,
+  registerSelfHost,
+  requestSelfHostPasswordReset,
+} from "@/lib/selfHost/authApi";
+import { loadSelfHostSession, saveSelfHostSession } from "@/lib/selfHost/authSession";
+import type { AppAuthSession, AppAuthUser } from "@/lib/selfHost/types";
+
+type AuthFeedback = {
+  status?: string;
+  debugToken?: string;
+};
 
 type AuthContextValue = {
-  session: Session | null;
-  user: User | null;
+  session: AppAuthSession | null;
+  user: AppAuthUser | null;
   loading: boolean;
   passwordRecovery: boolean;
   clearPasswordRecovery: () => void;
+  signInWithPassword: (input: { email: string; password: string }) => Promise<AuthFeedback>;
+  signUpWithPassword: (input: { email: string; password: string; displayName?: string }) => Promise<AuthFeedback>;
+  sendPasswordResetEmail: (email: string) => Promise<AuthFeedback>;
+  updateRecoveryPassword: (input: { password: string; resetToken?: string }) => Promise<AuthFeedback>;
   signOut: () => Promise<void>;
 };
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
+
+function isAuthInvalidError(error: unknown) {
+  return error instanceof SelfHostApiError && (error.status === 401 || error.status === 403);
+}
 
 function readAuthHashError() {
   if (Platform.OS !== "web" || !window.location.hash.includes("error=")) {
@@ -35,7 +58,7 @@ function readAuthHashError() {
 
 export function AuthProvider({ children }: PropsWithChildren) {
   const { showToast } = useToast();
-  const [session, setSession] = useState<Session | null>(null);
+  const [session, setSession] = useState<AppAuthSession | null>(null);
   const [passwordRecovery, setPasswordRecovery] = useState(false);
   const [loading, setLoading] = useState(true);
 
@@ -53,17 +76,54 @@ export function AuthProvider({ children }: PropsWithChildren) {
       }
     }, 8000);
 
-    supabase.auth
-      .getSession()
-      .then(({ data }) => {
+    void loadSelfHostSession()
+      .then(async (storedSession) => {
         if (!mounted) {
           return;
         }
-        clearTimeout(restoreTimeoutId);
-        setSession(data.session);
-        setLoading(false);
-        if (pendingHashError) {
-          showToast({ ...pendingHashError, tone: "error" });
+        if (!storedSession) {
+          setSession(null);
+          return;
+        }
+        try {
+          const user = await loadSelfHostMe(storedSession.access_token);
+          if (!mounted) {
+            return;
+          }
+          setSession({ ...storedSession, user });
+        } catch (error) {
+          if (storedSession.refresh_token && isAuthInvalidError(error)) {
+            try {
+              const refreshed = await refreshSelfHostSession(storedSession.refresh_token);
+              if (refreshed.session) {
+                await saveSelfHostSession(refreshed.session);
+                if (mounted) {
+                  setSession(refreshed.session);
+                }
+                return;
+              }
+            } catch (refreshError) {
+              console.warn("Self-host auth refresh failed:", refreshError);
+              if (!isAuthInvalidError(refreshError)) {
+                if (mounted) {
+                  setSession(storedSession);
+                }
+                return;
+              }
+            }
+          }
+          if (!isAuthInvalidError(error)) {
+            if (mounted) {
+              console.warn("Self-host auth session restore deferred:", error);
+              setSession(storedSession);
+            }
+            return;
+          }
+          await saveSelfHostSession(null);
+          if (mounted) {
+            console.warn("Self-host auth session restore failed:", error);
+            setSession(null);
+          }
         }
       })
       .catch((error) => {
@@ -77,26 +137,21 @@ export function AuthProvider({ children }: PropsWithChildren) {
         if (pendingHashError) {
           showToast({ ...pendingHashError, tone: "error" });
         }
+      })
+      .finally(() => {
+        if (!mounted) {
+          return;
+        }
+        clearTimeout(restoreTimeoutId);
+        setLoading(false);
+        if (pendingHashError) {
+          showToast({ ...pendingHashError, tone: "error" });
+        }
       });
-
-    const { data } = supabase.auth.onAuthStateChange((event, nextSession) => {
-      const hashError = readAuthHashError();
-      if (hashError) {
-        showToast({ ...hashError, tone: "error" });
-      }
-      if (event === "PASSWORD_RECOVERY") {
-        setPasswordRecovery(true);
-      } else if (event === "SIGNED_OUT") {
-        setPasswordRecovery(false);
-      }
-      setSession(nextSession);
-      setLoading(false);
-    });
 
     return () => {
       mounted = false;
       clearTimeout(restoreTimeoutId);
-      data.subscription.unsubscribe();
     };
   }, [showToast]);
 
@@ -107,8 +162,9 @@ export function AuthProvider({ children }: PropsWithChildren) {
 
     let subscription: { remove: () => void } | null = null;
     void import("@/lib/notifications/push").then(({ registerForPushNotifications, subscribePushTokenRefresh }) => {
-      subscription = subscribePushTokenRefresh();
-      void registerForPushNotifications().then((result) => {
+      const pushOptions = { accessToken: session.access_token };
+      subscription = subscribePushTokenRefresh(pushOptions);
+      void registerForPushNotifications(pushOptions).then((result) => {
         if (result.status === "error") {
           console.warn("Push registration failed:", result.message);
         }
@@ -118,7 +174,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
     return () => {
       subscription?.remove();
     };
-  }, [session?.user]);
+  }, [session?.access_token, session?.user]);
 
   useEffect(() => {
     if (!session?.user) {
@@ -142,6 +198,46 @@ export function AuthProvider({ children }: PropsWithChildren) {
       loading,
       passwordRecovery,
       clearPasswordRecovery: () => setPasswordRecovery(false),
+      signInWithPassword: async ({ email, password }) => {
+        const result = await loginSelfHost({ email, password });
+        if (result.session) {
+          await saveSelfHostSession(result.session);
+          setSession(result.session);
+        }
+        return {};
+      },
+      signUpWithPassword: async ({ displayName, email, password }) => {
+        const result = await registerSelfHost({ email, password, displayName });
+        if (result.session) {
+          await saveSelfHostSession(result.session);
+          setSession(result.session);
+        }
+        return result.response.emailVerification ?? {};
+      },
+      sendPasswordResetEmail: async (email) => {
+        const result = await requestSelfHostPasswordReset(email);
+        const passwordReset = result.passwordReset ?? { status: result.status, debugToken: result.debugToken };
+        if (!passwordReset.debugToken && passwordReset.status && passwordReset.status !== "sent") {
+          throw new Error(passwordReset.status === "delivery_failed" ? "重置邮件发送失败，请稍后重试。" : "无法发送重置邮件，请稍后重试。");
+        }
+        setPasswordRecovery(true);
+        return passwordReset;
+      },
+      updateRecoveryPassword: async ({ password, resetToken }) => {
+        if (!resetToken) {
+          throw new Error("请输入重置邮件里的验证码。");
+        }
+        const result = await confirmSelfHostPasswordReset({ token: resetToken, password });
+        if (result.session) {
+          await saveSelfHostSession(result.session);
+          setSession(result.session);
+        } else {
+          await saveSelfHostSession(null);
+          setSession(null);
+        }
+        setPasswordRecovery(false);
+        return { status: result.response.status };
+      },
       signOut: async () => {
         try {
           if (Platform.OS === "web") {
@@ -149,12 +245,15 @@ export function AuthProvider({ children }: PropsWithChildren) {
             await disableCurrentWebPushSubscription();
           } else {
             const { disableCurrentPushToken } = await import("@/lib/notifications/push");
-            await disableCurrentPushToken();
+            await disableCurrentPushToken({ accessToken: session?.access_token });
           }
+          await logoutSelfHost(session?.refresh_token);
         } catch (error) {
-          console.warn("Push cleanup before sign out failed:", error);
+          console.warn("Self-host logout cleanup failed:", error);
         }
-        await supabase.auth.signOut();
+        await saveSelfHostSession(null);
+        setPasswordRecovery(false);
+        setSession(null);
       },
     }),
     [loading, passwordRecovery, session]

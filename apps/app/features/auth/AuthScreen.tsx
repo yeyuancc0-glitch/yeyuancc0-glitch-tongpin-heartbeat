@@ -21,33 +21,45 @@ import {
 
 import { useToast } from "@/components/ui";
 import { useAuth } from "@/features/auth/AuthProvider";
-import { supabase } from "@/lib/supabase/client";
+import { isSelfHostAuthEnabled } from "@/lib/selfHost/config";
 import { BouncyPressable } from "@/motion/BouncyPressable";
 
 type AuthView = "signIn" | "signUp";
-type AuthField = "displayName" | "email" | "password" | "confirmPassword";
+type AuthField = "displayName" | "email" | "password" | "confirmPassword" | "resetToken";
 
 export function AuthScreen() {
   const { showToast } = useToast();
-  const { passwordRecovery, clearPasswordRecovery, signOut } = useAuth();
+  const {
+    clearPasswordRecovery,
+    passwordRecovery,
+    sendPasswordResetEmail,
+    signInWithPassword,
+    signOut,
+    signUpWithPassword,
+    updateRecoveryPassword: submitRecoveryPassword,
+  } = useAuth();
   const [view, setView] = useState<AuthView>("signIn");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
+  const [resetToken, setResetToken] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [acceptedTerms, setAcceptedTerms] = useState(false);
   const [focusedField, setFocusedField] = useState<AuthField | null>(null);
   const [errorText, setErrorText] = useState("");
+  const [successText, setSuccessText] = useState("");
   const [busy, setBusy] = useState(false);
   const [resetBusy, setResetBusy] = useState(false);
 
   function goTo(nextView: AuthView) {
     setErrorText("");
+    setSuccessText("");
     setView(nextView);
   }
 
   async function submit(mode: AuthView) {
     setErrorText("");
+    setSuccessText("");
     if (!acceptedTerms) {
       setErrorText("请先勾选用户协议与隐私政策。");
       return;
@@ -59,31 +71,23 @@ export function AuthScreen() {
 
     try {
       if (mode === "signUp") {
-        const { error } = await supabase.auth.signUp({
+        const feedback = await signUpWithPassword({
           email: normalizedEmail,
           password,
-          options: {
-            data: {
-              display_name: normalizedName || normalizedEmail.split("@")[0],
-            },
-          },
+          displayName: normalizedName || normalizedEmail.split("@")[0],
         });
-        if (error) {
-          throw error;
-        }
         showToast({
           title: "注册已提交",
-          message: "如果当前项目开启了邮箱确认，请先完成邮箱验证后再登录。",
+          message: feedback.debugToken
+            ? "自建 staging 暂未接入邮件，已返回调试验证 token。"
+            : "如果当前项目开启了邮箱确认，请先完成邮箱验证后再登录。",
           tone: "success",
         });
       } else {
-        const { error } = await supabase.auth.signInWithPassword({
+        await signInWithPassword({
           email: normalizedEmail,
           password,
         });
-        if (error) {
-          throw error;
-        }
       }
     } catch (error) {
       setErrorText(error instanceof Error ? error.message : "请稍后重试。");
@@ -94,6 +98,7 @@ export function AuthScreen() {
 
   async function updateRecoveryPassword() {
     setErrorText("");
+    setSuccessText("");
     if (password.length < 6) {
       setErrorText("新密码至少需要 6 位。");
       return;
@@ -105,14 +110,13 @@ export function AuthScreen() {
 
     setBusy(true);
     try {
-      const { error } = await supabase.auth.updateUser({ password });
-      if (error) {
-        throw error;
-      }
+      await submitRecoveryPassword({ password, resetToken: resetToken.trim() || undefined });
       clearPasswordRecovery();
       setPassword("");
       setConfirmPassword("");
-      showToast({ title: "密码已更新", message: "你可以继续使用同频跳动。", tone: "success" });
+      setResetToken("");
+      setSuccessText("密码已更新，请使用新密码重新登录。");
+      showToast({ title: "密码已更新", message: "请使用新密码重新登录。", tone: "success" });
     } catch (error) {
       setErrorText(error instanceof Error ? error.message : "请稍后重试。");
     } finally {
@@ -123,6 +127,7 @@ export function AuthScreen() {
   async function sendPasswordReset() {
     const normalizedEmail = email.trim();
     setErrorText("");
+    setSuccessText("");
 
     if (!normalizedEmail) {
       setErrorText("请先输入邮箱，再发送重置邮件。");
@@ -131,17 +136,13 @@ export function AuthScreen() {
 
     setResetBusy(true);
     try {
-      const redirectTo = Platform.OS === "web" && typeof window !== "undefined" ? window.location.origin : undefined;
-      const { error } = await supabase.auth.resetPasswordForEmail(
-        normalizedEmail,
-        redirectTo ? { redirectTo } : undefined,
-      );
-      if (error) {
-        throw error;
+      const feedback = await sendPasswordResetEmail(normalizedEmail);
+      if (feedback.debugToken) {
+        setResetToken(feedback.debugToken);
       }
       showToast({
         title: "重置邮件已发送",
-        message: "请查看邮箱，并按邮件里的链接设置新密码。",
+        message: feedback.debugToken ? "自建 staging 已填入调试验证码。" : "请查看邮箱，并按邮件里的链接设置新密码。",
         tone: "success",
       });
     } catch (error) {
@@ -185,6 +186,20 @@ export function AuthScreen() {
             <View pointerEvents="none" style={styles.panelShine} />
             {passwordRecovery ? (
               <>
+                {isSelfHostAuthEnabled ? (
+                  <AuthFieldRow
+                    field="resetToken"
+                    focusedField={focusedField}
+                    label="验证码"
+                    value={resetToken}
+                    placeholder="请输入重置邮件里的验证码"
+                    onChangeText={setResetToken}
+                    onFieldFocus={setFocusedField}
+                    onFieldBlur={setFocusedField}
+                    autoCapitalize="none"
+                    icon={<Mail color="rgba(116,105,111,0.42)" size={19} strokeWidth={1.9} />}
+                  />
+                ) : null}
                 <AuthFieldRow
                   field="password"
                   focusedField={focusedField}
@@ -275,11 +290,12 @@ export function AuthScreen() {
               ) : null}
             </View>}
 
+            {successText ? <Text style={styles.successText}>{successText}</Text> : null}
             {errorText ? <Text style={styles.errorText}>{errorText}</Text> : null}
 
             <BouncyPressable
               accessibilityRole="button"
-              disabled={busy || (passwordRecovery ? !password || !confirmPassword : !email.trim() || !password)}
+              disabled={busy || (passwordRecovery ? !password || !confirmPassword || (isSelfHostAuthEnabled && !resetToken.trim()) : !email.trim() || !password)}
               disabledStyle={styles.primaryButtonDisabled}
               haptic="light"
               onPress={() => {
@@ -301,6 +317,7 @@ export function AuthScreen() {
                 accessibilityRole="button"
                 onPress={() => {
                   clearPasswordRecovery();
+                  setResetToken("");
                   void signOut();
                 }}
                 style={styles.switchModeButton}
@@ -717,6 +734,18 @@ const styles = StyleSheet.create({
     color: "#a45f75",
     backgroundColor: "rgba(255,242,244,0.62)",
     borderColor: "rgba(238,180,193,0.5)",
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    fontSize: 13,
+    lineHeight: 18,
+    overflow: "hidden",
+  },
+  successText: {
+    color: "#5f8f73",
+    backgroundColor: "rgba(239,250,243,0.72)",
+    borderColor: "rgba(166,216,184,0.56)",
     borderWidth: 1,
     borderRadius: 999,
     paddingHorizontal: 14,

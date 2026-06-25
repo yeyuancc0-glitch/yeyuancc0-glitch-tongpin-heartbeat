@@ -6,12 +6,26 @@
   "scripts": {
     "web": "expo start --web",
     "typecheck": "tsc --noEmit",
-    "build:web": "expo export --platform web --clear && node ../../scripts/prepare-web-dist.mjs"
+    "build:web": "expo export --platform web --clear && node ../../scripts/prepare-web-dist.mjs",
+    "smoke:self-host-auth": "node scripts/smoke-self-host-auth.mjs",
+    "smoke:self-host-profile": "node scripts/smoke-self-host-profile.mjs",
+    "smoke:self-host-media": "node scripts/smoke-self-host-media.mjs",
+    "smoke:self-host-messages": "node scripts/smoke-self-host-messages.mjs",
+    "smoke:self-host-interactions": "node scripts/smoke-self-host-interactions.mjs",
+    "smoke:self-host-dashboard": "node scripts/smoke-self-host-dashboard.mjs",
+    "smoke:self-host-checkins": "node scripts/smoke-self-host-checkins.mjs",
+    "smoke:self-host-calendar-events": "node scripts/smoke-self-host-calendar-events.mjs",
+    "smoke:self-host-footprints": "node scripts/smoke-self-host-footprints.mjs",
+    "smoke:self-host-creation": "node scripts/smoke-self-host-creation.mjs",
+    "smoke:self-host-letters": "node scripts/smoke-self-host-letters.mjs",
+    "smoke:self-host-notifications": "node scripts/smoke-self-host-notifications.mjs",
+    "smoke:self-host-push-notifications": "node scripts/smoke-self-host-push-notifications.mjs",
+    "smoke:self-host-expo-push": "node scripts/smoke-self-host-expo-push.mjs",
+    "smoke:self-host-privacy": "node scripts/smoke-self-host-privacy.mjs"
   },
   "dependencies": {
     "@expo/metro-runtime": "56.0.14",
     "@react-native-async-storage/async-storage": "2.2.0",
-    "@supabase/supabase-js": "^2.84.0",
     "expo": "56.0.9",
     "expo-application": "^56.0.3",
     "expo-asset": "56.0.16",

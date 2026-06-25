@@ -5,17 +5,18 @@ import { AuthScreen } from "@/features/auth/AuthScreen";
 import { useAuth } from "@/features/auth/AuthProvider";
 import { HomeScreen, HomeScreenShell } from "@/features/home/HomeScreen";
 import { SetupRequiredScreen } from "@/features/setup/SetupRequiredScreen";
-import { isSupabaseConfigured } from "@/lib/supabase/client";
+import { isSelfHostConfigured } from "@/lib/selfHost/config";
 
 export default function IndexPage() {
   const { user, loading, passwordRecovery } = useAuth();
+  const isAuthConfigured = isSelfHostConfigured;
 
   return (
     <Screen>
       <SafeAreaView>
         <AppScroll>
           <AppShell>
-            {!isSupabaseConfigured ? (
+            {!isAuthConfigured ? (
               <SetupRequiredScreen />
             ) : loading ? (
               <HomeScreenShell />

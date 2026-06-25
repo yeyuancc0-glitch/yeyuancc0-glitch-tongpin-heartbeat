@@ -8,20 +8,15 @@ import { InlineNotice, useToast } from "@/components/ui";
 import { useAuth } from "@/features/auth/AuthProvider";
 import { CreationFoodCard, FootprintEditorModal, PetMemoryRow } from "@/features/creation/CreationSpaceParts";
 import {
-  chooseNewerSpace,
   cloudPetCompatPetKey,
   cloudPetOption,
-  creationFoodErrorMessage,
   creationFoodLabel,
-  creationGameErrorMessage,
   creationPuzzles,
   displayPetName,
   immediatePetLine,
   isMeaningfulPetMemory,
-  isPetNightSleepTime,
   petActionToastTitle,
   petAwaySurfaceLine,
-  petNightResleepDelayMs,
   reactionFromSpace,
   townViewToPetSurface,
 } from "@/features/creation/creationSpaceLogic";
@@ -35,11 +30,20 @@ import { activeLive2DPet } from "@/features/pet/live2dCatalog";
 import { petRigCueFromJson, type PetRigCue } from "@/features/pet/services/petAiBrain";
 import { petSizeScale, type PetUserSettings } from "@/features/pet/userPetSettings";
 import { usePetWorldRoaming } from "@/features/pet-world/hooks/usePetWorldRoaming";
-import { petHumanLine, sanitizePassivePetText } from "@/features/pet-world/logic/petExpression";
+import { petHumanLine } from "@/features/pet-world/logic/petExpression";
 import { normalizePetWorldSurface } from "@/features/pet-world/logic/petWorldRoutes";
-import { startPetSleep, summonPetToSurface } from "@/features/pet-world/services/petWorldApi";
 import { todayIsoDate } from "@/lib/dates/date";
-import { supabase } from "@/lib/supabase/client";
+import {
+  buySelfHostCreationFood,
+  claimSelfHostCreationGameReward,
+  ensureSelfHostCreationSpace,
+  feedSelfHostCreationPet,
+  interactSelfHostCreationPet,
+  recordSelfHostCreationAction,
+  settleSelfHostCreationPetSleep,
+  summonSelfHostCreationPet,
+} from "@/lib/selfHost/creationApi";
+import { createSelfHostFootprint, deleteSelfHostFootprint, updateSelfHostFootprint } from "@/lib/selfHost/footprintApi";
 import type { CoupleFootprint, CreationAction, CreationSpace, PetMemory } from "@/lib/supabase/database.types";
 import { haptics } from "@/motion/haptics";
 import { colors } from "@/styles/theme";
@@ -58,6 +62,9 @@ export function CreationSpacePage({
   onTownViewChange,
   onBack,
   onChanged,
+  disabled = false,
+  accessToken,
+  selfHostMode = false,
 }: {
   coupleId: string;
   creationSpace: CreationSpace | null;
@@ -72,6 +79,9 @@ export function CreationSpacePage({
   onTownViewChange: (view: CreationTownView) => void;
   onBack: () => void;
   onChanged: () => void;
+  disabled?: boolean;
+  accessToken?: string | null;
+  selfHostMode?: boolean;
 }) {
   const { user } = useAuth();
   const { showToast } = useToast();
@@ -79,7 +89,6 @@ export function CreationSpacePage({
   const activeSpace = space ?? creationSpace;
   const [petName, setPetName] = useState("云宠");
   const petDisplayName = displayPetName(activeSpace?.pet_name ?? petName);
-  const [cloudPetSyncing, setCloudPetSyncing] = useState(false);
   const [petBusy, setPetBusy] = useState<CreationFoodType | "pet" | "clean" | "play" | "sleep" | null>(null);
   const [petSummoning, setPetSummoning] = useState(false);
   const [petReaction, setPetReaction] = useState<CreationPetStageReaction | null>(null);
@@ -99,16 +108,17 @@ export function CreationSpacePage({
   const [rewardFlash, setRewardFlash] = useState<CreationRewardFlash | null>(null);
   const islandFloat = useRef(new Animated.Value(0)).current;
   const rewardFloat = useRef(new Animated.Value(0)).current;
-  const nightResleepTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const featuresDisabled = disabled;
+  const roamingDisabled = disabled || selfHostMode;
   const currentTownSurface = townViewToPetSurface(townView);
   const petStageScale = petSizeScale(petUserSettings.size);
   const petStageVisible = petUserSettings.visible;
-  const { applyRuleRoam } = usePetWorldRoaming({
-    coupleId,
+  usePetWorldRoaming({
+    coupleId: roamingDisabled ? null : coupleId,
     creationSpace: activeSpace,
     creationActions,
     currentSurface: currentTownSurface,
-    disabled: !petUserSettings.autonomousRoamingEnabled,
+    disabled: roamingDisabled || !petUserSettings.autonomousRoamingEnabled,
     partnerOnline,
     onChanged,
   });
@@ -136,14 +146,14 @@ export function CreationSpacePage({
       return;
     }
     void ensureSpace(false);
-  }, [activeSpace, coupleId]);
+  }, [activeSpace, coupleId, selfHostMode]);
 
   useEffect(() => {
-    if (!activeSpace || cloudPetSyncing || activeSpace.pet_key === cloudPetCompatPetKey) {
+    if (selfHostMode || !activeSpace || activeSpace.pet_key === cloudPetCompatPetKey) {
       return;
     }
     void syncCloudPet(activeSpace.pet_name);
-  }, [activeSpace?.id, activeSpace?.pet_key, activeSpace?.pet_name, cloudPetSyncing]);
+  }, [activeSpace?.id, activeSpace?.pet_key, activeSpace?.pet_name, selfHostMode]);
 
   useEffect(() => {
     if (Platform.OS !== "web" || typeof window === "undefined") {
@@ -205,37 +215,16 @@ export function CreationSpacePage({
     };
   }, [townView]);
 
-  useEffect(() => {
-    return () => {
-      if (nightResleepTimerRef.current) {
-        clearTimeout(nightResleepTimerRef.current);
-        nightResleepTimerRef.current = null;
-      }
-    };
-  }, []);
+  function showDisabledNotice() {
+    showToast({ title: "家园暂未开放", message: "完整云宠玩法接好后会重新打开。", tone: "info" });
+  }
 
-  function scheduleNightResleep(baseSpace?: CreationSpace | null) {
-    if (!isPetNightSleepTime()) {
-      return;
+  function requireSelfHostAccessToken() {
+    if (!accessToken) {
+      showToast({ title: "登录状态已失效", message: "请重新登录后再试。", tone: "error" });
+      return null;
     }
-    if (nightResleepTimerRef.current) {
-      clearTimeout(nightResleepTimerRef.current);
-    }
-    nightResleepTimerRef.current = setTimeout(() => {
-      nightResleepTimerRef.current = null;
-      void startPetSleep(coupleId, "night_after_interaction")
-        .then((nextSpace) => {
-          if (!nextSpace) {
-            return;
-          }
-          setSpace((current) => chooseNewerSpace(current ?? baseSpace ?? activeSpace ?? null, nextSpace));
-          triggerLocalPetReaction("sleep", petHumanLine("sleep"));
-          onChanged();
-        })
-        .catch((error) => {
-          console.warn("Night pet sleep failed:", error instanceof Error ? error.message : error);
-        });
-    }, petNightResleepDelayMs);
+    return accessToken;
   }
 
   useEffect(() => {
@@ -286,60 +275,46 @@ export function CreationSpacePage({
   }, [rewardFlash, rewardFloat]);
 
   async function ensureSpace(showSuccess = true) {
-    const { data, error } = await supabase.rpc("ensure_creation_space", { target_couple_id: coupleId }).maybeSingle();
-    if (error) {
-      showToast({ title: "家园暂时打不开", message: error.message, tone: "error" });
+    const token = requireSelfHostAccessToken();
+    if (!token) {
       return null;
     }
-    setSpace(data ?? null);
-    if (showSuccess) {
-      showToast({ title: "小屋已准备好", tone: "success" });
+    try {
+      const data = await ensureSelfHostCreationSpace({ accessToken: token, coupleId });
+      setSpace(data ?? null);
+      if (showSuccess) {
+        showToast({ title: "小屋已准备好", tone: "success" });
+      }
+      onChanged();
+      return data ?? null;
+    } catch (error) {
+      showToast({ title: "家园暂时打不开", message: error instanceof Error ? error.message : "请稍后重试。", tone: "error" });
+      return null;
     }
-    onChanged();
-    return data ?? null;
   }
 
   async function syncCloudPet(currentPetName?: string | null) {
-    if (cloudPetSyncing) {
-      return;
-    }
-    const nextName = displayPetName(currentPetName);
-    setCloudPetSyncing(true);
-    try {
-      const { data, error } = await supabase.rpc("choose_creation_pet", {
-        target_couple_id: coupleId,
-        chosen_pet_key: cloudPetCompatPetKey,
-        chosen_pet_name: nextName,
-      }).maybeSingle();
-      if (error) {
-        return;
-      }
-      setPetName(nextName);
-      setSpace(data ?? null);
-      if (data) {
-        triggerLocalPetReaction(data.current_action || "happy", sanitizePassivePetText(data.last_ai_bubble) || "喵");
-      }
-      onChanged();
-    } finally {
-      setCloudPetSyncing(false);
-    }
+    void currentPetName;
+    showToast({ title: "云宠同步暂未开放", message: "自建后端完整云宠选择 API 接好后会重新打开。", tone: "info" });
   }
 
   async function feedPet(foodType: CreationFoodType) {
+    if (featuresDisabled) {
+      showDisabledNotice();
+      return;
+    }
     if (petBusy) {
       return;
     }
     setPetBusy(foodType);
     try {
-      const { data, error } = await supabase.rpc("feed_creation_pet", { target_couple_id: coupleId, food_type: foodType }).maybeSingle();
-      if (error) {
-        showToast({ title: "喂养失败", message: creationFoodErrorMessage(error.message), tone: "error" });
+      const token = requireSelfHostAccessToken();
+      if (!token) {
         return;
       }
+      const data = await feedSelfHostCreationPet({ accessToken: token, coupleId, foodType });
       setSpace(data ?? null);
       triggerLocalPetReaction("eat", petHumanLine("feed"));
-      void applyRuleRoam("feed", data ?? activeSpace);
-      scheduleNightResleep(data ?? activeSpace);
       showRewardFlash("feed", "投喂仪式完成", `${creationFoodLabel(foodType)}轻轻落进饭碗，${petDisplayName} 吃到啦。`);
       showToast({
         title: `已喂${creationFoodLabel(foodType)}`,
@@ -355,22 +330,22 @@ export function CreationSpacePage({
   }
 
   async function interactPet(type: "pet" | "clean" | "play" | "sleep") {
+    if (featuresDisabled) {
+      showDisabledNotice();
+      return;
+    }
     if (petBusy) {
       return;
     }
     setPetBusy(type);
     try {
-      const { data, error } = await supabase.rpc("interact_creation_pet", { target_couple_id: coupleId, interaction_type: type }).maybeSingle();
-      if (error) {
-        showToast({ title: "互动失败", message: error.message, tone: "error" });
+      const token = requireSelfHostAccessToken();
+      if (!token) {
         return;
       }
+      const data = await interactSelfHostCreationPet({ accessToken: token, coupleId, interactionType: type });
       setSpace(data ?? null);
       triggerLocalPetReaction(type, immediatePetLine(type));
-      void applyRuleRoam(type, data ?? activeSpace);
-      if (type !== "sleep") {
-        scheduleNightResleep(data ?? activeSpace);
-      }
       showToast({
         title: petActionToastTitle(type),
         message:
@@ -390,6 +365,10 @@ export function CreationSpacePage({
   }
 
   async function sleepPet() {
+    if (featuresDisabled) {
+      showDisabledNotice();
+      return;
+    }
     if (petBusy) {
       return;
     }
@@ -399,20 +378,17 @@ export function CreationSpacePage({
     }
     setPetBusy("sleep");
     try {
-      const { data, error } = await supabase.rpc("settle_creation_pet_sleep", { target_couple_id: coupleId }).maybeSingle();
-      if (error) {
-        showToast({ title: "结算休息失败", message: error.message, tone: "error" });
+      const token = requireSelfHostAccessToken();
+      if (!token) {
         return;
       }
+      const data = await settleSelfHostCreationPetSleep({ accessToken: token, coupleId });
       setSpace(data ?? null);
       const stillSleeping = Boolean(data?.pet_sleep_started_at);
       triggerLocalPetReaction(stillSleeping ? "sleep" : "wake", stillSleeping ? petHumanLine("sleep") : petHumanLine("wake"));
-      if (!stillSleeping) {
-        scheduleNightResleep(data ?? activeSpace);
-      }
       showToast({
         title: stillSleeping ? "还没睡够" : "休息已结算",
-        message: stillSleeping ? "睡满 5 分钟后再结算，才能恢复 18 点精力。" : "睡满一觉已恢复 18 点精力。",
+        message: stillSleeping ? "睡满 5 分钟后再结算，才能恢复 18 点精力。" : "睡眠已按时长结算。",
         tone: stillSleeping ? "info" : "success",
       });
       onChanged();
@@ -424,12 +400,20 @@ export function CreationSpacePage({
   }
 
   async function summonPetRoom() {
+    if (featuresDisabled) {
+      showDisabledNotice();
+      return;
+    }
     if (petSummoning) {
       return;
     }
     setPetSummoning(true);
     try {
-      const data = await summonPetToSurface(coupleId, "pet_room");
+      const token = requireSelfHostAccessToken();
+      if (!token) {
+        return;
+      }
+      const data = await summonSelfHostCreationPet({ accessToken: token, coupleId, surface: "pet_room" });
       setSpace(data ?? activeSpace ?? null);
       triggerLocalPetReaction("pet", petHumanLine("summon"));
       showToast({ title: "云宠回小窝了", message: "现在可以在小窝里和它互动。", tone: "success" });
@@ -458,20 +442,20 @@ export function CreationSpacePage({
   }
 
   async function buyFood(foodType: CreationFoodType) {
+    if (featuresDisabled) {
+      showDisabledNotice();
+      return;
+    }
     if (storeBusy) {
       return;
     }
     setStoreBusy(foodType);
     try {
-      const { data, error } = await supabase.rpc("buy_creation_food", {
-        target_couple_id: coupleId,
-        food_type: foodType,
-        quantity: 1,
-      }).maybeSingle();
-      if (error) {
-        showToast({ title: "购买失败", message: creationFoodErrorMessage(error.message), tone: "error" });
+      const token = requireSelfHostAccessToken();
+      if (!token) {
         return;
       }
+      const data = await buySelfHostCreationFood({ accessToken: token, coupleId, foodType, quantity: 1 });
       setSpace(data ?? null);
       showRewardFlash("food", "粮仓已补充", `已用心愿星糖换入 1 份${creationFoodLabel(foodType)}。`);
       showToast({ title: "粮仓已补充", message: `已买入 1 份${creationFoodLabel(foodType)}。`, tone: "success" });
@@ -492,6 +476,10 @@ export function CreationSpacePage({
   }
 
   async function claimPuzzleReward() {
+    if (featuresDisabled) {
+      showDisabledNotice();
+      return;
+    }
     const currentPuzzle = creationPuzzles.find((puzzle) => puzzle.id === selectedPuzzleId) ?? creationPuzzles[0];
     if (!selectedPuzzleAnswer) {
       showToast({ title: "先选一个答案", message: currentPuzzle.hint, tone: "info" });
@@ -506,18 +494,14 @@ export function CreationSpacePage({
     setPuzzleFeedback("correct");
     setGameBusy(true);
     try {
-      const { data, error } = await supabase.rpc("claim_creation_game_reward", {
-        target_couple_id: coupleId,
-        puzzle_id: currentPuzzle.id,
-        solved: true,
-      }).maybeSingle();
-      if (error) {
-        showToast({ title: "奖励领取失败", message: creationGameErrorMessage(error.message), tone: "error" });
+      const token = requireSelfHostAccessToken();
+      if (!token) {
         return;
       }
+      const data = await claimSelfHostCreationGameReward({ accessToken: token, coupleId, puzzleId: currentPuzzle.id });
       setSpace(data ?? null);
       showRewardFlash("puzzle", "解谜通关，赏金入仓", `获得鲜食粮 +1 份、心愿星糖 +15 点，快去投喂 ${petDisplayName}。`);
-      triggerLocalPetReaction("happy", "咕噜");
+      triggerLocalPetReaction("happy", "通关啦");
       showToast({ title: "赏金入仓", message: "鲜食粮和心愿星糖已放进共享粮仓。", tone: "success" });
       onChanged();
     } catch (error) {
@@ -542,63 +526,38 @@ export function CreationSpacePage({
   }
 
   async function saveFootprint() {
-    if (!user || !footprintTitle.trim() || !footprintDate || footprintBusy) {
+    const token = requireSelfHostAccessToken();
+    if (!token || !user || !footprintTitle.trim() || !footprintDate || footprintBusy) {
       return;
     }
-
     setFootprintBusy(true);
     try {
       if (editingFootprintId) {
-        const { error } = await supabase
-          .from("couple_footprints")
-          .update({
-            title: footprintTitle.trim(),
-            note: footprintNote.trim() || null,
-            visited_at: footprintDate,
-            latitude: null,
-            longitude: null,
-          })
-          .eq("id", editingFootprintId);
-        if (!error) {
-          await writeCreationAction("footprint_update", `更新了足迹「${footprintTitle.trim()}」`);
-        }
-        if (error) {
-          showToast({ title: "更新失败", message: error.message, tone: "error" });
-          return;
-        }
-        showToast({ title: "足迹已更新", tone: "success" });
-      } else {
-        const { data: insertedFootprints, error } = await supabase.from("couple_footprints").insert({
-          couple_id: coupleId,
-          created_by: user.id,
+        await updateSelfHostFootprint({
+          accessToken: token,
+          footprintId: editingFootprintId,
           title: footprintTitle.trim(),
           note: footprintNote.trim() || null,
-          visited_at: footprintDate,
+          visitedAt: footprintDate,
           latitude: null,
           longitude: null,
-        }).select("*");
-        if (error) {
-          showToast({ title: "保存失败", message: error.message, tone: "error" });
-          return;
-        }
-        const insertedFootprint = insertedFootprints?.[0] as CoupleFootprint | undefined;
-        if (insertedFootprint) {
-          const { data: rewardSpace, error: rewardError } = await supabase.rpc("claim_creation_footprint_reward", {
-            target_couple_id: coupleId,
-            target_footprint_id: insertedFootprint.id,
-          }).maybeSingle();
-          if (rewardSpace) {
-            setSpace((current) => chooseNewerSpace(current, rewardSpace));
-          }
-          if (rewardError) {
-            await writeCreationAction("footprint_add", `记录了足迹「${footprintTitle.trim()}」`);
-          }
-        } else {
-          await writeCreationAction("footprint_add", `记录了足迹「${footprintTitle.trim()}」`);
-        }
-        showRewardFlash("footprint", "爱的养分已入仓", "日常粮 +1 份、心愿星糖 +10 点，已经飞进共享小粮仓。");
-        triggerLocalPetReaction("happy", "🐾");
-        showToast({ title: "足迹已点亮", message: "它也会沉淀到记忆页，并化作小家的养分。", tone: "success" });
+        });
+        await writeCreationAction("footprint_update", `更新了足迹「${footprintTitle.trim()}」`);
+        showToast({ title: "足迹已更新", tone: "success" });
+      } else {
+        await createSelfHostFootprint({
+          accessToken: token,
+          coupleId,
+          title: footprintTitle.trim(),
+          note: footprintNote.trim() || null,
+          visitedAt: footprintDate,
+          latitude: null,
+          longitude: null,
+        });
+        await writeCreationAction("footprint_add", `记录了足迹「${footprintTitle.trim()}」`);
+        showRewardFlash("footprint", "足迹已点亮", "这段日常已经留进你们的家园。");
+        triggerLocalPetReaction("happy", "喵");
+        showToast({ title: "足迹已点亮", message: "它也会沉淀到记忆页的日常里。", tone: "success" });
       }
       resetFootprintForm();
       setFootprintFormOpen(false);
@@ -611,30 +570,34 @@ export function CreationSpacePage({
   }
 
   async function deleteFootprint(footprint: CoupleFootprint) {
-    const { error } = await supabase.from("couple_footprints").update({ deleted_at: new Date().toISOString() }).eq("id", footprint.id);
-    if (!error) {
-      await writeCreationAction("footprint_delete", `删除了足迹「${footprint.title}」`);
-    }
-    if (error) {
-      showToast({ title: "删除失败", message: error.message, tone: "error" });
+    const token = requireSelfHostAccessToken();
+    if (!token) {
       return;
     }
-    if (editingFootprintId === footprint.id) {
-      resetFootprintForm();
+    try {
+      await deleteSelfHostFootprint({ accessToken: token, footprintId: footprint.id });
+      await writeCreationAction("footprint_delete", `删除了足迹「${footprint.title}」`);
+      if (editingFootprintId === footprint.id) {
+        resetFootprintForm();
+      }
+      showToast({ title: "足迹已删除", tone: "success" });
+      onChanged();
+    } catch (error) {
+      showToast({ title: "删除失败", message: error instanceof Error ? error.message : "请稍后重试。", tone: "error" });
     }
-    showToast({ title: "足迹已删除", tone: "success" });
-    onChanged();
   }
 
   async function writeCreationAction(actionType: CreationAction["action_type"], actionLabel: string) {
-    if (!user) {
+    const token = accessToken;
+    if (!token || !user) {
       return;
     }
-    await supabase.rpc("record_creation_action", {
-      target_couple_id: coupleId,
-      action_type: actionType,
-      action_label: actionLabel,
-      action_metadata: {},
+    await recordSelfHostCreationAction({
+      accessToken: token,
+      coupleId,
+      actionType,
+      actionLabel,
+      metadata: {},
     });
   }
 
@@ -645,6 +608,7 @@ export function CreationSpacePage({
   const premiumFoodCount = activeSpace?.premium_food_count ?? 0;
   const treatBalance = activeSpace?.treat_balance ?? 0;
   const latestPetReaction = petReaction ?? realtimeReaction ?? reactionFromSpace(activeSpace);
+  const petMemoryActionsDisabled = disabled || selfHostMode;
   const visiblePetMemories = petMemories
     .filter((memory) => !memory.archived_at)
     .filter((memory) => memory.memory_scope === "core" || !memory.expires_at || new Date(memory.expires_at).getTime() > Date.now())
@@ -822,7 +786,7 @@ export function CreationSpacePage({
                     <Pressable
                       accessibilityRole="button"
                       accessibilityLabel="召回云宠到小窝"
-                      disabled={petSummoning}
+                    disabled={featuresDisabled || petSummoning}
                       onPress={() => void summonPetRoom()}
                       style={({ pressed }) => [
                         styles.creationCabinSummonButton,
@@ -855,7 +819,7 @@ export function CreationSpacePage({
                     count={basicFoodCount}
                     icon={<Utensils color={colors.accentDark} size={18} strokeWidth={2.5} />}
                     loading={storeBusy === "basic"}
-                    disabled={treatBalance < 6}
+                    disabled={featuresDisabled || treatBalance < 6}
                     onBuy={() => void buyFood("basic")}
                   />
                   <CreationFoodCard
@@ -865,20 +829,20 @@ export function CreationSpacePage({
                     count={premiumFoodCount}
                     icon={<Sparkles color={colors.accentDark} size={18} strokeWidth={2.5} />}
                     loading={storeBusy === "premium"}
-                    disabled={treatBalance < 14}
+                    disabled={featuresDisabled || treatBalance < 14}
                     onBuy={() => void buyFood("premium")}
                   />
                 </View>
                 <View style={styles.creationActionRow}>
-                  <SecondaryButton label={`投喂日常粮 · ${basicFoodCount}`} active={petBusy === "basic"} loading={petBusy === "basic"} disabled={basicFoodCount <= 0} onPress={() => void feedPet("basic")} icon={<Utensils color={colors.accentDark} size={16} />} />
-                  <SecondaryButton label={`投喂鲜食粮 · ${premiumFoodCount}`} active={petBusy === "premium"} loading={petBusy === "premium"} disabled={premiumFoodCount <= 0} onPress={() => void feedPet("premium")} icon={<Sparkles color={colors.accentDark} size={16} />} />
+                  <SecondaryButton label={`投喂日常粮 · ${basicFoodCount}`} active={petBusy === "basic"} loading={petBusy === "basic"} disabled={featuresDisabled || basicFoodCount <= 0} onPress={() => void feedPet("basic")} icon={<Utensils color={colors.accentDark} size={16} />} />
+                  <SecondaryButton label={`投喂鲜食粮 · ${premiumFoodCount}`} active={petBusy === "premium"} loading={petBusy === "premium"} disabled={featuresDisabled || premiumFoodCount <= 0} onPress={() => void feedPet("premium")} icon={<Sparkles color={colors.accentDark} size={16} />} />
                 </View>
               </View>
             ) : null}
             <View style={styles.creationActionRow}>
-              <SecondaryButton label={cleanButtonLabel} active={petBusy === "clean"} loading={petBusy === "clean"} onPress={() => void interactPet("clean")} icon={<ImagePlus color={colors.accentDark} size={16} />} />
-              <SecondaryButton label={petBusy === "play" ? "陪玩中" : "陪玩"} active={petBusy === "play"} loading={petBusy === "play"} onPress={() => void interactPet("play")} icon={<Gamepad2 color={colors.accentDark} size={16} />} />
-              <SecondaryButton label={sleepButtonLabel} active={petBusy === "sleep" || petSleeping} loading={petBusy === "sleep"} onPress={() => void sleepPet()} icon={<Moon color={colors.accentDark} size={16} />} />
+              <SecondaryButton label={cleanButtonLabel} active={petBusy === "clean"} loading={petBusy === "clean"} disabled={featuresDisabled} onPress={() => void interactPet("clean")} icon={<ImagePlus color={colors.accentDark} size={16} />} />
+              <SecondaryButton label={petBusy === "play" ? "陪玩中" : "陪玩"} active={petBusy === "play"} loading={petBusy === "play"} disabled={featuresDisabled} onPress={() => void interactPet("play")} icon={<Gamepad2 color={colors.accentDark} size={16} />} />
+              <SecondaryButton label={sleepButtonLabel} active={petBusy === "sleep" || petSleeping} loading={petBusy === "sleep"} disabled={featuresDisabled} onPress={() => void sleepPet()} icon={<Moon color={colors.accentDark} size={16} />} />
             </View>
           </Card>
 
@@ -896,7 +860,7 @@ export function CreationSpacePage({
             {visiblePetMemories.length ? (
               <View style={styles.petMemoryTrail}>
                 {visiblePetMemories.map((memory, index) => (
-                  <PetMemoryRow key={memory.id} memory={memory} isLast={index === visiblePetMemories.length - 1} onChanged={onChanged} />
+                  <PetMemoryRow key={memory.id} memory={memory} isLast={index === visiblePetMemories.length - 1} onChanged={onChanged} disabled={petMemoryActionsDisabled} />
                 ))}
               </View>
             ) : (
@@ -1016,7 +980,7 @@ export function CreationSpacePage({
             {puzzleFeedback === "correct" ? <InlineNotice tone="success">答对啦，鲜食粮和心愿星糖会飞进共享小粮仓。</InlineNotice> : null}
             <View {...petSafeActionProps()} style={styles.creationActionRow}>
               <SecondaryButton label="换一题" onPress={switchPuzzle} icon={<Gamepad2 color={colors.accentDark} size={16} />} />
-              <PrimaryButton label={gameBusy ? "入仓中" : "答对领取加餐"} onPress={() => void claimPuzzleReward()} loading={gameBusy} icon={<Sparkles color="#fff" size={16} strokeWidth={2.5} />} />
+              <PrimaryButton label={gameBusy ? "入仓中" : "答对领取加餐"} onPress={() => void claimPuzzleReward()} loading={gameBusy} disabled={featuresDisabled} icon={<Sparkles color="#fff" size={16} strokeWidth={2.5} />} />
             </View>
           </Card>
           </View>

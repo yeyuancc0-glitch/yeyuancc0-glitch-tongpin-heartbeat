@@ -6,7 +6,7 @@ import type { QuickInteractionItem } from "@/features/home/homeShared";
 import { customQuickTone, isQuickInteractionNotification, isTodayTimestamp } from "@/features/home/homeUtils";
 import { quickInteractionPresets } from "@/lib/constants/appContent";
 import { todayIsoDate } from "@/lib/dates/date";
-import { supabase } from "@/lib/supabase/client";
+import { sendSelfHostQuickInteraction } from "@/lib/selfHost/interactionApi";
 import type { Notification } from "@/lib/supabase/database.types";
 
 const maxQuickInteractionCards = 8;
@@ -26,12 +26,14 @@ type ToastValue = {
 };
 
 export function useQuickInteractions({
+  accessToken,
   coupleId,
   partnerId,
   notifications,
   showToast,
   reload,
 }: {
+  accessToken?: string | null;
   coupleId?: string | null;
   partnerId?: string | null;
   notifications: Notification[];
@@ -167,19 +169,20 @@ export function useQuickInteractions({
 
     setQuickSending(true);
     try {
-      const { data: notification, error: notificationError } = await supabase
-        .rpc("send_quick_interaction", {
-          target_couple_id: coupleId,
-          interaction_label: label,
-        })
-        .maybeSingle();
+      let notification: { notification_id?: string | null } | null = null;
 
-      if (notificationError || !notification?.notification_id) {
-        showToast({ title: "投递失败", message: notificationError?.message ?? "对方提醒没有创建。", tone: "error" });
+      if (!accessToken) {
+        throw new Error("登录状态已失效，请重新登录。");
+      }
+      notification = await sendSelfHostQuickInteraction({ accessToken, coupleId, label });
+
+      if (!notification?.notification_id) {
+        showToast({ title: "投递失败", message: "对方提醒没有创建。", tone: "error" });
         reload();
         return false;
       }
-      setDismissedPopupIds((ids) => (ids.includes(notification.notification_id) ? ids : [...ids, notification.notification_id]));
+      const notificationId = notification.notification_id;
+      setDismissedPopupIds((ids) => (ids.includes(notificationId) ? ids : [...ids, notificationId]));
       setLocalTodayInteractionCount((count) => count + 1);
       setInteractionText(`“${label}”已经投递给对方。`);
       showToast({ title: `已投递 ${label}`, message: "对方会在首页收到一个小提醒。", tone: "success" });
@@ -193,7 +196,7 @@ export function useQuickInteractions({
     } finally {
       setQuickSending(false);
     }
-  }, [coupleId, partnerId, quickSending, reload, showToast]);
+  }, [accessToken, coupleId, partnerId, quickSending, reload, showToast]);
 
   return {
     addCustomQuickInteraction,

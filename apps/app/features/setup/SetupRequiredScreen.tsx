@@ -11,8 +11,8 @@ export function SetupRequiredScreen() {
         <View style={styles.mark}>
           <Database color={colors.accent} size={30} strokeWidth={2.4} />
         </View>
-        <H1>需要先连接 Supabase</H1>
-        <Body style={styles.lead}>注册、情侣空间、相册、信件、推送和云宠数据都依赖 Supabase Auth、Postgres、Storage、RLS 和 RPC。</Body>
+        <H1>需要先连接自建服务器</H1>
+        <Body style={styles.lead}>注册、情侣空间、相册、信件、推送和云宠数据都依赖自建 API、Postgres、MinIO、Redis 和 Push worker。</Body>
       </View>
 
       <Panel style={styles.panel}>
@@ -20,19 +20,19 @@ export function SetupRequiredScreen() {
           <FileKey color={colors.accentDark} size={20} />
           <H2>本地配置</H2>
         </View>
-        <Body>复制环境变量模板并填入 Supabase Project URL 和 anon public key。</Body>
+        <Body>复制环境变量模板并填入自建 API 地址。</Body>
         <View style={styles.codeBlock}>
           <Text style={styles.code}>cp apps/app/.env.example apps/app/.env</Text>
-          <Text style={styles.code}>EXPO_PUBLIC_SUPABASE_URL=https://xxxxx.supabase.co</Text>
-          <Text style={styles.code}>EXPO_PUBLIC_SUPABASE_ANON_KEY=xxxxx</Text>
+          <Text style={styles.code}>EXPO_PUBLIC_SELF_HOST_API_URL=https://api-staging.fancah.tech</Text>
         </View>
       </Panel>
 
       <Panel style={styles.panel}>
         <H2>数据库初始化</H2>
-        <Body>按文件名顺序应用全部 migration，然后重新启动 Web。</Body>
+        <Body>确认服务器 migration、worker、备份和健康检查都已通过，然后重新启动 Web。</Body>
         <View style={styles.codeBlock}>
-          <Text style={styles.code}>npm run db:apply</Text>
+          <Text style={styles.code}>ssh -i ~/Desktop/codex.pem -o IdentitiesOnly=yes ubuntu@81.71.9.118</Text>
+          <Text style={styles.code}>cd /opt/tongpin && sh scripts/apply-db-migrations.sh</Text>
           <Text style={styles.code}>npm run check:env</Text>
           <Text style={styles.code}>npm run typecheck</Text>
         </View>

@@ -1,4 +1,4 @@
-import { supabase } from "@/lib/supabase/client";
+import { createSelfHostMessage, deleteSelfHostMessage } from "@/lib/selfHost/messageApi";
 
 type MessageServiceError = { message: string };
 
@@ -6,6 +6,7 @@ type SendCoupleMessageParams = {
   coupleId: string;
   senderId: string;
   body: string;
+  accessToken?: string | null;
 };
 
 type NotifyCoupleMessagePartnerParams = SendCoupleMessageParams;
@@ -22,8 +23,8 @@ export type SendCoupleMessageWithNotificationResult = NotifyCoupleMessagePartner
 };
 
 export async function createCoupleMessage({
+  accessToken,
   coupleId,
-  senderId,
   body,
 }: SendCoupleMessageParams): Promise<{ error: MessageServiceError | null }> {
   const trimmedBody = body.trim();
@@ -32,49 +33,31 @@ export async function createCoupleMessage({
   }
 
   try {
-    const { error } = await supabase.from("messages").insert({
-      couple_id: coupleId,
-      sender_id: senderId,
-      body: trimmedBody,
-    });
-
-    return { error };
+    if (!accessToken) {
+      return { error: new Error("登录状态已过期，请重新登录") };
+    }
+    await createSelfHostMessage({ accessToken, coupleId, body: trimmedBody });
+    return { error: null };
   } catch (error) {
     return { error: toServiceError(error, "留言发送失败") };
   }
 }
 
 export async function notifyCoupleMessagePartner({
-  coupleId,
 }: NotifyCoupleMessagePartnerParams): Promise<NotifyCoupleMessagePartnerResult> {
-  try {
-    const { error: notificationError } = await supabase.rpc("create_partner_notification", {
-      target_couple_id: coupleId,
-      notification_type: "message",
-      notification_title: "你收到了一条留言",
-      notification_body: "TA 给你留了一句话，打开看看吧。",
-      related_table: "messages",
-      related_id: null,
-    });
-
-    return {
-      notificationError,
-      notificationSkipped: Boolean(notificationError),
-    };
-  } catch (error) {
-    return {
-      notificationError: toServiceError(error, "留言提醒同步失败"),
-      notificationSkipped: true,
-    };
-  }
+  return {
+    notificationError: null,
+    notificationSkipped: true,
+  };
 }
 
 export async function sendCoupleMessageWithNotification({
+  accessToken,
   coupleId,
   senderId,
   body,
 }: SendCoupleMessageWithNotificationParams): Promise<SendCoupleMessageWithNotificationResult> {
-  const { error: messageError } = await createCoupleMessage({ coupleId, senderId, body });
+  const { error: messageError } = await createCoupleMessage({ accessToken, coupleId, senderId, body });
   if (messageError) {
     return {
       messageError,
@@ -90,14 +73,13 @@ export async function sendCoupleMessageWithNotification({
   };
 }
 
-export async function deleteCoupleMessage(messageId: string): Promise<{ error: MessageServiceError | null }> {
+export async function deleteCoupleMessage(messageId: string, accessToken?: string | null): Promise<{ error: MessageServiceError | null }> {
   try {
-    const { error } = await supabase
-      .from("messages")
-      .update({ deleted_at: new Date().toISOString() })
-      .eq("id", messageId);
-
-    return { error };
+    if (!accessToken) {
+      return { error: new Error("登录状态已过期，请重新登录") };
+    }
+    await deleteSelfHostMessage({ accessToken, messageId });
+    return { error: null };
   } catch (error) {
     return { error: toServiceError(error, "留言删除失败") };
   }

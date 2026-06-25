@@ -8,11 +8,15 @@
   ],
   "scripts": {
     "web": "npm run web -w apps/app",
+    "server:start": "npm run start -w @tongpin/server",
+    "check:server": "npm run check -w @tongpin/server",
     "typecheck": "npm run typecheck -w apps/app && npm run typecheck -w @tongpin/shared",
-    "build:web": "npm run build:web -w apps/app",
+    "build:web": "npm run check:env && npm run build:web -w apps/app",
     "check:env": "node scripts/check-env.mjs",
-    "db:apply": "node scripts/apply-supabase-migration.mjs",
-    "verify": "npm run check:env && npm run typecheck && npm run build:web"
+    "check:supabase-usage": "node scripts/check-supabase-usage.mjs",
+    "check:supabase-usage:strict": "node scripts/check-supabase-usage.mjs --strict",
+    "db:apply": "node scripts/apply-self-host-migrations.mjs",
+    "verify": "npm run typecheck && npm run build:web"
   },
   "overrides": {
     "pixi-live2d-display": {

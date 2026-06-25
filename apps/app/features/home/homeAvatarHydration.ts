@@ -1,25 +1,33 @@
 import type { ActiveCouple, DashboardProfile } from "@/lib/supabase/database.types";
-import { createSignedUrl, createTransformedImageUrl, imageTransforms, storageBuckets } from "@/lib/supabase/storage";
+import { createSelfHostAvatarReadUrl } from "@/lib/selfHost/profileApi";
 
 export type AvatarUrlPair = { signedUrl: string | null; thumbSignedUrl: string | null };
 
-export async function createAvatarUrlMap(profiles: DashboardProfile[]) {
-  const avatarPathByOriginalPath = new Map<string, { originalPath: string; thumbnailPath: string | null }>();
+export async function createAvatarUrlMap(profiles: DashboardProfile[], accessToken?: string | null) {
+  const avatarPathByOriginalPath = new Map<string, { originalPath: string; thumbnailPath: string | null; userId: string }>();
   profiles.forEach((profile) => {
     if (profile.avatar_url && !avatarPathByOriginalPath.has(profile.avatar_url)) {
       avatarPathByOriginalPath.set(profile.avatar_url, {
         originalPath: profile.avatar_url,
         thumbnailPath: profile.avatar_thumbnail_url ?? null,
+        userId: profile.id,
       });
     }
   });
 
   const avatarUrlByPath = new Map<string, AvatarUrlPair>();
   await Promise.all(
-    Array.from(avatarPathByOriginalPath.values()).map(async ({ originalPath, thumbnailPath }) => {
-      const thumbSignedUrl = thumbnailPath
-        ? await createSignedUrl(storageBuckets.avatars, thumbnailPath)
-        : await createTransformedImageUrl(storageBuckets.avatars, originalPath, imageTransforms.avatarThumb, { fallback: "local-thumbnail" });
+    Array.from(avatarPathByOriginalPath.values()).map(async ({ originalPath, thumbnailPath, userId }) => {
+      const thumbSignedUrl = accessToken
+        ? await createSelfHostAvatarReadUrl({
+            accessToken,
+            userId,
+            variant: thumbnailPath ? "thumbnail" : "original",
+          }).catch((error) => {
+            console.warn("Self-host avatar hydration failed:", error);
+            return null;
+          })
+        : null;
       avatarUrlByPath.set(originalPath, {
         signedUrl: thumbSignedUrl,
         thumbSignedUrl,

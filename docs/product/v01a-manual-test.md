@@ -1,13 +1,12 @@
-# V0.1A 手工联调清单
+# V0.1A 手工联调清单（历史归档）
+
+> 当前项目运行时已经迁到自建 API / Postgres / MinIO 路线，不再用本页作为启动或上线步骤。本页仅保留早期 Supabase 版本的历史测试参考；新的联调请使用根目录 `README.md` 和 `AGENTS.md` 中的 self-host smoke 命令。
 
 ## 前置条件
 
-1. 在 Supabase 创建项目。
-2. 在 Supabase SQL Editor 执行 `packages/db/migrations/001_v01a_schema.sql`。
-3. 复制 `apps/app/.env.example` 为 `apps/app/.env`，填入：
-   - `EXPO_PUBLIC_SUPABASE_URL`
-   - `EXPO_PUBLIC_SUPABASE_ANON_KEY`
-4. 启动 Web：
+1. 确认 self-host staging 可用：`https://api-staging.fancah.tech/api/health`。
+2. 复制 `apps/app/.env.example` 为 `apps/app/.env`，填入 `EXPO_PUBLIC_SELF_HOST_API_URL=https://api-staging.fancah.tech`。
+3. 启动 Web：
 
 ```bash
 npm run web
@@ -19,7 +18,7 @@ npm run web
 
 1. 打开 Web。
 2. 注册账号 A。
-3. 如果 Supabase 开启邮箱确认，完成邮箱确认后登录。
+3. 如果 self-host 邮件确认开启，完成邮箱确认后登录。
 4. 保存 profile。
 5. 创建邀请码。
 6. 复制邀请码或邀请链接。
@@ -55,6 +54,6 @@ npm run web
 
 ## 预期问题
 
-- 如果 `.env` 未配置，页面会提示需要配置 Supabase。
-- 如果 Supabase 开启邮箱确认，注册后需要先确认邮箱。
-- 如果 SQL migration 未执行，登录后会出现表或 RPC 不存在的错误。
+- 如果 `.env` 未配置，页面会提示需要配置 self-host API。
+- 如果 self-host 邮箱确认开启，注册后需要先确认邮箱。
+- 如果 self-host migration 未执行，登录后会出现表或接口不存在的错误。

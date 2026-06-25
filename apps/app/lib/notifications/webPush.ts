@@ -1,4 +1,5 @@
-import { supabase } from "@/lib/supabase/client";
+import { loadSelfHostSession } from "@/lib/selfHost/authSession";
+import { disableSelfHostPushToken, registerSelfHostWebPushSubscription } from "@/lib/selfHost/pushApi";
 
 type WebPushRegistrationResult =
   | { status: "registered"; endpoint: string }
@@ -71,7 +72,7 @@ export async function registerForWebPushNotifications(): Promise<WebPushRegistra
     if (!manifestReady) {
       return {
         status: "service_unavailable",
-        message: "当前桌面图标可能仍在使用旧版网页配置。请删除桌面图标，清除 Edge 中本站的存储数据，再从 https://app.fanch.tech 重新添加到桌面后重试。",
+        message: "当前桌面图标可能仍在使用旧版网页配置。请删除桌面图标，清除 Edge 中本站的存储数据，再从 https://tongpin.fancah.tech 重新添加到桌面后重试。",
       };
     }
 
@@ -79,9 +80,7 @@ export async function registerForWebPushNotifications(): Promise<WebPushRegistra
     const applicationServerKey = urlBase64ToUint8Array(vapidPublicKey);
     const existingSubscription = await registration.pushManager.getSubscription();
     if (existingSubscription && !subscriptionMatchesVapidKey(existingSubscription, applicationServerKey)) {
-      await supabase.rpc("disable_current_push_token", {
-        push_token: existingSubscription.endpoint,
-      });
+      await disablePushToken(existingSubscription.endpoint);
       await existingSubscription.unsubscribe();
     }
     const reusableSubscription = await registration.pushManager.getSubscription();
@@ -101,16 +100,7 @@ export async function registerForWebPushNotifications(): Promise<WebPushRegistra
       return { status: "error", message: "浏览器返回的推送订阅不完整。" };
     }
 
-    const { error } = await supabase.rpc("register_web_push_subscription", {
-      push_endpoint: endpoint,
-      push_p256dh: p256dh,
-      push_auth: auth,
-      push_user_agent: navigator.userAgent,
-    });
-
-    if (error) {
-      return { status: "error", message: error.message };
-    }
+    await registerWebPushSubscription({ endpoint, p256dh, auth, userAgent: navigator.userAgent });
 
     return { status: "registered", endpoint };
   } catch (error) {
@@ -133,10 +123,30 @@ export async function disableCurrentWebPushSubscription() {
     return;
   }
 
-  await supabase.rpc("disable_current_push_token", {
-    push_token: subscription.endpoint,
-  });
+  await disablePushToken(subscription.endpoint);
   await subscription.unsubscribe();
+}
+
+async function registerWebPushSubscription(input: { endpoint: string; p256dh: string; auth: string; userAgent: string }) {
+  const session = await loadSelfHostSession();
+  if (!session?.access_token) {
+    throw new Error("自建登录会话已失效，请重新登录后再开启网页推送。");
+  }
+  await registerSelfHostWebPushSubscription({
+    accessToken: session.access_token,
+    endpoint: input.endpoint,
+    p256dh: input.p256dh,
+    auth: input.auth,
+    userAgent: input.userAgent,
+  });
+}
+
+async function disablePushToken(token: string) {
+  const session = await loadSelfHostSession();
+  if (!session?.access_token) {
+    return;
+  }
+  await disableSelfHostPushToken({ accessToken: session.access_token, token });
 }
 
 function urlBase64ToUint8Array(base64String: string) {

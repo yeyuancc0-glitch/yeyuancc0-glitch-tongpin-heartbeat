@@ -4,7 +4,7 @@ import * as Device from "expo-device";
 import * as Notifications from "expo-notifications";
 import { Platform } from "react-native";
 
-import { supabase } from "@/lib/supabase/client";
+import { disableSelfHostPushToken, registerSelfHostExpoPushToken } from "@/lib/selfHost/pushApi";
 
 type PushRegistrationResult =
   | { status: "registered"; token: string }
@@ -25,7 +25,11 @@ if (Platform.OS !== "web") {
   });
 }
 
-export async function registerForPushNotifications(): Promise<PushRegistrationResult> {
+type PushAuthOptions = {
+  accessToken?: string | null;
+};
+
+export async function registerForPushNotifications(options: PushAuthOptions = {}): Promise<PushRegistrationResult> {
   if (Platform.OS === "web") {
     return { status: "unsupported", message: "Web 端使用独立 Web Push 订阅，不注册原生 Expo 推送。" };
   }
@@ -59,15 +63,13 @@ export async function registerForPushNotifications(): Promise<PushRegistrationRe
     setLatestExpoPushToken(pushToken.data);
     const platform = Platform.OS === "ios" || Platform.OS === "android" ? Platform.OS : "unknown";
 
-    const { error } = await supabase.rpc("register_push_token", {
-      push_token: pushToken.data,
-      push_platform: platform,
-      push_device_id: await getDeviceId(),
-      push_app_version: Application.nativeApplicationVersion ?? Constants.expoConfig?.version ?? null,
+    await registerExpoPushToken({
+      accessToken: options.accessToken,
+      token: pushToken.data,
+      platform,
+      deviceId: await getDeviceId(),
+      appVersion: Application.nativeApplicationVersion ?? Constants.expoConfig?.version ?? null,
     });
-    if (error) {
-      return { status: "error", message: error.message };
-    }
 
     return { status: "registered", token: pushToken.data };
   } catch (error) {
@@ -75,19 +77,17 @@ export async function registerForPushNotifications(): Promise<PushRegistrationRe
   }
 }
 
-export async function disableCurrentPushToken() {
+export async function disableCurrentPushToken(options: PushAuthOptions = {}) {
   const token = latestExpoPushToken ?? readPersistedExpoPushToken();
   if (!token) {
     return;
   }
 
-  await supabase.rpc("disable_current_push_token", {
-    push_token: token,
-  });
+  await disableExpoPushToken({ accessToken: options.accessToken, token });
   setLatestExpoPushToken(null);
 }
 
-export function subscribePushTokenRefresh() {
+export function subscribePushTokenRefresh(options: PushAuthOptions = {}) {
   if (Platform.OS === "web") {
     return { remove: () => {} };
   }
@@ -99,12 +99,45 @@ export function subscribePushTokenRefresh() {
     }
     setLatestExpoPushToken(tokenValue);
     const platform = Platform.OS === "ios" || Platform.OS === "android" ? Platform.OS : "unknown";
-    void supabase.rpc("register_push_token", {
-      push_token: tokenValue,
-      push_platform: platform,
-      push_device_id: null,
-      push_app_version: Application.nativeApplicationVersion ?? Constants.expoConfig?.version ?? null,
+    void registerExpoPushToken({
+      accessToken: options.accessToken,
+      token: tokenValue,
+      platform,
+      deviceId: null,
+      appVersion: Application.nativeApplicationVersion ?? Constants.expoConfig?.version ?? null,
     });
+  });
+}
+
+async function registerExpoPushToken(input: {
+  accessToken?: string | null;
+  token: string;
+  platform: "ios" | "android" | "web" | "unknown";
+  deviceId?: string | null;
+  appVersion?: string | null;
+}) {
+  if (!input.accessToken) {
+    throw new Error("登录状态已失效，请重新登录。");
+  }
+  await registerSelfHostExpoPushToken({
+    accessToken: input.accessToken,
+    token: input.token,
+    platform: input.platform,
+    deviceId: input.deviceId ?? null,
+    appVersion: input.appVersion ?? null,
+  });
+}
+
+async function disableExpoPushToken(input: {
+  accessToken?: string | null;
+  token: string;
+}) {
+  if (!input.accessToken) {
+    throw new Error("登录状态已失效，请重新登录。");
+  }
+  await disableSelfHostPushToken({
+    accessToken: input.accessToken,
+    token: input.token,
   });
 }
 

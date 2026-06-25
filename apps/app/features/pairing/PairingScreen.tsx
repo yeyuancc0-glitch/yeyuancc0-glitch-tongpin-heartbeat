@@ -14,7 +14,7 @@ import {
 import { DateField, InlineNotice, useToast } from "@/components/ui";
 import { useAuth } from "@/features/auth/AuthProvider";
 import { localIsoDate } from "@/lib/dates/date";
-import { supabase } from "@/lib/supabase/client";
+import { acceptSelfHostPairInvite, createSelfHostPairInvite, type SelfHostInvite } from "@/lib/selfHost/relationshipApi";
 import type { PairInvite } from "@/lib/supabase/database.types";
 import { useErrorShake } from "@/motion/useErrorShake";
 import { colors } from "@/styles/theme";
@@ -26,7 +26,7 @@ export function PairingScreen({
   pendingInvites: PairInvite[];
   onChanged: () => void;
 }) {
-  const { user } = useAuth();
+  const { session, user } = useAuth();
   const { showToast } = useToast();
   const [inviteCode, setInviteCode] = useState("");
   const [mode, setMode] = useState<"invite" | "accept">("invite");
@@ -39,8 +39,20 @@ export function PairingScreen({
   const [creating, setCreating] = useState(false);
   const [binding, setBinding] = useState(false);
   const [bound, setBound] = useState(false);
+  const [createdSelfHostInvite, setCreatedSelfHostInvite] = useState<SelfHostInvite | null>(null);
   const { triggerShake, shakeStyle } = useErrorShake();
-  const latestInvite = pendingInvites[0];
+  const latestInvite = createdSelfHostInvite
+    ? {
+        id: createdSelfHostInvite.id,
+        code: createdSelfHostInvite.inviteCode,
+        created_by: createdSelfHostInvite.inviterUserId,
+        accepted_by: createdSelfHostInvite.acceptedByUserId,
+        status: createdSelfHostInvite.status,
+        expires_at: createdSelfHostInvite.expiresAt,
+        created_at: createdSelfHostInvite.createdAt,
+        accepted_at: createdSelfHostInvite.acceptedAt,
+      } satisfies PairInvite
+    : pendingInvites[0];
 
   useEffect(() => {
     if (Platform.OS !== "web" || typeof window === "undefined") {
@@ -61,54 +73,42 @@ export function PairingScreen({
     }
 
     setCreating(true);
-    const expiresAt = new Date();
-    expiresAt.setDate(expiresAt.getDate() + 7);
-
-    const { error } = await supabase.rpc("create_pair_invite", {
-      invite_expires_at: expiresAt.toISOString(),
-    });
-
-    setCreating(false);
-    if (error) {
+    try {
+      if (!session?.access_token) {
+        throw new Error("登录状态已过期，请重新登录。");
+      }
+      const result = await createSelfHostPairInvite(session.access_token);
+      setCreatedSelfHostInvite(result.invite);
+      showToast({ title: "邀请码已创建", message: "复制给 TA，对方输入后即可绑定。", tone: "success" });
+    } catch (error) {
       triggerShake();
-      showToast({ title: "创建邀请码失败", message: error.message, tone: "error" });
-      return;
+      showToast({ title: "创建邀请码失败", message: error instanceof Error ? error.message : "请稍后重试。", tone: "error" });
+    } finally {
+      setCreating(false);
     }
-    showToast({ title: "邀请码已创建", message: "复制给 TA，对方输入后即可绑定。", tone: "success" });
-    onChanged();
   }
 
   async function acceptInvite() {
     setBinding(true);
-    let usedLegacyBinding = false;
-    let { error } = await supabase.rpc("accept_pair_invite", {
-      invite_code: inviteCode.trim().toUpperCase(),
-      relationship_started_at: relationshipStartDate || localIsoDate(),
-    });
-
-    if (isRelationshipDateRpcMissing(error)) {
-      usedLegacyBinding = true;
-      const legacyResult = await supabase.rpc("accept_pair_invite", {
-        invite_code: inviteCode.trim().toUpperCase(),
+    try {
+      if (!session?.access_token) {
+        throw new Error("登录状态已过期，请重新登录。");
+      }
+      await acceptSelfHostPairInvite({
+        accessToken: session.access_token,
+        inviteCode: inviteCode.trim().toUpperCase(),
+        relationshipStartedAt: relationshipStartDate || localIsoDate(),
       });
-      error = legacyResult.error;
-    }
-
-    setBinding(false);
-
-    if (error) {
+      setInviteCode("");
+      showToast({ title: "绑定成功", message: "你们的情侣空间已经创建。", tone: "success" });
+      setBound(true);
+      setTimeout(onChanged, 900);
+    } catch (error) {
       triggerShake();
-      showToast({ title: "绑定失败", message: error.message, tone: "error" });
-      return;
+      showToast({ title: "绑定失败", message: error instanceof Error ? error.message : "请稍后重试。", tone: "error" });
+    } finally {
+      setBinding(false);
     }
-    setInviteCode("");
-    showToast({
-      title: "绑定成功",
-      message: usedLegacyBinding ? "你们的情侣空间已创建；开始日期可稍后在关系设置里调整。" : "你们的情侣空间已经创建。",
-      tone: "success",
-    });
-    setBound(true);
-    setTimeout(onChanged, 900);
   }
 
   async function copyInvite(code: string) {
@@ -194,13 +194,6 @@ export function PairingScreen({
       )}
     </View>
   );
-}
-
-function isRelationshipDateRpcMissing(error: { message?: string; code?: string } | null) {
-  if (!error) {
-    return false;
-  }
-  return error.code === "PGRST202" || error.message?.includes("relationship_started_at") || error.message?.includes("schema cache");
 }
 
 const styles = StyleSheet.create({

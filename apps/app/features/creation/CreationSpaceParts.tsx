@@ -9,7 +9,6 @@ import { styles } from "@/features/home/homeStyles";
 import { petSafeActionProps } from "@/features/home/petDomProps";
 import { formatMemoryDate } from "@/features/memory/memoryUtils";
 import { renderPortal } from "@/lib/platform/portal";
-import { supabase } from "@/lib/supabase/client";
 import type { PetMemory } from "@/lib/supabase/database.types";
 import { BouncyPressable } from "@/motion/BouncyPressable";
 import { colors } from "@/styles/theme";
@@ -69,7 +68,16 @@ export function FootprintEditorModal({
   return renderPortal(modal);
 }
 
-export function PetMemoryRow({ memory, isLast, onChanged }: { memory: PetMemory; isLast: boolean; onChanged: () => void }) {
+export function PetMemoryRow({
+  memory,
+  isLast,
+  disabled = false,
+}: {
+  memory: PetMemory;
+  isLast: boolean;
+  onChanged: () => void;
+  disabled?: boolean;
+}) {
   const { showToast } = useToast();
   const [busy, setBusy] = useState(false);
   const core = memory.memory_scope === "core";
@@ -77,21 +85,13 @@ export function PetMemoryRow({ memory, isLast, onChanged }: { memory: PetMemory;
   const tone = petMemoryTone(memory.memory_type, core);
 
   async function toggleRemember() {
-    if (busy) {
+    if (disabled || busy) {
+      showToast({ title: "宠物记忆暂未开放", message: "这项编辑会等自建后端记忆 API 接好后再打开。", tone: "info" });
       return;
     }
     setBusy(true);
     try {
-      const { error } = await supabase.rpc("toggle_pet_memory_core", {
-        memory_id: memory.id,
-        remember: !core,
-      });
-      if (error) {
-        showToast({ title: "记忆更新失败", message: error.message, tone: "error" });
-        return;
-      }
-      showToast({ title: core ? "已取消长期记住" : "它会长期记住这件事", tone: "success" });
-      onChanged();
+      showToast({ title: "宠物记忆暂未开放", message: "这项编辑会等自建后端记忆 API 接好后再打开。", tone: "info" });
     } catch (error) {
       showToast({ title: "记忆更新失败", message: error instanceof Error ? error.message : "请稍后重试。", tone: "error" });
     } finally {
@@ -100,20 +100,13 @@ export function PetMemoryRow({ memory, isLast, onChanged }: { memory: PetMemory;
   }
 
   async function deleteMemory() {
-    if (busy) {
+    if (disabled || busy) {
+      showToast({ title: "宠物记忆暂未开放", message: "这项编辑会等自建后端记忆 API 接好后再打开。", tone: "info" });
       return;
     }
     setBusy(true);
     try {
-      const { error } = await supabase.rpc("archive_pet_memory", {
-        memory_id: memory.id,
-      });
-      if (error) {
-        showToast({ title: "删除记忆失败", message: error.message, tone: "error" });
-        return;
-      }
-      showToast({ title: "已删除这条记忆", tone: "success" });
-      onChanged();
+      showToast({ title: "宠物记忆暂未开放", message: "这项编辑会等自建后端记忆 API 接好后再打开。", tone: "info" });
     } catch (error) {
       showToast({ title: "删除记忆失败", message: error instanceof Error ? error.message : "请稍后重试。", tone: "error" });
     } finally {

@@ -21,9 +21,8 @@ import { PhotoUploadInput } from "@/features/media/PhotoUploadInput";
 import { imagePreviewUrl, mediaCaptionLabel } from "@/features/media/mediaUtils";
 import { todayIsoDate } from "@/lib/dates/date";
 import { emptyCopy, moodOptions } from "@/lib/constants/appContent";
-import { supabase } from "@/lib/supabase/client";
+import { isSupportedImage } from "@/lib/media/imageStorage";
 import type { Checkin, CreationSpace, MediaFile } from "@/lib/supabase/database.types";
-import { isSupportedImage } from "@/lib/supabase/storage";
 import { BouncyPressable } from "@/motion/BouncyPressable";
 import { BreathingSkeleton } from "@/motion/BreathingSkeleton";
 import { CrossFadeImage } from "@/motion/CrossFadeImage";
@@ -57,8 +56,28 @@ function emotionCandyTone(mood: string): EmotionCandyTone {
   return emotionCandyTones.开心;
 }
 
-function todayCapsuleNotificationBody(mood: string) {
-  return mood ? `TA 存下了「${mood.slice(0, 12)}」心情。` : "TA 存下了一颗新的今日胶囊。";
+function isSameCheckinSlot(left: Checkin, right: Checkin) {
+  return (
+    left.id === right.id ||
+    (left.couple_id === right.couple_id &&
+      left.user_id === right.user_id &&
+      left.checkin_date === right.checkin_date)
+  );
+}
+
+function mergeOptimisticCheckin(checkins: Checkin[], optimisticCheckin: Checkin | null) {
+  if (!optimisticCheckin) {
+    return checkins;
+  }
+  let replaced = false;
+  const merged = checkins.map((item) => {
+    if (isSameCheckinSlot(item, optimisticCheckin)) {
+      replaced = true;
+      return optimisticCheckin;
+    }
+    return item;
+  });
+  return replaced ? merged : [optimisticCheckin, ...checkins];
 }
 
 export function TodayStoryPage({
@@ -70,6 +89,8 @@ export function TodayStoryPage({
   onChanged,
   onPhotoFiles,
   onMovePetForMemoryEvent,
+  onSaveCheckin,
+  onSaveMoodStatus,
 }: {
   coupleId: string;
   checkins: Checkin[];
@@ -79,6 +100,8 @@ export function TodayStoryPage({
   onChanged: () => void;
   onPhotoFiles: (files: PhotoFileList, options?: PhotoUploadOptions) => Promise<PhotoUploadResult>;
   onMovePetForMemoryEvent: (coupleId: string, kind: "photo" | "memory" | "anniversary" | "today_capsule") => Promise<void>;
+  onSaveCheckin?: (input: { checkinDate: string; content: string | null }) => Promise<Checkin>;
+  onSaveMoodStatus?: (input: { mood: string; note: string | null }) => Promise<void>;
 }) {
   const { user } = useAuth();
   const { showToast } = useToast();
@@ -91,6 +114,7 @@ export function TodayStoryPage({
   const [pendingPhotoPreviewUrls, setPendingPhotoPreviewUrls] = useState<string[]>([]);
   const [photoBusy, setPhotoBusy] = useState(false);
   const [saveBurst, setSaveBurst] = useState(0);
+  const [optimisticCheckin, setOptimisticCheckin] = useState<Checkin | null>(null);
   const saveCardScale = useRef(new Animated.Value(1)).current;
   const washOpacity = useRef(new Animated.Value(0.72)).current;
   const washBreath = useRef(new Animated.Value(0)).current;
@@ -130,6 +154,16 @@ export function TodayStoryPage({
     };
   }, [pendingPhotoFiles]);
 
+  useEffect(() => {
+    if (!optimisticCheckin) {
+      return;
+    }
+    const syncedCheckin = checkins.find((item) => isSameCheckinSlot(item, optimisticCheckin));
+    if (syncedCheckin && syncedCheckin.updated_at >= optimisticCheckin.updated_at) {
+      setOptimisticCheckin(null);
+    }
+  }, [checkins, optimisticCheckin]);
+
   const triggerShake = () => {
     Animated.sequence([
       Animated.timing(shakeAnim, { toValue: -1.5, duration: 40, useNativeDriver: false }),
@@ -141,7 +175,8 @@ export function TodayStoryPage({
   };
 
   const today = todayIsoDate();
-  const todayStories = checkins.filter((item) => item.checkin_date === today);
+  const visibleCheckins = mergeOptimisticCheckin(checkins, optimisticCheckin);
+  const todayStories = visibleCheckins.filter((item) => item.checkin_date === today);
   const mineToday = todayStories.find((item) => item.user_id === user?.id);
   const partnerToday = todayStories.find((item) => item.user_id !== user?.id);
   const mineTodayPhotos = mineToday ? mediaFiles.filter((file) => file.caption === checkinPhotoCaption(mineToday)) : [];
@@ -219,16 +254,11 @@ export function TodayStoryPage({
     setBusy(true);
     try {
       const text = trimmedContent ? `${activeMood}｜${trimmedContent}` : activeMood;
-      const result = mineToday
-        ? await supabase.from("checkins").update({ content: text, updated_at: new Date().toISOString() }).eq("id", mineToday.id).select("*").maybeSingle()
-        : await supabase.from("checkins").insert({ couple_id: coupleId, user_id: user.id, checkin_date: today, content: text }).select("*").maybeSingle();
-
-      if (result.error) {
-        triggerSaveErrorShake();
-        showToast({ title: "保存失败", message: result.error.message, tone: "error" });
-        return;
+      if (!onSaveCheckin) {
+        throw new Error("今日胶囊需要自建后端保存接口。");
       }
-      const savedCheckin = (result.data as Checkin | null) ?? mineToday;
+      const savedCheckin = await onSaveCheckin({ checkinDate: today, content: text });
+      setOptimisticCheckin(savedCheckin);
       let pendingPhotosSaved = false;
       if (savedCheckin && pendingPhotoFiles.length > 0) {
         try {
@@ -260,34 +290,13 @@ export function TodayStoryPage({
         }
       }
 
-      const { error: moodError } = await supabase.from("mood_status").upsert({
-        couple_id: coupleId,
-        user_id: user.id,
-        mood: activeMood,
-        note: trimmedContent || null,
-        updated_at: new Date().toISOString(),
-      }, { onConflict: "couple_id,user_id" });
-      if (moodError) {
-        console.warn("Today capsule mood sync failed:", moodError.message);
+      if (!onSaveMoodStatus) {
+        throw new Error("心情状态需要自建后端保存接口。");
       }
-
-      const { data: members, error: membersError } = await supabase.from("couple_members").select("user_id").eq("couple_id", coupleId).is("left_at", null);
-      if (membersError) {
-        console.warn("Today capsule member lookup failed:", membersError.message);
-      }
-      const partnerMember = members?.find((member) => member.user_id !== user.id);
-      if (partnerMember) {
-        const { error: notificationError } = await supabase.rpc("create_partner_notification", {
-          target_couple_id: coupleId,
-          notification_type: "checkin",
-          notification_title: "TA 存下了一颗今日胶囊",
-          notification_body: todayCapsuleNotificationBody(activeMood),
-          related_table: "checkins",
-          related_id: savedCheckin?.id ?? null,
-        });
-        if (notificationError) {
-          console.warn("Today capsule notification sync failed:", notificationError.message);
-        }
+      try {
+        await onSaveMoodStatus({ mood: activeMood, note: trimmedContent || null });
+      } catch (moodError) {
+        console.warn("Today capsule mood sync failed:", moodError instanceof Error ? moodError.message : moodError);
       }
 
       setSaveBurst((count) => count + 1);
@@ -481,10 +490,10 @@ export function TodayStoryPage({
           <Text style={styles.sectionTitle}>历史胶囊</Text>
           <Text style={styles.linkText}>查看全部</Text>
         </View>
-        {checkins.length === 0 ? (
+        {visibleCheckins.length === 0 ? (
           <EmptyState title="还没有历史胶囊" description="第一颗日常胶囊会从今天开始。" />
         ) : (
-          checkins.slice(0, 4).map((item) => {
+          visibleCheckins.slice(0, 4).map((item) => {
             const story = splitStory(item.content);
             return <ActivityRow key={item.id} title={`${story.mood ? `${story.mood}：` : ""}${story.body}`} meta={item.checkin_date} icon={story.iconImage} />;
           })

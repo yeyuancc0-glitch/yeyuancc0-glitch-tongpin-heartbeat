@@ -10,9 +10,11 @@ import type { PhotoFileList, PhotoUploadOptions, PhotoUploadResult } from "@/fea
 import { petAnchorProps } from "@/features/home/petDomProps";
 import { PhotoUploadInput } from "@/features/media/PhotoUploadInput";
 import { imagePreviewUrl, mediaCaptionLabel } from "@/features/media/mediaUtils";
+import { useAuth } from "@/features/auth/AuthProvider";
+import { prefetchImageUrls } from "@/lib/media/imageStorage";
+import { createSelfHostMediaReadUrl } from "@/lib/selfHost/mediaApi";
 import type { MediaFile } from "@/lib/supabase/database.types";
 import { renderPortal } from "@/lib/platform/portal";
-import { createSignedUrl, prefetchImageUrls, storageBuckets } from "@/lib/supabase/storage";
 import { BouncyPressable } from "@/motion/BouncyPressable";
 import { BreathingSkeleton } from "@/motion/BreathingSkeleton";
 import { CrossFadeImage } from "@/motion/CrossFadeImage";
@@ -149,6 +151,7 @@ export function PhotoPreviewPopup({
   onDelete: (file: MediaFile) => void;
   onSelect: (file: MediaFile, index: number) => void;
 }) {
+  const { session } = useAuth();
   const { reducedMotion } = useMotion();
   const intro = useSharedValue(reducedMotion ? 1 : 0);
   const dragY = useSharedValue(0);
@@ -188,7 +191,14 @@ export function PhotoPreviewPopup({
     void (async () => {
       const resolvedEntries = await Promise.all(
         candidates.map(async (candidate) => {
-          const url = candidate.signedUrl ?? (await createSignedUrl(storageBuckets.coupleMedia, candidate.storage_path));
+          const url =
+            candidate.signedUrl ??
+            (session?.access_token
+              ? await createSelfHostMediaReadUrl({ accessToken: session.access_token, mediaId: candidate.id, variant: "original" }).catch((error) => {
+                  console.warn("Self-host media original prefetch failed:", error);
+                  return null;
+                })
+              : null);
           return [candidate.id, url] as const;
         })
       );
@@ -213,7 +223,7 @@ export function PhotoPreviewPopup({
     return () => {
       active = false;
     };
-  }, [currentIndex, files, originalUrlById]);
+  }, [currentIndex, files, originalUrlById, session?.access_token]);
 
   if (!file) {
     return null;

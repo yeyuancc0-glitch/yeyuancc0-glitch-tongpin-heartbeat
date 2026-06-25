@@ -4,16 +4,9 @@ import { Platform } from "react-native";
 import { movePetForMemoryEvent } from "@/features/home/homePetWorldHelpers";
 import type { PhotoFileList, PhotoPreviewState, PhotoUploadOptions, PhotoUploadResult } from "@/features/home/homeShared";
 import { mediaCaptionLabel } from "@/features/media/mediaUtils";
-import { supabase } from "@/lib/supabase/client";
+import { createImageThumbnail, imageTransforms, isSupportedImage } from "@/lib/media/imageStorage";
+import { deleteSelfHostMedia, uploadSelfHostMedia } from "@/lib/selfHost/mediaApi";
 import type { MediaFile } from "@/lib/supabase/database.types";
-import {
-  buildStoragePath,
-  buildThumbnailStoragePath,
-  createImageThumbnail,
-  isSupportedImage,
-  storageBuckets,
-  uploadImage,
-} from "@/lib/supabase/storage";
 
 const defaultMaxFiles = 99;
 
@@ -31,6 +24,7 @@ type ToastValue = {
 
 export function useHomePhotoActions({
   userId,
+  accessToken,
   coupleId,
   mediaFiles,
   showToast,
@@ -38,6 +32,7 @@ export function useHomePhotoActions({
   setActivePhotoPreview,
 }: {
   userId?: string;
+  accessToken?: string | null;
   coupleId: string;
   mediaFiles: MediaFile[];
   showToast: (toast: ToastValue) => void;
@@ -73,54 +68,27 @@ export function useHomePhotoActions({
         continue;
       }
 
-      const path = buildStoragePath([coupleId, userId], file.type);
-      const { error: uploadError } = await uploadImage(storageBuckets.coupleMedia, path, file);
-      if (uploadError) {
-        showToast({ title: "上传失败", message: uploadError.message, tone: "error" });
+      if (!accessToken) {
+        showToast({ title: "登录已过期", message: "请重新登录后再上传。", tone: "error" });
         failedFiles.push(file);
         continue;
       }
-
-      const thumbnailFile = await createImageThumbnail(file, 480, 0.72);
-      let thumbnailPath = thumbnailFile ? buildThumbnailStoragePath(path) : null;
-      if (thumbnailFile && thumbnailPath) {
-        const { error: thumbnailUploadError } = await uploadImage(storageBuckets.coupleMedia, thumbnailPath, thumbnailFile);
-        if (thumbnailUploadError) {
-          console.warn("Photo thumbnail upload failed:", thumbnailUploadError.message);
-          thumbnailPath = null;
-        }
-      }
-
-      const insertPayload = {
-        couple_id: coupleId,
-        uploader_id: userId,
-        storage_path: path,
-        thumbnail_storage_path: thumbnailPath,
-        mime_type: file.type,
-        size_bytes: file.size,
-        caption: options.caption || file.name.replace(/\.[^.]+$/, ""),
-      };
-      let { error: insertError } = await supabase.from("media_files").insert(insertPayload);
-      if (insertError && thumbnailPath && /thumbnail_storage_path|schema cache|column/i.test(insertError.message)) {
-        const fallbackPayload = { ...insertPayload };
-        delete (fallbackPayload as Partial<typeof insertPayload>).thumbnail_storage_path;
-        const fallbackResult = await supabase.from("media_files").insert(fallbackPayload);
-        insertError = fallbackResult.error;
-        if (!insertError) {
-          thumbnailPath = null;
-        }
-      }
-
-      if (insertError) {
-        const pathsToRemove = [path, thumbnailPath].filter((mediaStoragePath): mediaStoragePath is string => Boolean(mediaStoragePath));
-        await supabase.storage.from(storageBuckets.coupleMedia).remove(pathsToRemove);
-        showToast({ title: "相册保存失败", message: insertError.message, tone: "error" });
+      try {
+        const thumbOptions = imageTransforms.albumThumb;
+        const thumbnailFile = await createImageThumbnail(file, thumbOptions.width, thumbOptions.quality);
+        await uploadSelfHostMedia({
+          accessToken,
+          coupleId,
+          file,
+          thumbnailFile,
+          caption: options.caption || file.name.replace(/\.[^.]+$/, ""),
+        });
+        uploadedCount += 1;
+        uploadedFiles.push(file);
+      } catch (error) {
+        showToast({ title: "上传失败", message: error instanceof Error ? error.message : "请稍后重试。", tone: "error" });
         failedFiles.push(file);
-        continue;
       }
-
-      uploadedCount += 1;
-      uploadedFiles.push(file);
     }
 
     if (uploadedCount > 0) {
@@ -136,7 +104,7 @@ export function useHomePhotoActions({
     }
 
     return { uploadedCount, uploadedFiles, failedFiles };
-  }, [coupleId, mediaFiles.length, reload, showToast, userId]);
+  }, [accessToken, coupleId, mediaFiles.length, reload, showToast, userId]);
 
   const uploadPhoto = useCallback(async (options: PhotoUploadOptions = {}): Promise<PhotoUploadResult> => {
     if (!userId) {
@@ -167,20 +135,17 @@ export function useHomePhotoActions({
       return;
     }
 
-    const { error } = await supabase.from("media_files").update({ deleted_at: new Date().toISOString() }).eq("id", file.id);
-    if (error) {
-      showToast({ title: "删除失败", message: error.message, tone: "error" });
+    if (!accessToken) {
+      showToast({ title: "登录已过期", message: "请重新登录后再删除。", tone: "error" });
       return;
     }
-
-    const pathsToRemove = [file.storage_path, file.thumbnail_storage_path].filter((path): path is string => Boolean(path));
-    const { error: storageError } = await supabase.storage.from(storageBuckets.coupleMedia).remove(pathsToRemove);
-    if (storageError) {
-      showToast({ title: "照片已移除", message: "数据库记录已删，但云端文件清理未完全成功。", tone: "info" });
-    } else {
+    try {
+      await deleteSelfHostMedia({ accessToken, mediaId: file.id });
       showToast({ title: "照片已删除", tone: "success" });
+    } catch (error) {
+      showToast({ title: "删除失败", message: error instanceof Error ? error.message : "请稍后重试。", tone: "error" });
+      return;
     }
-
     setActivePhotoPreview((current) => {
       if (!current || current.id !== file.id) {
         return current;
@@ -189,7 +154,7 @@ export function useHomePhotoActions({
       return remaining[0] ? { id: remaining[0].id, index: 0 } : null;
     });
     reload();
-  }, [mediaFiles, reload, setActivePhotoPreview, showToast]);
+  }, [accessToken, mediaFiles, reload, setActivePhotoPreview, showToast]);
 
   return { handlePhotoFiles, uploadPhoto, deletePhoto };
 }

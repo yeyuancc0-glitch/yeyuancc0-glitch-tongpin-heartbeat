@@ -5,7 +5,7 @@ import { StyleSheet, Text, View } from "react-native";
 import { Body, Button, EmptyState, Field, H2, Panel, useToast } from "@/components/ui";
 import { useAuth } from "@/features/auth/AuthProvider";
 import { todayIsoDate } from "@/lib/dates/date";
-import { supabase } from "@/lib/supabase/client";
+import { upsertSelfHostCheckin } from "@/lib/selfHost/checkinApi";
 import type { Checkin } from "@/lib/supabase/database.types";
 import { colors } from "@/styles/theme";
 
@@ -18,7 +18,7 @@ export function CheckinCard({
   checkins: Checkin[];
   onChanged: () => void;
 }) {
-  const { user } = useAuth();
+  const { session, user } = useAuth();
   const { showToast } = useToast();
   const [content, setContent] = useState("");
   const [busy, setBusy] = useState(false);
@@ -32,28 +32,19 @@ export function CheckinCard({
 
     setBusy(true);
     try {
-      const insertPayload = {
-        couple_id: coupleId,
-        user_id: user.id,
-        checkin_date: today,
-        content: content.trim() || null,
-        updated_at: new Date().toISOString(),
-      };
-      const result = mineToday
-        ? await supabase
-            .from("checkins")
-            .update({
-              checkin_date: today,
-              content: content.trim() || null,
-              updated_at: new Date().toISOString(),
-            })
-            .eq("id", mineToday.id)
-        : await supabase.from("checkins").insert(insertPayload);
+      const trimmedContent = content.trim() || null;
 
-      if (result.error) {
-        showToast({ title: "分享失败", message: result.error.message, tone: "error" });
+      if (!session?.access_token) {
+        showToast({ title: "分享失败", message: "登录状态已过期，请重新登录后再试。", tone: "error" });
         return;
       }
+      await upsertSelfHostCheckin({
+        accessToken: session.access_token,
+        coupleId,
+        checkinDate: today,
+        content: trimmedContent,
+      });
+
       setContent("");
       showToast({
         title: mineToday ? "今日分享已更新" : "今日已分享",

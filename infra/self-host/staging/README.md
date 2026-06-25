@@ -8,20 +8,24 @@ It does not contain real secrets. Copy `.env.example` to `.env` on the server an
 
 Milestone A only:
 
+- Caddy static hosting for the Expo Web frontend on `tongpin.fancah.tech`
 - Caddy reverse proxy
-- placeholder API with `/health`
-- placeholder worker process
+- self-host API runtime from `apps/server` with health checks, Auth, core business APIs, profile avatar Storage, push preferences, and request ids
+- self-host low-sensitive notification SSE at `/api/notifications/stream`
+- push worker process from `apps/server/src/pushWorker.mjs`
 - PostgreSQL
 - Redis
 - MinIO
-- backup and healthcheck scripts
+- backup and healthcheck scripts, including Postgres dump and MinIO data archive backups
+- staging monitor script for API deep health, containers, disk usage, backups, and public routes
+- Supabase-to-self-host data migration orchestration with dry-run/apply, Storage copy, final verify, and post-migration smoke gates
 - Docker mirror setup and rollback scripts
 
 Not included:
 
-- production cutover
+- self-hosted backend production cutover
 - Supabase shutdown
-- real user data migration
+- real user data migration execution before Supabase source DB and Storage S3 credentials are provided
 - Keycloak
 - public PostgreSQL, Redis, or MinIO Console exposure
 - enabled Cloudflare Tunnel; the Compose service exists behind the optional `tunnel` profile only
@@ -43,11 +47,12 @@ Current state:
 - This staging directory has been uploaded to `/opt/tongpin`; server-side `docker compose --env-file .env -f compose.yml config` passes.
 - Tencent Cloud Docker registry mirror is configured: `https://mirror.ccs.tencentyun.com`.
 - The staging stack is running on `/opt/tongpin`; API `/health`, PostgreSQL, and Redis local checks pass.
+- The worker container runs the self-host Push worker. It claims `push_deliveries`, attempts Expo/Web Push delivery, disables invalid tokens, and writes delivery results. Web Push delivery requires real `WEB_PUSH_VAPID_PUBLIC_KEY` / `WEB_PUSH_VAPID_PRIVATE_KEY` values in server `.env`.
+- Caddy handles `/api/notifications/stream` separately with no response compression and `flush_interval -1` so SSE events are flushed promptly; other API routes still use zstd/gzip.
 - Public `80/tcp` reaches Caddy for direct IP requests and returns Caddy's HTTPS redirect.
-- Cloudflare DNS points `api-staging.fanch.tech` and `assets-staging.fanch.tech` to `81.71.9.118`.
+- DNSPod is authoritative for `fancah.tech`; `tongpin.fancah.tech`, `api-staging.fancah.tech`, and `assets-staging.fancah.tech` must point to `81.71.9.118`.
 - Tencent Cloud firewall allows `22/tcp`, `80/tcp`, `443/tcp`, and ICMP.
-- Caddy has obtained a Let's Encrypt certificate for `api-staging.fanch.tech`; server-local HTTPS for `/health` returns HTTP/2 `200` and `status: ok`.
-- Tencent Cloud's public ingress currently blocks the unfiled staging domain: HTTP returns DNSPod webblock and HTTPS SNI closes with TLS EOF. Resolve this with ICP filing or a tunnel/overseas ingress before relying on public domain checks.
+- `fancah.tech` ICP filing is complete; public HTTPS should be verified directly after DNS points to the Tencent Cloud server.
 - Host `ufw` is inactive.
 - Backup/snapshot policy still needs confirmation.
 
@@ -109,12 +114,13 @@ bash scripts/healthcheck.sh
 
 Public HTTPS uses these DNS records:
 
-- `api-staging.fanch.tech` -> `81.71.9.118`
-- `assets-staging.fanch.tech` -> `81.71.9.118`
+- `tongpin.fancah.tech` -> `81.71.9.118`
+- `api-staging.fancah.tech` -> `81.71.9.118`
+- `assets-staging.fancah.tech` -> `81.71.9.118`
 
 Tencent Cloud Lighthouse firewall includes `443/tcp`.
 
-If Tencent Cloud blocks the unfiled staging domain, use the optional Cloudflare Tunnel profile after creating a tunnel token in Cloudflare Zero Trust:
+If direct public HTTPS unexpectedly fails while server-local checks pass, use the optional Cloudflare Tunnel profile after creating a tunnel token in Cloudflare Zero Trust:
 
 ```bash
 cd /opt/tongpin
@@ -122,7 +128,7 @@ cd /opt/tongpin
 sudo docker compose --env-file .env -f compose.yml --profile tunnel up -d cloudflared
 ```
 
-Configure public hostnames in Cloudflare Tunnel to point at the internal Docker services, for example `api-staging.fanch.tech -> http://api:3000` and `assets-staging.fanch.tech -> http://minio:9000`.
+Configure public hostnames in Cloudflare Tunnel to point at the internal Docker services, for example `api-staging.fancah.tech -> http://api:3000` and `assets-staging.fancah.tech -> http://minio:9000`.
 
 ## Verification
 
@@ -133,17 +139,29 @@ sudo docker compose --env-file .env -f compose.yml ps
 curl -fsS http://127.0.0.1:3000/health
 bash scripts/healthcheck.sh
 bash scripts/backup-postgres.sh
+bash scripts/backup-minio-archive.sh
 bash scripts/backup-minio-list.sh
+bash scripts/backup-all.sh
+bash scripts/verify-backups-restore.sh
+bash scripts/monitor-staging.sh
+sudo bash scripts/install-monitor-cron.sh
+sudo bash scripts/install-backup-cron.sh
+sudo bash scripts/install-restore-verify-cron.sh
+API_BASE_URL=https://api-staging.fancah.tech npm run smoke:notifications -w @tongpin/server
 ```
 
 Public checks:
 
 ```bash
 curl --noproxy '*' -i http://81.71.9.118/health
-curl -I https://assets-staging.fanch.tech
+curl -I https://tongpin.fancah.tech
+curl -fsS https://api-staging.fancah.tech/health
+curl -I https://assets-staging.fancah.tech
 ```
 
-Expected server-local result for `/health` is a JSON object whose `status` is `ok`. Public staging domain requests can be blocked by Tencent Cloud until ICP filing or a tunnel/overseas ingress is in place.
+Expected server-local result for `/health` is a JSON object whose `status` is `ok`.
+
+The API service in this template mounts `./runtime/api` so `/opt/tongpin` can remain self-contained. Keep `infra/self-host/staging/runtime/api` in sync with `apps/server/src` until the API is packaged as a real Docker image.
 
 ## Rollback
 

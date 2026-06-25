@@ -16,10 +16,10 @@
 - Storage bucket `profile-avatars` 和 `couple-media` 必须为 private。
 - 数据库只保存 Storage path，不保存 signed URL。
 - 信件底层可继续使用 `future_letters`，产品和前端文案统一叫“信件”。
-- 锁定信件只能通过 `list_letters()` 返回安全预览，正文为 `null`。
+- 锁定信件只能通过自建 letters API 返回安全预览，正文为 `null`。
 - 头像只允许本人上传/替换/移除；本人和当前 active partner 可查看。
 - 相册第一版只支持图片，不支持视频。
-- 注销账号在 V0.1B 只记录申请并标记 profile，不物理删除 Supabase Auth 用户。
+- 注销账号在当前 self-host 路线中记录申请、标记 profile、撤销 refresh session，并禁用推送 token；旧 Supabase Auth 用户只作为迁移来源/回滚参照保留观察。
 
 ## 验证命令
 
@@ -34,6 +34,8 @@ npm run build:web
 npm run check:env
 npm run db:apply
 ```
+
+`npm run db:apply` 当前连接自建服务器执行 `/opt/tongpin/scripts/apply-db-migrations.sh`，不再应用 Supabase migration。
 
 权限验收参考：
 

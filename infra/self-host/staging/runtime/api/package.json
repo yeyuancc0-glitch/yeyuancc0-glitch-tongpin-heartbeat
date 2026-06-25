@@ -1,0 +1,41 @@
+{
+  "name": "@tongpin/server",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "main": "src/server.mjs",
+  "scripts": {
+    "start": "node src/server.mjs",
+    "check": "node --check src/config.mjs && node --check src/db.mjs && node --check src/emailService.mjs && node --check src/tokens.mjs && node --check src/authService.mjs && node --check src/relationshipService.mjs && node --check src/profileService.mjs && node --check src/privacyService.mjs && node --check src/storageService.mjs && node --check src/messageService.mjs && node --check src/interactionService.mjs && node --check src/checkinService.mjs && node --check src/calendarService.mjs && node --check src/footprintService.mjs && node --check src/creationService.mjs && node --check src/letterService.mjs && node --check src/notificationService.mjs && node --check src/dashboardService.mjs && node --check src/http.mjs && node --check src/server.mjs && node --check src/pushWorker.mjs && node --check scripts/check-email-service.mjs && node scripts/check-email-service.mjs && node --check scripts/check-token-keyring.mjs && node scripts/check-token-keyring.mjs && node --check scripts/check-supabase-migration-readiness.mjs && node --check scripts/migrate-supabase-data.mjs && node --check scripts/smoke-auth.mjs && node --check scripts/smoke-profile.mjs && node --check scripts/smoke-storage.mjs && node --check scripts/smoke-messages.mjs && node --check scripts/smoke-interactions.mjs && node --check scripts/smoke-dashboard.mjs && node --check scripts/smoke-checkins.mjs && node --check scripts/smoke-calendar-events.mjs && node --check scripts/smoke-footprints.mjs && node --check scripts/smoke-creation.mjs && node --check scripts/smoke-letters.mjs && node --check scripts/smoke-notifications.mjs && node --check scripts/smoke-push-notifications.mjs && node --check scripts/smoke-privacy.mjs",
+    "smoke:auth": "node scripts/smoke-auth.mjs",
+    "smoke:profile": "node scripts/smoke-profile.mjs",
+    "smoke:storage": "node scripts/smoke-storage.mjs",
+    "smoke:messages": "node scripts/smoke-messages.mjs",
+    "smoke:interactions": "node scripts/smoke-interactions.mjs",
+    "smoke:dashboard": "node scripts/smoke-dashboard.mjs",
+    "smoke:checkins": "node scripts/smoke-checkins.mjs",
+    "smoke:calendar-events": "node scripts/smoke-calendar-events.mjs",
+    "smoke:footprints": "node scripts/smoke-footprints.mjs",
+    "smoke:creation": "node scripts/smoke-creation.mjs",
+    "smoke:letters": "node scripts/smoke-letters.mjs",
+    "smoke:notifications": "node scripts/smoke-notifications.mjs",
+    "smoke:push-notifications": "node scripts/smoke-push-notifications.mjs",
+    "smoke:privacy": "node scripts/smoke-privacy.mjs",
+    "migrate:supabase:preflight": "node scripts/check-supabase-migration-readiness.mjs",
+    "migrate:supabase:data": "node scripts/migrate-supabase-data.mjs",
+    "migrate:supabase:data:apply": "node scripts/migrate-supabase-data.mjs --apply --include-storage",
+    "migrate:supabase:data:copy-storage": "node scripts/migrate-supabase-data.mjs --verify-only --include-storage --copy-storage",
+    "migrate:supabase:data:verify": "node scripts/migrate-supabase-data.mjs --verify-only --include-storage --verify-storage",
+    "worker:push": "node src/pushWorker.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.1075.0",
+    "@aws-sdk/s3-request-presigner": "^3.1075.0",
+    "argon2": "^0.44.0",
+    "pg": "^8.22.0",
+    "web-push": "^3.6.7"
+  }
+}

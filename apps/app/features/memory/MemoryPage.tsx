@@ -12,10 +12,8 @@ import type { PhotoFileList, PhotoUploadResult } from "@/features/home/homeShare
 import { formatMemoryDate, maxMemoryPhotos, type MemoryFilter, type MemoryTimelineItem } from "@/features/memory/memoryUtils";
 import { PhotoUploadInput } from "@/features/media/PhotoUploadInput";
 import { imagePreviewUrl, isCheckinPhotoCaption } from "@/features/media/mediaUtils";
-import { supabase } from "@/lib/supabase/client";
 import { renderPortal } from "@/lib/platform/portal";
 import type { CalendarEvent, Checkin, CoupleFootprint, CreationSpace, LetterPreview, MediaFile, Message } from "@/lib/supabase/database.types";
-import { storageBuckets } from "@/lib/supabase/storage";
 import { BouncyPressable } from "@/motion/BouncyPressable";
 import { BreathingSkeleton } from "@/motion/BreathingSkeleton";
 import { CrossFadeImage } from "@/motion/CrossFadeImage";
@@ -44,6 +42,11 @@ export function MemoryPage({
   onUploadMemoryPhoto,
   onPreviewMemoryPhoto,
   onCreateCapsule,
+  onDeleteCheckin,
+  onDeleteCalendarEvent,
+  onDeleteMedia,
+  onDeleteFootprint,
+  onDeleteLetter,
 }: {
   checkins: Checkin[];
   messages: Message[];
@@ -60,6 +63,11 @@ export function MemoryPage({
   onUploadMemoryPhoto: (request: MemoryPhotoUploadRequest) => Promise<PhotoUploadResult> | void;
   onPreviewMemoryPhoto: (file: MediaFile, index: number) => void;
   onCreateCapsule: () => void;
+  onDeleteCheckin?: (checkinId: string) => Promise<void>;
+  onDeleteCalendarEvent?: (eventId: string) => Promise<void>;
+  onDeleteMedia?: (file: MediaFile) => Promise<void>;
+  onDeleteFootprint?: (footprintId: string) => Promise<void>;
+  onDeleteLetter?: (letterId: string) => Promise<void>;
 }) {
   const memories = buildMemoryTimeline(checkins, messages, events, mediaFiles, letters, footprints, currentUserId);
   const [filter, setFilter] = useState<MemoryFilter>("全部");
@@ -115,6 +123,11 @@ export function MemoryPage({
               onUploadPhoto={(files) => onUploadMemoryPhoto({ files, memory, currentCount: memory.photos.length })}
               onPreviewPhoto={(file, photoIndex) => onPreviewMemoryPhoto(file, photoIndex)}
               onDeleted={onChanged}
+              onDeleteCheckin={onDeleteCheckin}
+              onDeleteCalendarEvent={onDeleteCalendarEvent}
+              onDeleteMedia={onDeleteMedia}
+              onDeleteFootprint={onDeleteFootprint}
+              onDeleteLetter={onDeleteLetter}
             />
           ))
         ) : (
@@ -170,6 +183,11 @@ function MemoryTimelineCard({
   onUploadPhoto,
   onPreviewPhoto,
   onDeleted,
+  onDeleteCheckin,
+  onDeleteCalendarEvent,
+  onDeleteMedia,
+  onDeleteFootprint,
+  onDeleteLetter,
 }: {
   memory: MemoryTimelineItem;
   index: number;
@@ -178,6 +196,11 @@ function MemoryTimelineCard({
   onUploadPhoto: (files?: FileList) => void;
   onPreviewPhoto: (file: MediaFile, index: number) => void;
   onDeleted: () => void;
+  onDeleteCheckin?: (checkinId: string) => Promise<void>;
+  onDeleteCalendarEvent?: (eventId: string) => Promise<void>;
+  onDeleteMedia?: (file: MediaFile) => Promise<void>;
+  onDeleteFootprint?: (footprintId: string) => Promise<void>;
+  onDeleteLetter?: (letterId: string) => Promise<void>;
 }) {
   const scrollY = useAppScrollY();
   const { showToast } = useToast();
@@ -192,24 +215,36 @@ function MemoryTimelineCard({
     }
     let errorMessage: string | undefined;
     if (action.table === "checkins") {
-      const { error } = await supabase.from("checkins").update({ deleted_at: new Date().toISOString() }).eq("id", action.id);
-      errorMessage = error?.message;
-    } else if (action.table === "calendar_events") {
-      const { error } = await supabase.from("calendar_events").update({ deleted_at: new Date().toISOString() }).eq("id", action.id);
-      errorMessage = error?.message;
-    } else if (action.table === "media_files") {
-      const { error } = await supabase.from("media_files").update({ deleted_at: new Date().toISOString() }).eq("id", action.id);
-      if (!error && action.storagePath) {
-        const pathsToRemove = [action.storagePath, memory.photos.find((photo) => photo.id === action.id)?.thumbnail_storage_path].filter((path): path is string => Boolean(path));
-        await supabase.storage.from(storageBuckets.coupleMedia).remove(pathsToRemove);
+      if (onDeleteCheckin) {
+        await onDeleteCheckin(action.id);
+      } else {
+        errorMessage = "今日胶囊删除需要自建后端接口。";
       }
-      errorMessage = error?.message;
+    } else if (action.table === "calendar_events") {
+      if (onDeleteCalendarEvent) {
+        await onDeleteCalendarEvent(action.id);
+      } else {
+        errorMessage = "日历事件删除需要自建后端接口。";
+      }
+    } else if (action.table === "media_files") {
+      const photo = memory.photos.find((item) => item.id === action.id);
+      if (onDeleteMedia && photo) {
+        await onDeleteMedia(photo);
+      } else {
+        errorMessage = "照片删除需要自建后端接口。";
+      }
     } else if (action.table === "couple_footprints") {
-      const { error } = await supabase.from("couple_footprints").update({ deleted_at: new Date().toISOString() }).eq("id", action.id);
-      errorMessage = error?.message;
+      if (onDeleteFootprint) {
+        await onDeleteFootprint(action.id);
+      } else {
+        errorMessage = "足迹删除需要自建后端接口。";
+      }
     } else {
-      const { error } = await supabase.rpc("delete_letter", { letter_id: action.id });
-      errorMessage = error?.message;
+      if (onDeleteLetter) {
+        await onDeleteLetter(action.id);
+      } else {
+        errorMessage = "信件删除需要自建后端接口。";
+      }
     }
     if (errorMessage) {
       showToast({ title: "删除失败", message: errorMessage, tone: "error" });
@@ -451,7 +486,7 @@ function buildMemoryTimeline(
     photos: photosForTitle(event.title),
     deleteAction: { table: "calendar_events", id: event.id },
   }));
-  const checkinMemories: MemoryTimelineItem[] = checkins.slice(0, 4).map((checkin) => {
+  const checkinMemories: MemoryTimelineItem[] = checkins.map((checkin) => {
     const story = splitStory(checkin.content);
     const title = story.body.length > 18 ? `${story.body.slice(0, 18)}...` : story.body;
     return {
@@ -536,8 +571,7 @@ function buildMemoryTimeline(
       photos: [file],
       deleteAction: file.uploader_id === currentUserId ? { table: "media_files", id: file.id, storagePath: file.storage_path } : undefined,
     }));
-  const merged = [...eventMemories, ...checkinMemories, ...messageMemories, ...letterMemories, ...footprintMemories, ...albumMemories].sort((a, b) => b.sortDate.localeCompare(a.sortDate));
-  return merged.slice(0, 6);
+  return [...eventMemories, ...checkinMemories, ...messageMemories, ...letterMemories, ...footprintMemories, ...albumMemories].sort((a, b) => b.sortDate.localeCompare(a.sortDate));
 }
 
 function memoryFilterForEvent(type: CalendarEvent["type"]): MemoryFilter {

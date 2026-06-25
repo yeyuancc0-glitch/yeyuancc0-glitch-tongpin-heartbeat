@@ -6,7 +6,7 @@
 
 - Expo + React Native + TypeScript
 - Expo Router
-- Supabase Auth / Postgres / RLS / RPC
+- 自建 API / Postgres / MinIO / Redis / Push worker
 - Expo Web 静态导出，不引入 Next.js
 
 ## 本地启动
@@ -20,8 +20,8 @@ npm run web
 `.env` 需要填入：
 
 ```bash
-EXPO_PUBLIC_SUPABASE_URL=
-EXPO_PUBLIC_SUPABASE_ANON_KEY=
+EXPO_PUBLIC_SELF_HOST_API_URL=https://api-staging.fancah.tech
+EXPO_PUBLIC_WEB_PUSH_VAPID_PUBLIC_KEY=
 ```
 
 检查环境变量：
@@ -30,17 +30,14 @@ EXPO_PUBLIC_SUPABASE_ANON_KEY=
 npm run check:env
 ```
 
-## 数据库初始化
-
-在 Supabase SQL Editor 或 migration 流程中按文件名顺序执行 `packages/db/migrations/*.sql`。如果本机有 Supabase CLI 且已 link 项目，可以执行：
+## 自建数据库初始化
 
 ```bash
-npm run db:apply
+ssh -i ~/Desktop/codex.pem -o IdentitiesOnly=yes ubuntu@81.71.9.118
+cd /opt/tongpin && sh scripts/apply-db-migrations.sh
 ```
 
-该脚本会按文件名顺序用 `supabase db query --linked --file <migration.sql>` 执行；没有 Supabase CLI 时会回退到 `psql` + `SUPABASE_DB_URL`。
-
-这些 migration 会创建或补齐核心业务表、权限、RPC、Storage policy、推送队列和云宠状态：
+这些 self-host migration 会创建或补齐核心业务表、权限、约束、MinIO 元数据、推送队列和云宠状态：
 
 - `profiles`
 - `pair_invites`
@@ -55,7 +52,7 @@ npm run db:apply
 - `reports`
 - `blocks`
 - `account_deletion_requests`
-- private Storage bucket：`profile-avatars`、`couple-media`
+- MinIO bucket：`profile-avatars`、`couple-media`
 - 推送表：`push_tokens`、`notification_preferences`、`push_deliveries`
 - 共创/云宠表：`creation_spaces`、`creation_actions`、`pet_memories`、`pet_world_events`
 
@@ -72,6 +69,30 @@ npm run db:apply
 - `block_partner_and_end_couple(reason text)`
 - `request_account_deletion(reason text)`
 
+## 旧数据迁移
+
+旧 Supabase 用户数据不能丢。生产切流前必须执行 self-host 数据迁移 preflight、dry-run、导入、Storage 复制和 verify；Storage 对象会按原 bucket/path 从 Supabase Storage 复制到 MinIO：
+
+```bash
+cd /opt/tongpin && bash scripts/run-supabase-migration.sh
+cd /opt/tongpin && bash scripts/run-supabase-migration.sh --apply
+```
+
+`--apply` 会按 preflight、dry-run、self-host 备份、DB 导入、Storage 复制、final verify、API 冒烟的顺序执行；任一步失败都不能切流。只有在同一 API 构建刚跑过等价冒烟时，才允许加 `--skip-smoke`，但仍必须保留最近通过的冒烟日志作为切流证据。
+
+本地拆开执行时：
+
+```bash
+SUPABASE_DB_URL="postgresql://..." SELF_HOST_DB_URL="postgresql://..." npm run migrate:supabase:preflight -w @tongpin/server
+SUPABASE_DB_URL="postgresql://..." SELF_HOST_DB_URL="postgresql://..." npm run migrate:supabase:data -w @tongpin/server
+SUPABASE_DB_URL="postgresql://..." SELF_HOST_DB_URL="postgresql://..." npm run migrate:supabase:data:apply -w @tongpin/server
+SUPABASE_DB_URL="postgresql://..." SELF_HOST_DB_URL="postgresql://..." npm run migrate:supabase:data:copy-storage -w @tongpin/server
+SUPABASE_DB_URL="postgresql://..." SELF_HOST_DB_URL="postgresql://..." npm run migrate:supabase:data:verify -w @tongpin/server
+```
+
+Storage 复制还需要 Supabase Storage S3 access key、secret、region 和 endpoint，例如
+`SUPABASE_STORAGE_S3_ENDPOINT=https://<project-ref>.storage.supabase.co/storage/v1/s3`。这些值只放本机 shell 或服务器 `.env`，不要提交。
+
 ## 验证
 
 ```bash
@@ -85,7 +106,8 @@ npm run build:web
 npm run verify
 ```
 
-注意：`npm run verify` 会先执行 `check:env`。如果还没有 Supabase 项目和 `.env`，该步骤会失败，这是预期的联调阻断。
+注意：`npm run verify` 会先执行 `check:env`。当前 Web 运行时只要求 `EXPO_PUBLIC_SELF_HOST_API_URL`，可用 shell 环境变量覆盖本地 `.env`。
+`apps/app/.env` 和部署环境中不能再保留 `EXPO_PUBLIC_SUPABASE_URL` 或 `EXPO_PUBLIC_SUPABASE_ANON_KEY`；`npm run check:env` 会把这些 public Supabase 变量当作错误。
 
 RLS 验收清单：
 

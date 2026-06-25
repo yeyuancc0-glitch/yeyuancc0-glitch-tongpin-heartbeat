@@ -2,9 +2,25 @@
 	email {$ACME_EMAIL}
 }
 
-{$API_DOMAIN} {
+{$APP_DOMAIN} {
 	encode zstd gzip
-	reverse_proxy api:{$API_PORT}
+	root * /srv/tongpin-web/current
+	try_files {path} /index.html
+	file_server
+}
+
+{$API_DOMAIN} {
+	@notification_stream path /api/notifications/stream
+	handle @notification_stream {
+		reverse_proxy api:{$API_PORT} {
+			flush_interval -1
+		}
+	}
+
+	handle {
+		encode zstd gzip
+		reverse_proxy api:{$API_PORT}
+	}
 }
 
 {$ASSETS_DOMAIN} {

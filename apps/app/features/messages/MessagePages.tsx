@@ -32,7 +32,7 @@ export function MessagesPage({
   onChanged: () => void;
   onBack: () => void;
 }) {
-  const { user } = useAuth();
+  const { session, user } = useAuth();
   const { showToast } = useToast();
   const [body, setBody] = useState("");
   const [busy, setBusy] = useState(false);
@@ -44,7 +44,7 @@ export function MessagesPage({
     }
     const trimmedBody = body.trim();
     setBusy(true);
-    const result = await sendCoupleMessageWithNotification({ coupleId, senderId: user.id, body: trimmedBody }).catch((error: unknown) => ({
+    const result = await sendCoupleMessageWithNotification({ accessToken: session?.access_token, coupleId, senderId: user.id, body: trimmedBody }).catch((error: unknown) => ({
       messageError: error instanceof Error ? error : new Error("留言发送失败"),
       notificationError: null,
       notificationSkipped: true,
@@ -66,7 +66,7 @@ export function MessagesPage({
 
   async function remove(message: Message) {
     setDeletingId(message.id);
-    const { error } = await deleteCoupleMessage(message.id).catch((caughtError: unknown) => ({
+    const { error } = await deleteCoupleMessage(message.id, session?.access_token).catch((caughtError: unknown) => ({
       error: caughtError instanceof Error ? caughtError : new Error("留言删除失败"),
     })).finally(() => {
       setDeletingId(null);
@@ -123,6 +123,7 @@ export function HomeMessageBoard({
   onChanged: () => void;
 }) {
   const { showToast } = useToast();
+  const { session } = useAuth();
   const [body, setBody] = useState("");
   const [busy, setBusy] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
@@ -133,7 +134,7 @@ export function HomeMessageBoard({
     }
     const trimmedBody = body.trim();
     setBusy(true);
-    const result = await sendCoupleMessageWithNotification({ coupleId, senderId: currentUserId, body: trimmedBody }).catch((error: unknown) => ({
+    const result = await sendCoupleMessageWithNotification({ accessToken: session?.access_token, coupleId, senderId: currentUserId, body: trimmedBody }).catch((error: unknown) => ({
       messageError: error instanceof Error ? error : new Error("留言发送失败"),
       notificationError: null,
       notificationSkipped: true,
@@ -155,7 +156,7 @@ export function HomeMessageBoard({
 
   async function remove(message: Message) {
     setDeletingId(message.id);
-    const { error } = await deleteCoupleMessage(message.id).catch((caughtError: unknown) => ({
+    const { error } = await deleteCoupleMessage(message.id, session?.access_token).catch((caughtError: unknown) => ({
       error: caughtError instanceof Error ? caughtError : new Error("留言删除失败"),
     })).finally(() => {
       setDeletingId(null);

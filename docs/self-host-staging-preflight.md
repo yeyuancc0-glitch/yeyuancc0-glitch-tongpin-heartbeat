@@ -18,36 +18,34 @@
   - Redis 返回 `PONG`
 - 公网 `80/tcp` 已到 Caddy；直接访问 IP 时会返回 Caddy 的 HTTPS `308` 重定向
 - 腾讯云轻量防火墙已添加 `HTTPS (443)` 规则：来源全部 IPv4、TCP、端口 `443`、允许
-- Cloudflare DNS 已添加 staging A 记录：`api-staging.fanch.tech` 和 `assets-staging.fanch.tech` 均指向 `81.71.9.118`
-- Caddy 已为 `api-staging.fanch.tech` 获取 Let's Encrypt 证书；服务器内部强制解析到 `127.0.0.1` 时，`https://api-staging.fanch.tech/health` 返回 HTTP/2 `200` 和 `status: ok`
-- 腾讯云公网入口当前会拦截未备案 staging 域名：HTTP 返回 `dnspod.qcloud.com/static/webblock.html?d=api-staging.fanch.tech`，HTTPS SNI 表现为 TLS EOF；这需要 ICP 备案或改用 Cloudflare Tunnel / 境外入口解决
+- DNSPod 已添加 A 记录：`tongpin.fancah.tech`、`api-staging.fancah.tech` 和 `assets-staging.fancah.tech` 均指向 `81.71.9.118`
+- `fancah.tech` 已完成 ICP 备案；Caddy 已为 `tongpin.fancah.tech`、`api-staging.fancah.tech` 和 `assets-staging.fancah.tech` 获取 Let's Encrypt 证书
+- 公网 HTTPS 已验证：`https://tongpin.fancah.tech` 返回前端 HTML，`https://api-staging.fancah.tech/health` 返回 HTTP/2 `200` 和 `status: ok`
 - 备份演练已通过：PostgreSQL 可生成 gzip dump，MinIO 可生成对象清单；staging 数据为空时 MinIO 清单很小属于正常现象
 - 临时 `codex-tongpin-staging` SSH 公钥标记已清理，上传临时包已清理
 - 本地准备了 Docker mirror 配置脚本和回滚脚本
 - 本地准备了运行手册：`infra/self-host/staging/RUNBOOK.md`
 
-## 当前不执行
+## 当前不执行 / 门禁
 
-- 不改 Vercel 生产环境变量
-- 不改 `EXPO_PUBLIC_SUPABASE_URL`
-- 不切换生产域名
-- 不迁移真实用户数据
-- 不关闭 Supabase
-- 不启动生产后端
+- 不关闭 Supabase；旧用户数据完成迁移、对账和观察期前，Supabase 必须保留为旧数据来源和回滚参照。
+- 不在缺少 Supabase 源库 URL 与 Storage S3 凭据时执行 `bash scripts/run-supabase-migration.sh --apply`。
+- 不跳过旧数据迁移 final verify 和迁移后 smoke；除非同一 API 构建刚跑过等价 smoke 并保留日志。
+- 不做会造成 self-host 与 Supabase 双写冲突的切流；同一个 couple 必须只有一个权威写入源。
 
 ## 下次执行前需要确认
 
-- 是否允许执行服务器重启自恢复验证
-- 是否走 ICP 备案后继续公网直连，或改用 Cloudflare Tunnel 作为 staging 入口
-- 是否允许开始实现真实自建 API，用 staging 后端逐步替换 Supabase Auth、RPC、Storage、Realtime、Edge Functions 和 Push worker
+- Supabase 源库连接串已经安全写入服务器 `.env` 或容器环境。
+- Supabase Storage S3 endpoint、region、access key 和 secret 已安全写入服务器 `.env` 或容器环境。
+- 切流窗口、备份窗口和回滚窗口已确认。
 
 ## 下次执行的最小安全顺序
 
-1. 确认生产仍走 Supabase 和 Vercel。
-2. 确认 `/opt/tongpin` staging 容器仍运行。
-3. 如需验证自恢复，再重启服务器并复查容器状态。
-4. 确认 staging 域名公网入口方案：ICP 备案直连或 Cloudflare Tunnel。
-5. 开始实现真实自建 API 和迁移适配层。
+1. 确认 `/opt/tongpin` staging 容器和公网 health 仍正常。
+2. 执行 `bash scripts/monitor-staging.sh`，确认 API、DB、Redis、MinIO、备份和公开路由全绿。
+3. 执行 `bash scripts/run-supabase-migration.sh`，只跑 preflight + dry-run。
+4. 审核迁移报告，无 error 后再执行 `bash scripts/run-supabase-migration.sh --apply`。
+5. 确认 final verify、Storage 校验和迁移后 smoke 通过，再进入白名单/couple 级切流。
 
 ## 回滚
 

@@ -6,7 +6,7 @@ import { AppTextInput, Card, PrimaryButton, TopBar } from "@/components/app-ui/A
 import { DateField, InlineNotice, useToast } from "@/components/ui";
 import { useAuth } from "@/features/auth/AuthProvider";
 import { styles } from "@/features/home/homeStyles";
-import { supabase } from "@/lib/supabase/client";
+import { createSelfHostCalendarEvent } from "@/lib/selfHost/calendarApi";
 import { colors } from "@/styles/theme";
 
 function BackButton({ onPress }: { onPress: () => void }) {
@@ -28,7 +28,7 @@ export function AddEventPage({
   onBack: () => void;
   onMovePetForMemoryEvent: (coupleId: string, kind: "photo" | "memory" | "anniversary" | "today_capsule") => Promise<void>;
 }) {
-  const { user } = useAuth();
+  const { session, user } = useAuth();
   const { showToast } = useToast();
   const [title, setTitle] = useState("");
   const [date, setDate] = useState("");
@@ -43,31 +43,19 @@ export function AddEventPage({
     }
     setBusy(true);
     try {
-      const { data: event, error } = await supabase.from("calendar_events").insert({
-        couple_id: coupleId,
-        created_by: user.id,
-        title: title.trim(),
-        event_date: date,
-        type: type === "birthday" ? "other" : type,
-        note: note.trim() || null,
-      }).select("id").maybeSingle();
-      if (error) {
-        showToast({ title: "保存失败", message: error.message, tone: "error" });
+      if (!session?.access_token) {
+        showToast({ title: "请先登录", tone: "error" });
         return;
       }
-      if (remind) {
-        const { error: notificationError } = await supabase.rpc("create_partner_notification", {
-          target_couple_id: coupleId,
-          notification_type: "calendar_event",
-          notification_title: "新的记忆事件已保存",
-          notification_body: type === "anniversary" ? "TA 保存了一个纪念日。" : "TA 保存了一条新的记忆。",
-          related_table: "calendar_events",
-          related_id: event?.id ?? null,
-        });
-        if (notificationError) {
-          console.warn("Calendar notification sync failed:", notificationError.message);
-        }
-      }
+      await createSelfHostCalendarEvent({
+        accessToken: session.access_token,
+        coupleId,
+        title: title.trim(),
+        eventDate: date,
+        type: type === "birthday" ? "other" : type,
+        note: note.trim() || null,
+        remind,
+      });
       void onMovePetForMemoryEvent(coupleId, type === "anniversary" ? "anniversary" : "memory").catch((moveError) => {
         console.warn("Pet memory event sync failed:", moveError instanceof Error ? moveError.message : moveError);
       });

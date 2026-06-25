@@ -10,7 +10,15 @@ import type { NotificationPreferenceToggleKey, SettingPage } from "@/features/ho
 import { ProfileScreen } from "@/features/profile/ProfileScreen";
 import { formatShortDate } from "@/lib/dates/date";
 import { getWebPushEnvironment, getWebPushPermission, isWebPushSupported, registerForWebPushNotifications } from "@/lib/notifications/webPush";
-import { supabase } from "@/lib/supabase/client";
+import { dismissSelfHostNotification, markSelfHostNotificationRead } from "@/lib/selfHost/notificationApi";
+import {
+  blockSelfHostPartnerAndEndCouple,
+  requestSelfHostAccountDeletion,
+  submitSelfHostFeedback,
+  submitSelfHostReport,
+} from "@/lib/selfHost/privacyApi";
+import { updateSelfHostActiveCoupleDates } from "@/lib/selfHost/profileApi";
+import { getSelfHostNotificationPreferences, updateSelfHostNotificationPreferences } from "@/lib/selfHost/pushApi";
 import type { Notification, NotificationPreference } from "@/lib/supabase/database.types";
 import type { PetUserSettings, PetUserSize } from "@/features/pet/userPetSettings";
 import { colors } from "@/styles/theme";
@@ -105,7 +113,7 @@ export function SettingsDetailPage({
   onOpenLetters: () => void;
 }) {
   const { showToast } = useToast();
-  const { user } = useAuth();
+  const { session, user } = useAuth();
   const [startDate, setStartDate] = useState(startedAt);
   const [savingStartDate, setSavingStartDate] = useState(false);
   const [feedback, setFeedback] = useState("");
@@ -163,16 +171,15 @@ export function SettingsDetailPage({
               if (!user || !partnerId) return;
               setPrivacyBusy("report");
               try {
-                const { error } = await supabase.from("reports").insert({
-                  couple_id: coupleId,
-                  reporter_id: user.id,
-                  reported_user_id: partnerId,
+                if (!session?.access_token) {
+                  throw new Error("自建登录会话已失效，请重新登录。");
+                }
+                await submitSelfHostReport({
+                  accessToken: session.access_token,
+                  coupleId,
+                  reportedUserId: partnerId,
                   reason: privacyReason.trim() || "用户从隐私设置提交举报",
                 });
-                if (error) {
-                  showToast({ title: "举报失败", message: error.message, tone: "error" });
-                  return;
-                }
                 showToast({ title: "举报已提交", message: "系统已记录处理线索，后续会继续完善审核流程。", tone: "success" });
                 setPrivacyReason("");
                 onBack();
@@ -191,11 +198,13 @@ export function SettingsDetailPage({
             onPress={async () => {
               setPrivacyBusy("block");
               try {
-                const { error } = await supabase.rpc("block_partner_and_end_couple", { reason: privacyReason.trim() || null });
-                if (error) {
-                  showToast({ title: "拉黑失败", message: error.message, tone: "error" });
-                  return;
+                if (!session?.access_token) {
+                  throw new Error("自建登录会话已失效，请重新登录。");
                 }
+                await blockSelfHostPartnerAndEndCouple({
+                  accessToken: session.access_token,
+                  reason: privacyReason.trim() || null,
+                });
                 showToast({ title: "已拉黑并解除关系", message: "双方不能继续写入原情侣空间。", tone: "success" });
                 onChanged();
                 onBack();
@@ -214,11 +223,13 @@ export function SettingsDetailPage({
             onPress={async () => {
               setPrivacyBusy("delete");
               try {
-                const { error } = await supabase.rpc("request_account_deletion", { reason: privacyReason.trim() || null });
-                if (error) {
-                  showToast({ title: "注销申请失败", message: error.message, tone: "error" });
-                  return;
+                if (!session?.access_token) {
+                  throw new Error("自建登录会话已失效，请重新登录。");
                 }
+                await requestSelfHostAccountDeletion({
+                  accessToken: session.access_token,
+                  reason: privacyReason.trim() || null,
+                });
                 showToast({ title: "注销申请已提交", message: "账号已进入待注销状态，不会立即物理删除。", tone: "success" });
                 onChanged();
                 onBack();
@@ -242,11 +253,13 @@ export function SettingsDetailPage({
             onPress={async () => {
               setSavingStartDate(true);
               try {
-                const { error } = await supabase.rpc("update_active_couple_dates", { relationship_started_at: startDate });
-                if (error) {
-                  showToast({ title: "保存失败", message: "云端数据库需要先执行最新日期设置 SQL。", tone: "error" });
-                  return;
+                if (!session?.access_token) {
+                  throw new Error("自建登录会话已失效，请重新登录。");
                 }
+                await updateSelfHostActiveCoupleDates({
+                  accessToken: session.access_token,
+                  relationshipStartedAt: startDate,
+                });
                 showToast({ title: "开始日期已更新", tone: "success" });
                 onChanged();
                 onBack();
@@ -274,15 +287,15 @@ export function SettingsDetailPage({
             onPress={async () => {
               setFeedbackBusy(true);
               try {
-                const { error } = await supabase.rpc("submit_feedback", {
-                  feedback_body: feedback.trim(),
-                  target_couple_id: coupleId || null,
-                  feedback_metadata: { source: "settings" },
-                });
-                if (error) {
-                  showToast({ title: "反馈提交失败", message: error.message, tone: "error" });
-                  return;
+                if (!session?.access_token) {
+                  throw new Error("自建登录会话已失效，请重新登录。");
                 }
+                await submitSelfHostFeedback({
+                  accessToken: session.access_token,
+                  body: feedback.trim(),
+                  coupleId: coupleId || null,
+                  metadata: { source: "settings" },
+                });
                 showToast({ title: "反馈已记录", message: "我们已经收到这条反馈。", tone: "success" });
                 setFeedback("");
                 onBack();
@@ -409,7 +422,7 @@ function NotificationSettingsPanel({
   onChanged: () => void;
   onOpenLetters: () => void;
 }) {
-  const { user } = useAuth();
+  const { session, user } = useAuth();
   const { showToast } = useToast();
   const [preferences, setPreferences] = useState<NotificationPreference | null>(null);
   const [activeTokens, setActiveTokens] = useState(0);
@@ -427,22 +440,17 @@ function NotificationSettingsPanel({
       if (!user) return;
       setLoading(true);
       try {
-        const [{ data: preferenceData, error: preferenceError }, { count }] = await Promise.all([
-          supabase.rpc("current_user_notification_preferences", {}),
-          supabase
-            .from("push_tokens")
-            .select("id", { count: "exact", head: true })
-            .eq("user_id", user.id)
-            .eq("enabled", true)
-            .is("revoked_at", null),
-        ]);
-        if (!mounted) return;
-        if (preferenceError) {
-          showToast({ title: "通知设置加载失败", message: preferenceError.message, tone: "error" });
-        } else {
-          setPreferences(preferenceData);
+        let preferenceData: NotificationPreference | null = null;
+        let activePushTokenCount = 0;
+        if (!session?.access_token) {
+          throw new Error("自建登录会话已失效，请重新登录。");
         }
-        setActiveTokens(count ?? 0);
+        const result = await getSelfHostNotificationPreferences({ accessToken: session.access_token });
+        preferenceData = result.preferences;
+        activePushTokenCount = result.push.activeTokens;
+        if (!mounted) return;
+        setPreferences(preferenceData);
+        setActiveTokens(activePushTokenCount);
         if (Platform.OS === "web") {
           setWebPushPermission(getWebPushPermission());
           setWebPushEnvironment(getWebPushEnvironment());
@@ -471,7 +479,7 @@ function NotificationSettingsPanel({
     return () => {
       mounted = false;
     };
-  }, [showToast, user]);
+  }, [session?.access_token, showToast, user]);
 
   async function togglePreference(key: NotificationPreferenceToggleKey) {
     if (!user || !preferences || savingKey) return;
@@ -493,12 +501,15 @@ function NotificationSettingsPanel({
                   ? { calendar_enabled: nextValue }
                   : { quiet_hours_enabled: nextValue };
     try {
-      const { error } = await supabase.from("notification_preferences").update(update).eq("user_id", user.id);
-      if (error) {
-        setPreferences(preferences);
-        showToast({ title: "通知设置保存失败", message: error.message, tone: "error" });
-        return;
+      if (!session?.access_token) {
+        throw new Error("自建登录会话已失效，请重新登录。");
       }
+      const result = await updateSelfHostNotificationPreferences({
+        accessToken: session.access_token,
+        update,
+      });
+      setPreferences(result.preferences);
+      setActiveTokens(result.push.activeTokens);
       showToast({ title: "通知设置已更新", tone: "success" });
     } catch (error) {
       setPreferences(preferences);
@@ -608,22 +619,31 @@ function InfoRow({ label, value }: { label: string; value: string }) {
 
 function NotificationRow({ notification, onChanged, onOpenLetters }: { notification: Notification; onChanged: () => void; onOpenLetters: () => void }) {
   const { showToast } = useToast();
+  const { session } = useAuth();
   async function markRead() {
-    const { error } = await supabase.rpc("mark_notification_read", { notification_id: notification.id });
-    if (error) {
-      showToast({ title: "操作失败", message: error.message, tone: "error" });
+    if (!session?.access_token) {
+      showToast({ title: "操作失败", message: "登录状态已失效，请重新登录。", tone: "error" });
       return;
     }
-    onChanged();
+    try {
+      await markSelfHostNotificationRead({ accessToken: session.access_token, notificationId: notification.id });
+      onChanged();
+    } catch (error) {
+      showToast({ title: "操作失败", message: error instanceof Error ? error.message : "请稍后重试。", tone: "error" });
+    }
   }
 
   async function dismiss() {
-    const { error } = await supabase.rpc("dismiss_notification", { notification_id: notification.id });
-    if (error) {
-      showToast({ title: "关闭失败", message: error.message, tone: "error" });
+    if (!session?.access_token) {
+      showToast({ title: "关闭失败", message: "登录状态已失效，请重新登录。", tone: "error" });
       return;
     }
-    onChanged();
+    try {
+      await dismissSelfHostNotification({ accessToken: session.access_token, notificationId: notification.id });
+      onChanged();
+    } catch (error) {
+      showToast({ title: "关闭失败", message: error instanceof Error ? error.message : "请稍后重试。", tone: "error" });
+    }
   }
 
   return (

@@ -67,7 +67,7 @@ const corsHeaders = {
 const supabaseUrl = Deno.env.get("SUPABASE_URL");
 const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
 const pushDeliveryWorkerSecret = Deno.env.get("PUSH_DELIVERY_WORKER_SECRET");
-const webPushVapidSubject = Deno.env.get("WEB_PUSH_VAPID_SUBJECT") ?? "mailto:admin@fanch.tech";
+const webPushVapidSubject = Deno.env.get("WEB_PUSH_VAPID_SUBJECT") ?? "mailto:admin@fancah.tech";
 const webPushVapidPublicKey = Deno.env.get("WEB_PUSH_VAPID_PUBLIC_KEY");
 const webPushVapidPrivateKey = Deno.env.get("WEB_PUSH_VAPID_PRIVATE_KEY");
 

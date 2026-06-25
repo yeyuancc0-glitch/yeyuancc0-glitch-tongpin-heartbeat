@@ -13,7 +13,7 @@ set -a
 . ./.env
 set +a
 
-if docker compose version >/dev/null 2>&1 && docker ps >/dev/null 2>&1; then
+if docker ps >/dev/null 2>&1; then
   DOCKER_COMPOSE=(docker compose)
 else
   DOCKER_COMPOSE=(sudo docker compose)

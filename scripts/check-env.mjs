@@ -2,14 +2,13 @@ import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 const envPath = resolve("apps/app/.env");
-const requiredKeys = ["EXPO_PUBLIC_SUPABASE_URL", "EXPO_PUBLIC_SUPABASE_ANON_KEY"];
+const requiredKeys = ["EXPO_PUBLIC_SELF_HOST_API_URL"];
+const forbiddenPublicKeys = [
+  "EXPO_PUBLIC_SUPABASE_URL",
+  "EXPO_PUBLIC_SUPABASE_ANON_KEY",
+];
 
-if (!existsSync(envPath)) {
-  console.error("Missing apps/app/.env. Copy apps/app/.env.example to apps/app/.env and fill Supabase values.");
-  process.exit(1);
-}
-
-const content = readFileSync(envPath, "utf8");
+const content = existsSync(envPath) ? readFileSync(envPath, "utf8") : "";
 const values = Object.fromEntries(
   content
     .split(/\r?\n/)
@@ -22,8 +21,12 @@ const values = Object.fromEntries(
 );
 
 const missing = requiredKeys.filter((key) => {
-  const value = values[key]?.trim();
-  return !value || value.includes("your-project") || value.includes("your-anon-key");
+  const value = (process.env[key] ?? values[key])?.trim();
+  return !value || value.includes("your-api-url") || !/^https?:\/\//i.test(value);
+});
+const forbidden = forbiddenPublicKeys.filter((key) => {
+  const value = (process.env[key] ?? values[key])?.trim();
+  return Boolean(value);
 });
 
 if (missing.length > 0) {
@@ -31,4 +34,10 @@ if (missing.length > 0) {
   process.exit(1);
 }
 
-console.log("Supabase environment variables are configured.");
+if (forbidden.length > 0) {
+  console.error(`Forbidden frontend Supabase env values are still present: ${forbidden.join(", ")}`);
+  console.error("Remove these public Supabase values from apps/app/.env and deployment env; current runtime must use EXPO_PUBLIC_SELF_HOST_API_URL.");
+  process.exit(1);
+}
+
+console.log("Self-host environment variables are configured.");

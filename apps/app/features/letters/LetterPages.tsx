@@ -7,7 +7,6 @@ import { DateField, useToast } from "@/components/ui";
 import { useAuth } from "@/features/auth/AuthProvider";
 import { styles } from "@/features/home/homeStyles";
 import { todayIsoDate } from "@/lib/dates/date";
-import { supabase } from "@/lib/supabase/client";
 import type { LetterPreview } from "@/lib/supabase/database.types";
 import { colors } from "@/styles/theme";
 
@@ -38,12 +37,14 @@ export function WriteLetterPage({
   onSaved,
   onBack,
   onMovePetForLetterDelivery,
+  onSendLetter,
 }: {
   coupleId: string;
   partner: PersonSummary;
   onSaved: () => void;
   onBack: () => void;
   onMovePetForLetterDelivery: (coupleId: string, mode: "now" | "later") => Promise<void>;
+  onSendLetter?: (input: { title: string; body: string; unlockAt: string }) => Promise<void>;
 }) {
   const { user } = useAuth();
   const { showToast } = useToast();
@@ -59,26 +60,19 @@ export function WriteLetterPage({
     }
     setBusy(true);
     try {
-      const { data: members, error: membersError } = await supabase.from("couple_members").select("user_id").eq("couple_id", coupleId).is("left_at", null);
-      if (membersError) {
-        throw membersError;
-      }
-      const recipient = members?.find((member) => member.user_id !== user.id);
-      if (!recipient) {
-        showToast({ title: "发送失败", message: "没有找到当前关系里的收信人。", tone: "error" });
+      const deliverAt = mode === "now" ? new Date().toISOString() : new Date(`${deliverDate}T08:00:00`).toISOString();
+      if (onSendLetter) {
+        await onSendLetter({
+          title: title.trim() || "一封写给你的信",
+          body: body.trim(),
+          unlockAt: deliverAt,
+        });
+        showToast({ title: mode === "now" ? "信已送达" : "信已寄出", message: "TA 会在来信和记忆里看到它。", tone: "success" });
+        onSaved();
+        onBack();
         return;
       }
-      const deliverAt = mode === "now" ? new Date().toISOString() : new Date(`${deliverDate}T08:00:00`).toISOString();
-      const { error } = await supabase.rpc("create_future_letter", {
-        target_couple_id: coupleId,
-        recipient_id: recipient.user_id,
-        letter_title: title.trim() || "一封写给你的信",
-        letter_body: body.trim(),
-        unlock_at: deliverAt,
-      });
-      if (error) {
-        throw error;
-      }
+      throw new Error("信件发送需要自建后端接口。");
       void onMovePetForLetterDelivery(coupleId, mode).catch((moveError) => {
         console.warn("Pet letter delivery sync failed:", moveError instanceof Error ? moveError.message : moveError);
       });
@@ -123,6 +117,9 @@ export function LetterInboxPage({
   onBack,
   onReply,
   onChanged,
+  onDismissLetter,
+  onMarkLetterRead,
+  onDeleteLetter,
 }: {
   letters: LetterPreview[];
   me: PersonSummary;
@@ -130,6 +127,9 @@ export function LetterInboxPage({
   onBack: () => void;
   onReply: () => void;
   onChanged: () => void;
+  onDismissLetter?: (letterId: string) => Promise<void>;
+  onMarkLetterRead?: (letterId: string) => Promise<void>;
+  onDeleteLetter?: (letterId: string) => Promise<void>;
 }) {
   const { user } = useAuth();
   const { showToast } = useToast();
@@ -146,36 +146,40 @@ export function LetterInboxPage({
   }, [letters, selectedId]);
 
   async function dismiss(letter: LetterPreview) {
-    const { error } = await supabase.rpc("dismiss_letter", { letter_id: letter.id });
-    if (error) {
-      showToast({ title: "关闭失败", message: error.message, tone: "error" });
+    if (onDismissLetter) {
+      await onDismissLetter(letter.id);
+      showToast({ title: "已收下这封信", message: "它仍会留在记忆里的小信封中。", tone: "success" });
+      onChanged();
       return;
     }
-    showToast({ title: "已收下这封信", message: "它仍会留在记忆里的小信封中。", tone: "success" });
-    onChanged();
+    showToast({ title: "关闭失败", message: "信件关闭需要自建后端接口。", tone: "error" });
   }
 
   async function markRead(letter: LetterPreview) {
-    if (!letter.is_locked && !isMine) {
-      await supabase.rpc("mark_letter_read", { letter_id: letter.id });
+    if (onMarkLetterRead) {
+      if (!letter.is_locked && !isMine) {
+        await onMarkLetterRead(letter.id);
+      }
+      onChanged();
+      return;
     }
-    onChanged();
+    showToast({ title: "已读同步失败", message: "信件已读需要自建后端接口。", tone: "error" });
   }
 
   async function deleteLetter(letter: LetterPreview) {
-    const { error } = await supabase.rpc("delete_letter", { letter_id: letter.id });
-    if (error) {
-      showToast({ title: "删除失败", message: error.message, tone: "error" });
+    if (onDeleteLetter) {
+      await onDeleteLetter(letter.id);
+      const nextLetter = letters.find((item) => item.id !== letter.id);
+      setSelectedId(nextLetter?.id ?? "");
+      showToast({
+        title: "信件已删除",
+        message: isMine ? "这封信已从双方的来信和记忆中移除。" : "这封信已从你的来信和记忆中移除。",
+        tone: "success",
+      });
+      onChanged();
       return;
     }
-    const nextLetter = letters.find((item) => item.id !== letter.id);
-    setSelectedId(nextLetter?.id ?? "");
-    showToast({
-      title: "信件已删除",
-      message: isMine ? "这封信已从双方的来信和记忆中移除。" : "这封信已从你的来信和记忆中移除。",
-      tone: "success",
-    });
-    onChanged();
+    showToast({ title: "删除失败", message: "信件删除需要自建后端接口。", tone: "error" });
   }
 
   return (

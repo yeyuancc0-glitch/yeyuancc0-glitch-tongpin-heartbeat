@@ -1,4 +1,3 @@
-import { supabase } from "@/lib/supabase/client";
 import type { CreationSpace } from "@/lib/supabase/database.types";
 
 export type PetRealtimeEvent = {
@@ -8,9 +7,7 @@ export type PetRealtimeEvent = {
 };
 
 export function broadcastPetEvent(coupleId: string, event: PetRealtimeEvent) {
-  return supabase.channel(`pet-room:${coupleId}`).send({
-    type: "broadcast",
-    event: "pet_interaction",
-    payload: event,
-  });
+  void coupleId;
+  void event;
+  return Promise.resolve();
 }

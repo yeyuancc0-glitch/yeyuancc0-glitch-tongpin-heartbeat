@@ -29,8 +29,10 @@ const glassDockStyle = {
 
 import {
   BottomTabBar,
+  Card,
   type BottomTabKey,
   PageContainer,
+  PrimaryButton,
 } from "@/components/app-ui/AppUI";
 import { useAppPullToRefresh, useToast } from "@/components/ui";
 import { useAuth } from "@/features/auth/AuthProvider";
@@ -41,6 +43,7 @@ import { HomeScreenShell } from "@/features/home/HomeScreenShell";
 import type {
   CreationTownView,
   PhotoPreviewState,
+  SettingPage,
   SubPage,
 } from "@/features/home/homeShared";
 import { styles } from "@/features/home/homeStyles";
@@ -69,8 +72,15 @@ import { PairingScreen } from "@/features/pairing/PairingScreen";
 import { ProfileScreen } from "@/features/profile/ProfileScreen";
 import { daysBetween } from "@/lib/dates/date";
 import { subscribeNotificationOpen } from "@/lib/notifications/openEvents";
-import { supabase } from "@/lib/supabase/client";
-import type { Notification } from "@/lib/supabase/database.types";
+import { deleteSelfHostCalendarEvent } from "@/lib/selfHost/calendarApi";
+import { deleteSelfHostCheckin, upsertSelfHostCheckin, upsertSelfHostMoodStatus } from "@/lib/selfHost/checkinApi";
+import { isSelfHostAuthEnabled } from "@/lib/selfHost/config";
+import { deleteSelfHostFootprint } from "@/lib/selfHost/footprintApi";
+import { createSelfHostLetter, deleteSelfHostLetter, dismissSelfHostLetter, markSelfHostLetterRead } from "@/lib/selfHost/letterApi";
+import { deleteSelfHostMedia } from "@/lib/selfHost/mediaApi";
+import { markSelfHostNotificationRead } from "@/lib/selfHost/notificationApi";
+import { endSelfHostActiveCouple } from "@/lib/selfHost/privacyApi";
+import type { MediaFile, Notification } from "@/lib/supabase/database.types";
 import { BouncyPressable } from "@/motion/BouncyPressable";
 import { motionTokens } from "@/motion/tokens";
 import { colors } from "@/styles/theme";
@@ -80,9 +90,9 @@ const petNightSleepWakeCheckMs = 60_000;
 export { HomeScreenShell } from "@/features/home/HomeScreenShell";
 
 export function HomeScreen() {
-  const { user, signOut } = useAuth();
+  const { session, user, signOut } = useAuth();
   const { showToast } = useToast();
-  const { data, loading, reload } = useCoupleData(user?.id);
+  const { data, loading, loadError, reload, mergeCheckin } = useCoupleData(user?.id, session?.access_token);
   const { settings: petUserSettings, setSettings: setPetUserSettings } = usePetUserSettings(user?.id);
   useAppPullToRefresh(reload);
   const [activeTab, setActiveTab] = useState<BottomTabKey>("home");
@@ -95,11 +105,27 @@ export function HomeScreen() {
   const lastSeenPetSurfaceRef = useRef<string | null>(null);
   const petEventHandlerRef = useRef<(event: { action: LivePetVisualAction; message: string }) => void>(() => {});
   const { partnerOnline: petRoomPartnerOnline, broadcastPetEvent } = usePetRealtime({
-    coupleId: data.couple?.id,
-    userId: user?.id,
+    coupleId: isSelfHostAuthEnabled ? null : data.couple?.id,
+    userId: isSelfHostAuthEnabled ? null : user?.id,
     onSpaceChanged: reload,
     onPetEvent: (event) => petEventHandlerRef.current(event),
   });
+
+  const settingPages: readonly SettingPage[] = [
+    "profile",
+    "couple",
+    "pet",
+    "notifications",
+    "privacy",
+    "relationship",
+    "feedback",
+    "about",
+  ];
+  function isSettingPage(page: SubPage): page is SettingPage {
+    return (settingPages as readonly SubPage[]).includes(page);
+  }
+
+  const isSettingDetailPage = isSettingPage(subPage);
 
   useEffect(() => {
     if (activePhotoPreview && !data.mediaFiles.some((file) => file.id === activePhotoPreview.id)) {
@@ -155,6 +181,7 @@ export function HomeScreen() {
     setDismissedPopupIds,
     todayInteractionCount,
   } = useQuickInteractions({
+    accessToken: session?.access_token,
     coupleId,
     partnerId: partner?.user_id,
     notifications: data.notifications,
@@ -203,7 +230,7 @@ export function HomeScreen() {
     creationSpace: data.creationSpace,
     creationActions: data.creationActions,
     currentSurface: currentPetSurface,
-    disabled: !petUserSettings.autonomousRoamingEnabled || subPage !== "main" || currentPetRoute.disabled,
+    disabled: isSelfHostAuthEnabled || !petUserSettings.autonomousRoamingEnabled || subPage !== "main" || currentPetRoute.disabled,
     partnerOnline: petRoomPartnerOnline,
     onChanged: reload,
   });
@@ -211,7 +238,7 @@ export function HomeScreen() {
   useEffect(() => {
     const coupleId = data.couple?.id;
     const sleepStartedAt = data.creationSpace?.pet_sleep_started_at;
-    if (!coupleId || !sleepStartedAt) {
+    if (isSelfHostAuthEnabled || !coupleId || !sleepStartedAt) {
       return undefined;
     }
     let cancelled = false;
@@ -251,7 +278,7 @@ export function HomeScreen() {
   }, [data.couple?.id, data.creationSpace?.pet_sleep_started_at, reload]);
 
   useEffect(() => {
-    if (!data.couple?.id || !data.creationSpace || !petVisibleOnCurrentSurface || !visibleGlobalPetSurface) {
+    if (isSelfHostAuthEnabled || !data.couple?.id || !data.creationSpace || !petVisibleOnCurrentSurface || !visibleGlobalPetSurface) {
       return;
     }
     const seenKey = `${data.couple.id}:${visibleGlobalPetSurface}:${data.creationSpace.pet_last_surface_changed_at ?? ""}`;
@@ -274,15 +301,140 @@ export function HomeScreen() {
 
   const { handlePhotoFiles, uploadPhoto, deletePhoto } = useHomePhotoActions({
     userId: user?.id,
+    accessToken: session?.access_token,
     coupleId,
     mediaFiles: data.mediaFiles,
     showToast,
     reload,
     setActivePhotoPreview,
   });
+  const saveSelfHostCheckin = isSelfHostAuthEnabled
+    ? async (input: { checkinDate: string; content: string | null }) => {
+        if (!session?.access_token) {
+          throw new Error("登录状态已失效，请重新登录。");
+        }
+        const savedCheckin = await upsertSelfHostCheckin({
+          accessToken: session.access_token,
+          coupleId,
+          checkinDate: input.checkinDate,
+          content: input.content,
+        });
+        mergeCheckin(savedCheckin);
+        return savedCheckin;
+      }
+    : undefined;
+  const saveSelfHostMoodStatus = isSelfHostAuthEnabled
+    ? async (input: { mood: string; note: string | null }) => {
+        if (!session?.access_token) {
+          throw new Error("登录状态已失效，请重新登录。");
+        }
+        await upsertSelfHostMoodStatus({
+          accessToken: session.access_token,
+          coupleId,
+          mood: input.mood,
+          note: input.note,
+        });
+      }
+    : undefined;
+  const deleteSelfHostMemoryCheckin = isSelfHostAuthEnabled
+    ? async (checkinId: string) => {
+        if (!session?.access_token) {
+          throw new Error("登录状态已失效，请重新登录。");
+        }
+        await deleteSelfHostCheckin({
+          accessToken: session.access_token,
+          checkinId,
+        });
+      }
+    : undefined;
+  const deleteSelfHostMemoryCalendarEvent = isSelfHostAuthEnabled
+    ? async (eventId: string) => {
+        if (!session?.access_token) {
+          throw new Error("登录状态已失效，请重新登录。");
+        }
+        await deleteSelfHostCalendarEvent({
+          accessToken: session.access_token,
+          eventId,
+        });
+      }
+    : undefined;
+  const deleteSelfHostMemoryMedia = isSelfHostAuthEnabled
+    ? async (file: MediaFile) => {
+        if (!session?.access_token) {
+          throw new Error("登录状态已失效，请重新登录。");
+        }
+        await deleteSelfHostMedia({
+          accessToken: session.access_token,
+          mediaId: file.id,
+        });
+      }
+    : undefined;
+  const deleteSelfHostMemoryFootprint = isSelfHostAuthEnabled
+    ? async (footprintId: string) => {
+        if (!session?.access_token) {
+          throw new Error("登录状态已失效，请重新登录。");
+        }
+        await deleteSelfHostFootprint({
+          accessToken: session.access_token,
+          footprintId,
+        });
+      }
+    : undefined;
+  const movePetForMemoryEventHandler = isSelfHostAuthEnabled
+    ? async () => {}
+    : movePetForMemoryEvent;
+  const movePetForLetterDeliveryHandler = isSelfHostAuthEnabled
+    ? async () => {}
+    : movePetForLetterDelivery;
+  const sendSelfHostLetter = isSelfHostAuthEnabled
+    ? async (input: { title: string; body: string; unlockAt: string }) => {
+        if (!session?.access_token) {
+          throw new Error("登录状态已失效，请重新登录。");
+        }
+        await createSelfHostLetter({
+          accessToken: session.access_token,
+          coupleId,
+          title: input.title,
+          body: input.body,
+          unlockAt: input.unlockAt,
+        });
+      }
+    : undefined;
+  const markSelfHostLetterReadHandler = isSelfHostAuthEnabled
+    ? async (letterId: string) => {
+        if (!session?.access_token) {
+          throw new Error("登录状态已失效，请重新登录。");
+        }
+        await markSelfHostLetterRead({ accessToken: session.access_token, letterId });
+      }
+    : undefined;
+  const dismissSelfHostLetterHandler = isSelfHostAuthEnabled
+    ? async (letterId: string) => {
+        if (!session?.access_token) {
+          throw new Error("登录状态已失效，请重新登录。");
+        }
+        await dismissSelfHostLetter({ accessToken: session.access_token, letterId });
+      }
+    : undefined;
+  const deleteSelfHostLetterHandler = isSelfHostAuthEnabled
+    ? async (letterId: string) => {
+        if (!session?.access_token) {
+          throw new Error("登录状态已失效，请重新登录。");
+        }
+        await deleteSelfHostLetter({ accessToken: session.access_token, letterId });
+      }
+    : undefined;
 
   if (loading && !hasUsableContent) {
     return <HomeScreenShell />;
+  }
+
+  if (!data.profile && loadError) {
+    return (
+      <PageContainer>
+        <HomeDataErrorScreen message={loadError} onRetry={() => void reload()} />
+      </PageContainer>
+    );
   }
 
   if (!data.profile) {
@@ -318,11 +470,11 @@ export function HomeScreen() {
   async function submitEndCouple() {
     setEndingCouple(true);
     try {
-      const { error } = await supabase.rpc("end_active_couple", {});
-      if (error) {
-        showToast({ title: "解绑失败", message: error.message, tone: "error" });
+      if (!session?.access_token) {
+        showToast({ title: "解绑失败", message: "登录状态已失效，请重新登录。", tone: "error" });
         return;
       }
+      await endSelfHostActiveCouple(session.access_token);
       showToast({ title: "已解除关系", message: "双方不能继续写入原情侣空间。", tone: "success" });
       reload();
     } catch (error) {
@@ -337,22 +489,20 @@ export function HomeScreen() {
     setActiveTab(tab);
   }
 
+  function openSettingPage(page: SettingPage) {
+    setActiveTab("me");
+    setSubPage(page);
+  }
+
   async function closeMoodPopup(notification: Notification) {
     setDismissedPopupIds((ids) => (ids.includes(notification.id) ? ids : [...ids, notification.id]));
-    const { error } = await supabase.rpc("mark_notification_read", { notification_id: notification.id });
-    if (error) {
-      showToast({ title: "提醒状态同步失败", message: error.message, tone: "error" });
-      return;
-    }
+    await markNotificationRead(notification.id);
     reload();
   }
 
   async function openLetterPopup(notification: Notification) {
     setDismissedLetterPopupIds((ids) => (ids.includes(notification.id) ? ids : [...ids, notification.id]));
-    const { error } = await supabase.rpc("mark_notification_read", { notification_id: notification.id });
-    if (error) {
-      showToast({ title: "提醒状态同步失败", message: error.message, tone: "error" });
-    }
+    await markNotificationRead(notification.id);
     setSubPage("letterInbox");
     setActiveTab("home");
     reload();
@@ -360,23 +510,52 @@ export function HomeScreen() {
 
   async function closeLetterPopup(notification: Notification) {
     setDismissedLetterPopupIds((ids) => (ids.includes(notification.id) ? ids : [...ids, notification.id]));
-    const { error } = await supabase.rpc("mark_notification_read", { notification_id: notification.id });
-    if (error) {
-      showToast({ title: "提醒状态同步失败", message: error.message, tone: "error" });
+    await markNotificationRead(notification.id);
+    reload();
+  }
+
+  async function markNotificationRead(notificationId: string) {
+    if (!session?.access_token) {
+      showToast({ title: "提醒状态同步失败", message: "登录状态已失效，请重新登录。", tone: "error" });
       return;
     }
-    reload();
+    try {
+      await markSelfHostNotificationRead({ accessToken: session.access_token, notificationId });
+    } catch (error) {
+      showToast({ title: "提醒状态同步失败", message: error instanceof Error ? error.message : "请稍后重试。", tone: "error" });
+    }
   }
 
   let content = null;
   if (subPage === "messages") {
     content = <MessagesPage coupleId={coupleId} messages={visibleMessages} onChanged={reload} onBack={() => setSubPage("main")} />;
   } else if (subPage === "addEvent") {
-    content = <AddEventPage coupleId={coupleId} onSaved={reload} onBack={() => setSubPage("main")} onMovePetForMemoryEvent={movePetForMemoryEvent} />;
+    content = <AddEventPage coupleId={coupleId} onSaved={reload} onBack={() => setSubPage("main")} onMovePetForMemoryEvent={movePetForMemoryEventHandler} />;
   } else if (subPage === "writeLetter") {
-    content = <WriteLetterPage coupleId={coupleId} partner={partnerProfile} onSaved={reload} onBack={() => setSubPage("main")} onMovePetForLetterDelivery={movePetForLetterDelivery} />;
+    content = (
+      <WriteLetterPage
+        coupleId={coupleId}
+        partner={partnerProfile}
+        onSaved={reload}
+        onBack={() => setSubPage("main")}
+        onMovePetForLetterDelivery={movePetForLetterDeliveryHandler}
+        onSendLetter={sendSelfHostLetter}
+      />
+    );
   } else if (subPage === "letterInbox") {
-    content = <LetterInboxPage letters={data.letters} me={me} partner={partnerProfile} onBack={() => setSubPage("main")} onReply={() => setSubPage("writeLetter")} onChanged={reload} />;
+    content = (
+      <LetterInboxPage
+        letters={data.letters}
+        me={me}
+        partner={partnerProfile}
+        onBack={() => setSubPage("main")}
+        onReply={() => setSubPage("writeLetter")}
+        onChanged={reload}
+        onDismissLetter={dismissSelfHostLetterHandler}
+        onMarkLetterRead={markSelfHostLetterReadHandler}
+        onDeleteLetter={deleteSelfHostLetterHandler}
+      />
+    );
   } else if (subPage === "creation") {
     content = (
       <CreationSpacePage
@@ -393,9 +572,12 @@ export function HomeScreen() {
         onTownViewChange={setCreationTownView}
         onBack={() => setSubPage("main")}
         onChanged={reload}
+        disabled={false}
+        accessToken={session?.access_token}
+        selfHostMode={isSelfHostAuthEnabled}
       />
     );
-  } else if (subPage !== "main") {
+  } else if (isSettingDetailPage) {
     content = (
       <SettingsDetailPage
         page={subPage}
@@ -459,7 +641,9 @@ export function HomeScreen() {
         petWorldProp={petWorldPropFromDecision(data.creationSpace?.last_world_decision)}
         onChanged={reload}
         onPhotoFiles={(files, options) => handlePhotoFiles(files, options)}
-        onMovePetForMemoryEvent={movePetForMemoryEvent}
+        onMovePetForMemoryEvent={movePetForMemoryEventHandler}
+        onSaveCheckin={saveSelfHostCheckin}
+        onSaveMoodStatus={saveSelfHostMoodStatus}
       />
     );
   } else if (activeTab === "calendar") {
@@ -486,6 +670,11 @@ export function HomeScreen() {
           setSubPage("main");
           setActiveTab("checkins");
         }}
+        onDeleteCheckin={deleteSelfHostMemoryCheckin}
+        onDeleteCalendarEvent={deleteSelfHostMemoryCalendarEvent}
+        onDeleteMedia={deleteSelfHostMemoryMedia}
+        onDeleteFootprint={deleteSelfHostMemoryFootprint}
+        onDeleteLetter={deleteSelfHostLetterHandler}
       />
     );
   } else {
@@ -497,7 +686,7 @@ export function HomeScreen() {
         onSignOut={signOut}
         onEndCouple={endCouple}
         endingCouple={endingCouple}
-        onOpenSetting={setSubPage}
+        onOpenSetting={openSettingPage}
       />
     );
   }
@@ -505,7 +694,7 @@ export function HomeScreen() {
   return (
     <PageContainer>
       {content}
-      {subPage === "main" ? <BottomTabBar activeTab={activeTab} onChange={goTab} /> : null}
+      {subPage === "main" || isSettingDetailPage ? <BottomTabBar activeTab={activeTab} onChange={goTab} /> : null}
       <GlobalPetLayer
         visible={petVisibleOnCurrentSurface}
         surface={visibleGlobalPetSurface ?? "home"}
@@ -541,6 +730,18 @@ export function HomeScreen() {
         />
       ) : null}
     </PageContainer>
+  );
+}
+
+function HomeDataErrorScreen({ message, onRetry }: { message: string; onRetry: () => void }) {
+  return (
+    <View style={styles.stack}>
+      <Card>
+        <Text style={styles.sectionTitle}>首页数据暂时没加载出来</Text>
+        <Text style={styles.bodyText}>{message || "可能是网络或服务临时不稳定，请重新加载。"}</Text>
+        <PrimaryButton label="重新加载" onPress={onRetry} />
+      </Card>
+    </View>
   );
 }
 

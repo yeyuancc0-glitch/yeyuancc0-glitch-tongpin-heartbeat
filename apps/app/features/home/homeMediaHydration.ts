@@ -1,23 +1,34 @@
 import type { MediaFile } from "@/lib/supabase/database.types";
-import { createSignedUrl, createTransformedImageUrl, imageTransforms, storageBuckets } from "@/lib/supabase/storage";
+import { createSelfHostMediaReadUrl } from "@/lib/selfHost/mediaApi";
 
 export type PreservedMediaUrl = { path?: string | null; signedUrl: string | null; thumbnailSignedUrl: string | null };
 
-export async function hydrateMediaFile(file: MediaFile, signedMediaUrlById: Map<string, PreservedMediaUrl>) {
+export async function hydrateMediaFile(file: MediaFile, signedMediaUrlById: Map<string, PreservedMediaUrl>, accessToken?: string | null) {
   const existingMediaUrl = signedMediaUrlById.get(file.id);
   const shouldPreserve = existingMediaUrl?.path === file.storage_path;
   const existingSignedUrl = shouldPreserve ? existingMediaUrl.signedUrl : null;
   const existingThumbnailSignedUrl = shouldPreserve ? existingMediaUrl.thumbnailSignedUrl : null;
+  if (!accessToken) {
+    return {
+      ...file,
+      signedUrl: existingSignedUrl,
+      thumbnailSignedUrl: existingThumbnailSignedUrl ?? existingSignedUrl,
+    };
+  }
   const thumbnailSignedUrl =
     existingThumbnailSignedUrl ??
-    (file.thumbnail_storage_path
-      ? await createSignedUrl(storageBuckets.coupleMedia, file.thumbnail_storage_path)
-      : await createTransformedImageUrl(storageBuckets.coupleMedia, file.storage_path, imageTransforms.albumThumb));
-  const fallbackSignedUrl = thumbnailSignedUrl || existingSignedUrl ? existingSignedUrl : await createSignedUrl(storageBuckets.coupleMedia, file.storage_path);
+    await createSelfHostMediaReadUrl({
+      accessToken,
+      mediaId: file.id,
+      variant: file.thumbnail_storage_path ? "thumbnail" : "original",
+    }).catch((error) => {
+      console.warn("Self-host media thumbnail hydration failed:", error);
+      return null;
+    });
   return {
     ...file,
-    signedUrl: fallbackSignedUrl,
-    thumbnailSignedUrl: thumbnailSignedUrl ?? fallbackSignedUrl,
+    signedUrl: existingSignedUrl,
+    thumbnailSignedUrl,
   };
 }
 

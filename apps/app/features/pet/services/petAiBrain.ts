@@ -1,4 +1,3 @@
-import { supabase } from "@/lib/supabase/client";
 import type { CreationSpace, Json } from "@/lib/supabase/database.types";
 
 export type PetAiAction = CreationSpace["current_action"];
@@ -109,19 +108,10 @@ export async function invokePetAiBrain({
   triggerType: string;
   localHint?: Record<string, Json | undefined>;
 }) {
-  const { data, error } = await supabase.functions.invoke("pet-ai-brain", {
-    body: {
-      coupleId,
-      triggerType,
-      localHint,
-    },
-  });
-
-  if (error) {
-    throw error;
-  }
-
-  return normalizeBrainResult(data);
+  void coupleId;
+  void triggerType;
+  void localHint;
+  return normalizeBrainResult(null);
 }
 
 export function petRigCueFromJson(value: Json | null | undefined): PetRigCue | null {

@@ -1,30 +1,29 @@
 # 自建后端替换 Supabase 依赖地图
 
-此文档记录当前代码里真实存在的 Supabase 依赖面，用于后续把自建 staging 从健康检查空壳推进到可替换 Supabase 的后端。它不是生产切换计划。
+此文档记录 Supabase 能力被自建后端替换后的边界。它不是生产切换计划；真实旧数据切流以 `docs/self-host-cutover-rollback.md` 和迁移报告为准。
 
 ## 当前状态
 
-- 生产仍走 Vercel + Supabase。
+- App 运行时代码已经不依赖 `@supabase/supabase-js`，严格直连检查必须保持通过。
 - 自建 staging 已跑通 Caddy、API、Worker、PostgreSQL、Redis、MinIO。
-- `api-staging.fanch.tech` 和 `assets-staging.fanch.tech` 已指向 `81.71.9.118`。
-- Caddy 已为 `api-staging.fanch.tech` 获取 Let's Encrypt 证书，服务器内部 HTTPS `/health` 返回 HTTP/2 `200` 和 `status: ok`。
-- 腾讯云公网入口当前会拦截未备案 staging 域名；HTTP 返回 DNSPod webblock，HTTPS SNI 表现为 TLS EOF。后续需要 ICP 备案或 Cloudflare Tunnel / 境外入口，才能稳定公网访问 staging 域名。
+- DNSPod 已将 `tongpin.fancah.tech`、`api-staging.fancah.tech` 和 `assets-staging.fancah.tech` 指向 `81.71.9.118`。
+- `fancah.tech` 已完成 ICP 备案；Caddy 已为上述三个域名获取 Let's Encrypt 证书，公网 `https://api-staging.fancah.tech/health` 返回 HTTP/2 `200` 和 `status: ok`。
 
-## 必须替换的 Supabase 能力
+## Supabase 能力替换边界
 
 | Supabase 能力 | 当前代码边界 | 自建替代边界 |
 |---|---|---|
-| Auth / Session | `apps/app/features/auth/AuthProvider.tsx`, `apps/app/features/auth/AuthScreen.tsx`, `apps/app/lib/supabase/client.ts` | `POST /auth/signup`, `POST /auth/signin`, `POST /auth/refresh`, `POST /auth/signout`, `POST /auth/password/reset`, `PATCH /auth/password` |
-| Data API / 表直连 | `apps/app/features/**`, `apps/app/lib/notifications/**` 直接 `.from(...)` | 业务 API 按 feature 暴露端点；前端不再直接连数据库 |
-| RPC | 前端和 Edge Functions 调用 `.rpc(...)` | RPC 逐个迁移为服务端事务方法，保留数据库约束和事务语义 |
-| Storage | `apps/app/lib/supabase/storage.ts`、头像/相册上传删除 | MinIO + API 签名上传、下载、缩略图生成和删除 |
-| Realtime | `usePetRealtime.ts`, `petRealtime.ts`, `useCoupleData.ts` channel | WebSocket / SSE 事件层，按 `couple_id` 和 `user_id` 鉴权 |
+| Auth / Session | 旧 `supabase.auth` | `/api/auth/*`，JWT + refresh token rotation |
+| Data API / 表直连 | 旧前端 `.from(...)` | 业务 API 按 feature 暴露端点；前端不再直接连数据库 |
+| RPC | 旧前端和 Edge Functions `.rpc(...)` | 服务端事务方法，保留数据库约束和事务语义 |
+| Storage | 旧 Supabase Storage | MinIO + API 签名上传、下载、缩略图生成和删除 |
+| Realtime | 旧 Supabase channel | 通知第一版 SSE，云宠实时能力后续按自建 WebSocket/SSE 鉴权落地 |
 | Edge Functions | `supabase/functions/pet-ai-brain`, `supabase/functions/send-push-notifications` | Node API / Worker 进程 |
 | Cron / Queue | `pg_cron`, `push_deliveries`, push delivery RPC | Redis 队列 + Worker 定时任务 |
 
-## 直连表清单
+## 历史直连表清单
 
-代码中直接 `.from(...)` 访问的表包括：
+迁移前代码曾直接 `.from(...)` 访问这些表；当前 App 运行时不得恢复这些直连：
 
 - `profiles`
 - `checkins`
@@ -61,9 +60,8 @@
 
 ## Storage 替换
 
-当前 Storage 入口集中在：
+历史 Storage 入口曾集中在：
 
-- `apps/app/lib/supabase/storage.ts`
 - `apps/app/features/profile/ProfileScreen.tsx`
 - `apps/app/features/home/useHomePhotoActions.ts`
 - `apps/app/features/home/homeAvatarHydration.ts`
@@ -71,7 +69,7 @@
 - `apps/app/features/media/PhotoAlbum.tsx`
 - `apps/app/features/memory/MemoryPage.tsx`
 
-自建 API 需要提供：
+自建 API 已提供或必须继续保持：
 
 - 头像原图上传
 - 头像缩略图上传
