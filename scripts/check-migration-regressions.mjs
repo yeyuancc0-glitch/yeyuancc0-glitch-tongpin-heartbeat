@@ -109,6 +109,18 @@ requireIncludes(
   "Caddy must serve extensionless nested auth routes from their static HTML before falling back to the home shell",
 );
 requireIncludes(
+  "infra/self-host/staging/Caddyfile",
+  "request>uri query",
+  "Caddy logs must filter request query parameters before writing runtime logs",
+);
+for (const sensitiveQueryKey of ["token", "access_token", "refresh_token", "X-Amz-Credential", "X-Amz-Signature", "X-Amz-Security-Token"]) {
+  requireIncludes(
+    "infra/self-host/staging/Caddyfile",
+    `replace ${sensitiveQueryKey} REDACTED`,
+    `Caddy logs must redact sensitive query parameter ${sensitiveQueryKey}`,
+  );
+}
+requireIncludes(
   "infra/self-host/staging/scripts/monitor-staging.sh",
   "grep -q \"邮箱验证\"",
   "staging monitor must verify the email verification route content, not just HTTP 200",

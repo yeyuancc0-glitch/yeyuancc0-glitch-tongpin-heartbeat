@@ -1,5 +1,17 @@
 {
 	email {$ACME_EMAIL}
+	log {
+		format filter {
+			request>uri query {
+				replace token REDACTED
+				replace access_token REDACTED
+				replace refresh_token REDACTED
+				replace X-Amz-Credential REDACTED
+				replace X-Amz-Signature REDACTED
+				replace X-Amz-Security-Token REDACTED
+			}
+		}
+	}
 }
 
 {$APP_DOMAIN} {
