@@ -110,6 +110,9 @@ const integrityAuditScript = "apps/server/scripts/audit-self-host-integrity.mjs"
 requireIncludes(integrityAuditScript, "missingProfiles", "self-host integrity audit must catch active accounts without profiles");
 requireIncludes(integrityAuditScript, "activeCoupleWrongMemberCount", "self-host integrity audit must catch malformed active couple memberships");
 requireIncludes(integrityAuditScript, "invisibleCheckins", "self-host integrity audit must catch active-couple checkins hidden by membership issues");
+requireIncludes(integrityAuditScript, "invalidCoupleCheckins", "self-host integrity audit must catch business rows attached to missing or malformed active couples");
+requireIncludes(integrityAuditScript, "invalidCoupleCreationSpaces", "self-host integrity audit must catch creation data attached to missing or malformed active couples");
+requireIncludes(integrityAuditScript, "invisibleMoodStatuses", "self-host integrity audit must catch mood status rows hidden by membership issues");
 requireIncludes(integrityAuditScript, "stalePendingMedia", "self-host integrity audit must catch media uploads stuck pending");
 requireIncludes("apps/server/package.json", "audit:self-host-integrity", "server package must expose the self-host integrity audit command");
 requireIncludes("infra/self-host/staging/scripts/monitor-staging.sh", "audit:self-host-integrity", "staging monitor must run the self-host integrity audit");

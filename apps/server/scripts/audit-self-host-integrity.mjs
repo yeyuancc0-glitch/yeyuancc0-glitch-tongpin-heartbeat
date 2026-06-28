@@ -31,6 +31,18 @@ async function main() {
     invisibleCalendarEvents,
     invisibleFootprints,
     invisibleCreationActions,
+    invisibleMoodStatuses,
+    invisiblePetMemoriesForCreator,
+    invalidCoupleMessages,
+    invalidCoupleCheckins,
+    invalidCoupleMoodStatuses,
+    invalidCoupleMedia,
+    invalidCoupleLetters,
+    invalidCoupleCalendarEvents,
+    invalidCoupleFootprints,
+    invalidCoupleCreationSpaces,
+    invalidCoupleCreationActions,
+    invalidCouplePetMemories,
     stalePendingMedia,
     stalePendingAvatarUploads,
   ] = await Promise.all([
@@ -138,6 +150,68 @@ async function main() {
       filter: "true",
       orderColumn: "created_at",
     }),
+    invisibleOwnerRows({
+      relation: "public.mood_status",
+      ownerColumn: "user_id",
+      filter: "true",
+      orderColumn: "updated_at",
+    }),
+    invisibleOwnerRows({
+      relation: "public.pet_memories",
+      ownerColumn: "created_by",
+      filter: "created_by is not null and archived_at is null",
+      orderColumn: "created_at",
+    }),
+    invalidCoupleRows({
+      relation: "public.messages",
+      filter: "deleted_at is null",
+      orderColumn: "created_at",
+    }),
+    invalidCoupleRows({
+      relation: "public.checkins",
+      filter: "deleted_at is null",
+      orderColumn: "checkin_date",
+    }),
+    invalidCoupleRows({
+      relation: "public.mood_status",
+      filter: "true",
+      orderColumn: "updated_at",
+    }),
+    invalidCoupleRows({
+      relation: "public.media_files",
+      filter: "deleted_at is null and upload_status = 'ready'",
+      orderColumn: "created_at",
+    }),
+    invalidCoupleRows({
+      relation: "public.future_letters",
+      filter: "deleted_at is null",
+      orderColumn: "created_at",
+    }),
+    invalidCoupleRows({
+      relation: "public.calendar_events",
+      filter: "deleted_at is null",
+      orderColumn: "event_date",
+    }),
+    invalidCoupleRows({
+      relation: "public.couple_footprints",
+      filter: "deleted_at is null",
+      orderColumn: "visited_at",
+    }),
+    invalidCoupleRows({
+      relation: "public.creation_spaces",
+      filter: "true",
+      orderColumn: "updated_at",
+    }),
+    invalidCoupleRows({
+      relation: "public.creation_actions",
+      filter: "true",
+      orderColumn: "created_at",
+    }),
+    invalidCoupleRows({
+      relation: "public.pet_memories",
+      filter: "archived_at is null",
+      orderColumn: "created_at",
+    }),
     staleUploads("public.media_files", "upload_status = 'pending'", "created_at"),
     relationExists("public.profile_avatar_uploads").then((exists) => exists
       ? staleUploads("public.profile_avatar_uploads", "upload_status = 'pending'", "created_at")
@@ -158,6 +232,18 @@ async function main() {
     invisibleCalendarEvents,
     invisibleFootprints,
     invisibleCreationActions,
+    invisibleMoodStatuses,
+    invisiblePetMemoriesForCreator,
+    invalidCoupleMessages,
+    invalidCoupleCheckins,
+    invalidCoupleMoodStatuses,
+    invalidCoupleMedia,
+    invalidCoupleLetters,
+    invalidCoupleCalendarEvents,
+    invalidCoupleFootprints,
+    invalidCoupleCreationSpaces,
+    invalidCoupleCreationActions,
+    invalidCouplePetMemories,
   };
   const warnings = {
     stalePendingMedia,
@@ -225,6 +311,31 @@ async function invisibleOwnerRows({ relation, ownerColumn, filter, orderColumn }
             and cm.user_id = t.${ownerColumn}
             and cm.status = 'active'
             and c.status = 'active'
+       )
+     order by t.${orderColumn} desc nulls last
+  `);
+}
+
+async function invalidCoupleRows({ relation, filter, orderColumn }) {
+  if (!(await relationExists(relation))) {
+    return { count: 0, samples: [], skipped: "missing_relation" };
+  }
+  return sampleCount(`
+    select t.id, t.couple_id
+      from ${relation} t
+      left join public.couples c on c.id = t.couple_id
+     where ${filter}
+       and (
+         c.id is null
+         or (
+           c.status = 'active'
+           and (
+             select count(*)::int
+               from public.couple_members cm
+              where cm.couple_id = t.couple_id
+                and cm.status = 'active'
+           ) <> 2
+         )
        )
      order by t.${orderColumn} desc nulls last
   `);

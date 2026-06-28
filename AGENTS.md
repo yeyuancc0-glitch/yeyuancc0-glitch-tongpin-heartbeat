@@ -220,7 +220,7 @@
 - 自建迁移进入真实 API/BFF 前必须维护五个门槛文档：`docs/supabase-usage-inventory.md`、`docs/self-host-authorization-map.md`、`docs/self-host-data-constraints.md`、`docs/self-host-cutover-rollback.md`、`docs/self-host-security-ops.md`。
 - 新增业务代码不得增加 Supabase 直连；`npm run check:supabase-usage` 以当前存量基线拦截新增，迁移完成阶段用 `npm run check:supabase-usage:strict` 要求业务代码清零。
 - 旧数据迁移验收不能只看表级 count/hash；`checkins` 还要做按 `user_id` 的覆盖对账，避免某个用户的历史胶囊在迁移后“看起来丢了”却没有被脚本验出来。
-- 自建目标库整体完整性审计应作为迁移维稳常规门槛：重点看 active account 缺 profile、用户多个 active couple、active couple 成员数异常、未删除业务数据的作者/上传者/收件人不再是对应 active couple member，以及头像/相册上传长期 pending；报告不得输出正文、图片路径、邮箱或 token。
+- 自建目标库整体完整性审计应作为迁移维稳常规门槛：重点看 active account 缺 profile、用户多个 active couple、active couple 成员数异常、未删除业务数据挂到缺失或成员异常的 active couple、业务数据作者/上传者/收件人不再是对应 active couple member，以及头像/相册上传长期 pending；报告不得输出正文、图片路径、邮箱或 token。已结束关系上的历史行不应作为 integrity failure，除非产品决定恢复跨关系历史可见性。
 - 单用户迁移审计默认不得输出胶囊正文预览；只有明确设置 `MIGRATION_AUDIT_INCLUDE_CONTENT_PREVIEW=true` 才允许输出短预览，日常排查只看计数、日期、可见性和脱敏 id。
 - Supabase 旧数据迁移不能假设每个有业务数据的账号都存在 `public.profiles`；迁移脚本必须从 `auth.users` 和业务表 user id 引用合成缺失的 profile/account，再迁 `checkins`、`couple_members`、留言、相册等依赖 `profiles` FK 的业务数据，否则会出现账号能登录但历史胶囊或其它历史数据没迁入/不可见。
 - Supabase 旧数据迁移不能假设源库已经跑到最新历史 schema；读取 `profiles`、`checkins`、`media_files`、`calendar_events`、`future_letters` 等旧表时，后加的可选列要在迁移脚本里用兼容默认值读取，关键列缺失时要在报告里 warning，避免旧账号少量历史胶囊或相册因源列不存在而整表漏迁。
