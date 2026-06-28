@@ -101,6 +101,9 @@ requireIncludes("apps/server/src/authService.mjs", "email_verification_recently_
 requireIncludes("apps/server/db/migrations/022_password_reset_rate_limit.sql", "password_reset_tokens_ip_created_idx", "password reset rate limiting must keep an indexed IP prefix");
 requireIncludes("apps/server/db/migrations/023_auth_email_verification_rate_limit.sql", "email_verification_tokens_ip_created_idx", "email verification rate limiting must keep an indexed IP prefix");
 requireIncludes("apps/app/features/auth/AuthProvider.tsx", "邮件服务今日额度已达上限", "forgot-password UI must explain Resend daily quota state");
+requireIncludes("apps/server/src/http.mjs", "function logSafeUrl(request)", "API request logs must sanitize URLs before logging");
+requireIncludes("apps/server/src/http.mjs", "url: logSafeUrl(request)", "API request logs must record only sanitized URL paths");
+forbidRegex("apps/server/src/http.mjs", /url:\s*request\.url/g, "API request logs must not write raw request.url because it may contain auth tokens or signed URL query strings");
 requireIncludes("apps/server/src/notificationService.mjs", "function timestampCursor(value)", "notification stream cursors must normalize Date and legacy JS date strings");
 requireIncludes("apps/server/scripts/smoke-notifications.mjs", "legacy_cursor_sse", "notification smoke must cover legacy JS date cursor reconnection");
 requireIncludes(

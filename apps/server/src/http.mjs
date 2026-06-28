@@ -154,6 +154,15 @@ function requestMeta(request) {
   };
 }
 
+function logSafeUrl(request) {
+  try {
+    const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "localhost"}`);
+    return url.pathname || "/";
+  } catch {
+    return String(request.url || "/").split("?")[0] || "/";
+  }
+}
+
 async function requireMethod(request, response, expectedMethod, requestId) {
   if (request.method !== expectedMethod) {
     sendJson(response, 405, methodNotAllowedPayload(requestId));
@@ -1149,7 +1158,7 @@ export function createRequestHandler({
         event: "request_failed",
         requestId,
         method: request.method,
-        url: request.url,
+        url: logSafeUrl(request),
         message: error instanceof Error ? error.message : "unknown error",
       });
       sendJson(response, 500, {
@@ -1164,7 +1173,7 @@ export function createRequestHandler({
         event: "request_completed",
         requestId,
         method: request.method,
-        url: request.url,
+        url: logSafeUrl(request),
         statusCode: response.statusCode,
         durationMs: Date.now() - started,
       });
