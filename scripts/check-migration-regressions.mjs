@@ -133,6 +133,31 @@ requireIncludes(
   "grep -q \"设置新密码\"",
   "staging monitor must verify the password reset route content, not just HTTP 200",
 );
+requireIncludes(
+  "infra/self-host/staging/scripts/monitor-staging.sh",
+  "check_runtime_security_switches",
+  "staging monitor must verify auth debug tokens stay disabled and source Supabase credentials stay removed",
+);
+requireIncludes(
+  "infra/self-host/staging/scripts/monitor-staging.sh",
+  "AUTH_EXPOSE_DEBUG_TOKENS",
+  "staging monitor must fail if auth debug tokens are exposed",
+);
+requireIncludes(
+  "infra/self-host/staging/scripts/monitor-staging.sh",
+  "SUPABASE_DB_URL",
+  "staging monitor must fail if source Supabase credentials are reintroduced",
+);
+requireIncludes(
+  "infra/self-host/staging/scripts/monitor-staging.sh",
+  "check_cron_jobs",
+  "staging monitor must verify backup, restore-verify, and monitor cron jobs are installed",
+);
+requireIncludes(
+  "infra/self-host/staging/scripts/monitor-staging.sh",
+  "verify-backups-restore.sh",
+  "staging monitor must verify the restore verification cron job exists",
+);
 
 const userAuditScript = "apps/server/scripts/audit-supabase-user-migration.mjs";
 requireIncludes(userAuditScript, "MIGRATION_AUDIT_TARGET_ONLY", "single-user migration audit must support target-only checks after source credentials are removed");

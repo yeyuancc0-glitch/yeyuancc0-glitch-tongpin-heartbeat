@@ -126,6 +126,43 @@ check_web_push_vapid_config() {
   fi
 }
 
+check_runtime_security_switches() {
+  local debug_status
+  debug_status="$("${DOCKER_COMPOSE[@]}" --env-file .env -f compose.yml exec -T api sh -lc \
+    'test "${AUTH_EXPOSE_DEBUG_TOKENS:-}" = "true" && printf enabled || printf disabled' 2>/dev/null || true)"
+  if [ "$debug_status" = "disabled" ]; then
+    ok "auth_debug_tokens exposed=false"
+  else
+    fail "auth_debug_tokens exposed=true"
+  fi
+
+  local source_credential_status
+  source_credential_status="$("${DOCKER_COMPOSE[@]}" --env-file .env -f compose.yml exec -T api sh -lc \
+    'if [ -n "${SUPABASE_DB_URL:-}${SUPABASE_STORAGE_S3_ENDPOINT:-}${SUPABASE_STORAGE_S3_ACCESS_KEY_ID:-}${SUPABASE_STORAGE_S3_SECRET_ACCESS_KEY:-}" ]; then printf present; else printf empty; fi' 2>/dev/null || true)"
+  if [ "$source_credential_status" = "empty" ]; then
+    ok "supabase_source_credentials configured=false"
+  else
+    fail "supabase_source_credentials configured=true"
+  fi
+}
+
+check_cron_job() {
+  local name="$1"
+  local path="$2"
+  local needle="$3"
+  if [ -f "$path" ] && grep -q "$needle" "$path"; then
+    ok "cron_job name=$name installed=true path=$path"
+  else
+    fail "cron_job name=$name installed=false path=$path"
+  fi
+}
+
+check_cron_jobs() {
+  check_cron_job backup /etc/cron.d/tongpin-staging-backup "backup-all.sh"
+  check_cron_job restore_verify /etc/cron.d/tongpin-staging-restore-verify "verify-backups-restore.sh"
+  check_cron_job monitor /etc/cron.d/tongpin-staging-monitor "monitor-staging.sh"
+}
+
 check_public_endpoints() {
   local deep
   deep="$(curl -fsS --max-time 20 "$API_URL/api/health/deep" 2>/dev/null || true)"
@@ -265,6 +302,8 @@ check_command awk
 check_required_services
 check_local_dependencies
 check_web_push_vapid_config
+check_runtime_security_switches
+check_cron_jobs
 check_public_endpoints
 check_disk
 check_backup_freshness
