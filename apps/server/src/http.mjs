@@ -376,7 +376,7 @@ export function createRequestHandler({
           return;
         }
         const body = await parseBody(request);
-        const result = await authService.requestEmailVerification(body);
+        const result = await authService.requestEmailVerification(body, requestMeta(request));
         sendAuthResult(response, requestId, result);
         return;
       }
@@ -396,7 +396,7 @@ export function createRequestHandler({
           return;
         }
         const body = await parseBody(request);
-        const result = await authService.requestPasswordReset(body);
+        const result = await authService.requestPasswordReset(body, requestMeta(request));
         sendAuthResult(response, requestId, result);
         return;
       }

@@ -112,6 +112,9 @@ function authEmailStatus(config, delivery) {
   if (delivery?.status === "sent") {
     return "sent";
   }
+  if (delivery?.reason === "password_reset_recently_sent" || delivery?.reason === "email_verification_recently_sent") {
+    return "sent";
+  }
   if (delivery?.reason === "test_email_recipient") {
     return "test_email_skipped";
   }
@@ -235,6 +238,85 @@ export function createAuthService({ pool, config, emailService = noEmailService(
     );
   }
 
+  async function ensurePasswordResetAllowed(client, email, requestMeta) {
+    const emailResult = await client.query(
+      `
+        select count(*)::int as requests
+          from app_auth.password_reset_tokens
+         where user_id = (
+           select id
+             from app_auth.accounts
+            where email = $1::citext
+              and disabled_at is null
+            limit 1
+         )
+           and created_at >= now() - ($2::int * interval '1 second')
+      `,
+      [email, config.auth.passwordResetWindowSeconds],
+    );
+    if ((emailResult.rows[0]?.requests ?? 0) >= config.auth.passwordResetEmailLimit) {
+      throw new AuthError("password_reset_rate_limited", 429, "Too many password reset requests. Please try again later.");
+    }
+
+    const prefix = ipPrefix(requestMeta?.ip);
+    if (!prefix) {
+      return;
+    }
+    const ipResult = await client.query(
+      `
+        select count(*)::int as requests
+          from app_auth.password_reset_tokens
+         where ip_prefix = $1
+           and created_at >= now() - ($2::int * interval '1 second')
+      `,
+      [prefix, config.auth.passwordResetWindowSeconds],
+    );
+    if ((ipResult.rows[0]?.requests ?? 0) >= config.auth.passwordResetIpLimit) {
+      throw new AuthError("password_reset_rate_limited", 429, "Too many password reset requests. Please try again later.");
+    }
+  }
+
+  async function ensureEmailVerificationAllowed(client, email, requestMeta) {
+    if (isReservedTestEmail(email)) {
+      return;
+    }
+    const emailResult = await client.query(
+      `
+        select count(*)::int as requests
+          from app_auth.email_verification_tokens
+         where user_id = (
+           select id
+             from app_auth.accounts
+            where email = $1::citext
+              and disabled_at is null
+            limit 1
+         )
+           and created_at >= now() - ($2::int * interval '1 second')
+      `,
+      [email, config.auth.emailVerificationWindowSeconds],
+    );
+    if ((emailResult.rows[0]?.requests ?? 0) >= config.auth.emailVerificationEmailLimit) {
+      throw new AuthError("email_verification_rate_limited", 429, "Too many email verification requests. Please try again later.");
+    }
+
+    const prefix = ipPrefix(requestMeta?.ip);
+    if (!prefix) {
+      return;
+    }
+    const ipResult = await client.query(
+      `
+        select count(*)::int as requests
+          from app_auth.email_verification_tokens
+         where ip_prefix = $1
+           and created_at >= now() - ($2::int * interval '1 second')
+      `,
+      [prefix, config.auth.emailVerificationWindowSeconds],
+    );
+    if ((ipResult.rows[0]?.requests ?? 0) >= config.auth.emailVerificationIpLimit) {
+      throw new AuthError("email_verification_rate_limited", 429, "Too many email verification requests. Please try again later.");
+    }
+  }
+
   async function register(input, requestMeta) {
     const email = normalizeEmail(input.email);
     const password = input.password;
@@ -277,12 +359,13 @@ export function createAuthService({ pool, config, emailService = noEmailService(
       );
 
       const verificationToken = createOpaqueToken();
+      await ensureEmailVerificationAllowed(client, email, requestMeta);
       await client.query(
         `
-          insert into app_auth.email_verification_tokens (user_id, token_hash, expires_at)
-          values ($1, $2, now() + interval '24 hours')
+          insert into app_auth.email_verification_tokens (user_id, token_hash, expires_at, ip_prefix)
+          values ($1, $2, now() + interval '24 hours', $3)
         `,
-        [account.id, hashOpaqueToken(verificationToken, config.auth.refreshTokenPepper)],
+        [account.id, hashOpaqueToken(verificationToken, config.auth.refreshTokenPepper), ipPrefix(requestMeta?.ip)],
       );
 
       const user = await loadUserById(client, account.id);
@@ -309,12 +392,13 @@ export function createAuthService({ pool, config, emailService = noEmailService(
     };
   }
 
-  async function requestEmailVerification(input) {
+  async function requestEmailVerification(input, requestMeta = {}) {
     const email = normalizeEmail(input.email);
     assertEmail(email);
     const token = createOpaqueToken();
 
     let accountId = null;
+    let skippedRecently = false;
     await withTransaction(pool, async (client) => {
       const result = await client.query(
         `
@@ -331,6 +415,25 @@ export function createAuthService({ pool, config, emailService = noEmailService(
         return;
       }
       accountId = account.id;
+      const recentResult = await client.query(
+        `
+          select id
+            from app_auth.email_verification_tokens
+           where user_id = $1
+             and consumed_at is null
+             and expires_at > now()
+             and created_at >= now() - ($2::int * interval '1 second')
+           order by created_at desc
+           limit 1
+        `,
+        [account.id, config.auth.emailVerificationReuseSeconds],
+      );
+      if (recentResult.rows[0]) {
+        skippedRecently = true;
+        return;
+      }
+
+      await ensureEmailVerificationAllowed(client, email, requestMeta);
 
       await client.query(
         `
@@ -343,13 +446,15 @@ export function createAuthService({ pool, config, emailService = noEmailService(
       );
       await client.query(
         `
-          insert into app_auth.email_verification_tokens (user_id, token_hash, expires_at)
-          values ($1, $2, now() + interval '24 hours')
+          insert into app_auth.email_verification_tokens (user_id, token_hash, expires_at, ip_prefix)
+          values ($1, $2, now() + interval '24 hours', $3)
         `,
-        [account.id, hashOpaqueToken(token, config.auth.refreshTokenPepper)],
+        [account.id, hashOpaqueToken(token, config.auth.refreshTokenPepper), ipPrefix(requestMeta?.ip)],
       );
     });
-    const delivery = accountId
+    const delivery = skippedRecently
+      ? { status: "skipped", reason: "email_verification_recently_sent" }
+      : accountId
       ? await safeEmailDelivery(() => emailService.sendVerificationEmail({
           to: email,
           token,
@@ -658,12 +763,13 @@ export function createAuthService({ pool, config, emailService = noEmailService(
     return { status: "ok" };
   }
 
-  async function requestPasswordReset(input) {
+  async function requestPasswordReset(input, requestMeta = {}) {
     const email = normalizeEmail(input.email);
     assertEmail(email);
     const token = createOpaqueToken();
 
     let accountId = null;
+    let skippedRecently = false;
     await withTransaction(pool, async (client) => {
       const result = await client.query(
         `
@@ -680,6 +786,25 @@ export function createAuthService({ pool, config, emailService = noEmailService(
         return;
       }
       accountId = account.id;
+      const recentResult = await client.query(
+        `
+          select id
+            from app_auth.password_reset_tokens
+           where user_id = $1
+             and consumed_at is null
+             and expires_at > now()
+             and created_at >= now() - ($2::int * interval '1 second')
+           order by created_at desc
+           limit 1
+        `,
+        [account.id, config.auth.passwordResetReuseSeconds],
+      );
+      if (recentResult.rows[0]) {
+        skippedRecently = true;
+        return;
+      }
+
+      await ensurePasswordResetAllowed(client, email, requestMeta);
 
       await client.query(
         `
@@ -692,14 +817,22 @@ export function createAuthService({ pool, config, emailService = noEmailService(
       );
       await client.query(
         `
-          insert into app_auth.password_reset_tokens (user_id, token_hash, expires_at)
-          values ($1, $2, now() + interval '1 hour')
+          insert into app_auth.password_reset_tokens (user_id, token_hash, expires_at, ip_prefix)
+          values ($1, $2, now() + interval '1 hour', $3)
         `,
-        [account.id, hashOpaqueToken(token, config.auth.refreshTokenPepper)],
+        [account.id, hashOpaqueToken(token, config.auth.refreshTokenPepper), ipPrefix(requestMeta?.ip)],
       );
     });
     if (!accountId) {
       throw new AuthError("account_not_found", 404, "未找到这个邮箱对应的账号。");
+    }
+
+    if (skippedRecently) {
+      const delivery = { status: "skipped", reason: "password_reset_recently_sent" };
+      return {
+        status: authEmailStatus(config, delivery),
+        delivery,
+      };
     }
 
     const delivery = await safeEmailDelivery(() => emailService.sendPasswordResetEmail({

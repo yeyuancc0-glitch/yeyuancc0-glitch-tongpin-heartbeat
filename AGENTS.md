@@ -99,6 +99,7 @@
 - self-host Auth 恢复遇到网络错误、CORS/DNS 超时或 API 5xx 时不能清除本地 session；只有明确 401/403 或 refresh token 被拒绝时才清 session，避免短暂后端故障让用户看起来“数据丢失”。
 - staging / production 配置真实 Resend 时，Auth 冒烟和调试账号必须使用 `.test` 保留域；后端邮件服务必须对 `.test` 收件人短路返回 `test_email_skipped` 并提供 debug token，不能调用 Resend 或消耗真实邮件额度。
 - Resend 返回 `daily_quota_exceeded` 后，后端邮件服务必须进入短期熔断并返回 `email_quota_exceeded` / `resend_daily_quota_exceeded`，不能在额度耗尽当天继续反复请求 Resend；前端忘记密码需提示“邮件服务今日额度已达上限”。
+- 注册/邮箱验证/忘记密码这类会触发真实邮件的 Auth 入口必须保留按邮箱和 IP 前缀的服务端限流，并抑制短时间内重复请求再次调用 Resend；真实邮箱不能因为恶意或误触重复请求而持续消耗邮件额度。
 - 运行时产品文案和选项常量放在 `apps/app/lib/constants/appContent.ts`；不要把真实界面常量放回 mock 文件。
 
 ## 前端与体验

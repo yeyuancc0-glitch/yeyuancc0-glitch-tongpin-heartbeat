@@ -92,6 +92,12 @@ requireIncludes("apps/app/features/home/useCoupleData.ts", "mergeProfile", "dash
 requireIncludes("apps/server/src/emailService.mjs", "isReservedTestRecipient(to)", "reserved .test emails must not call Resend");
 requireIncludes("apps/server/src/emailService.mjs", "resend_daily_quota_exceeded", "Resend daily quota cooldown must remain in place");
 requireIncludes("apps/server/src/authService.mjs", "email_quota_exceeded", "Auth API must surface quota status to the frontend");
+requireIncludes("apps/server/src/authService.mjs", "ensurePasswordResetAllowed", "password reset requests must keep email/IP rate limits");
+requireIncludes("apps/server/src/authService.mjs", "password_reset_recently_sent", "password reset requests must suppress duplicate Resend sends");
+requireIncludes("apps/server/src/authService.mjs", "ensureEmailVerificationAllowed", "email verification requests must keep email/IP rate limits");
+requireIncludes("apps/server/src/authService.mjs", "email_verification_recently_sent", "email verification requests must suppress duplicate Resend sends");
+requireIncludes("apps/server/db/migrations/022_password_reset_rate_limit.sql", "password_reset_tokens_ip_created_idx", "password reset rate limiting must keep an indexed IP prefix");
+requireIncludes("apps/server/db/migrations/023_auth_email_verification_rate_limit.sql", "email_verification_tokens_ip_created_idx", "email verification rate limiting must keep an indexed IP prefix");
 requireIncludes("apps/app/features/auth/AuthProvider.tsx", "邮件服务今日额度已达上限", "forgot-password UI must explain Resend daily quota state");
 
 const userAuditScript = "apps/server/scripts/audit-supabase-user-migration.mjs";
