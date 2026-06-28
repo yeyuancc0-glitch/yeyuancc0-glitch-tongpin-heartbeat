@@ -187,6 +187,7 @@
 - 需要推送的是对方新留言、快捷互动、今日胶囊和胶囊信；默认不推送自己触发的通知、删除/已读/设置变更、普通日历事件、喂养类事件、相册上传和历史快捷互动留言。
 - 快捷互动通知标题需兼容 `TA 投递了一点心情` 和 `TA 向你投递了一点心情`；不要只用单一标题判断快捷互动提醒。
 - 通知点击统一经 `apps/app/lib/notifications/openEvents*` 广播到页面；Web Service Worker 点击已有窗口时要 postMessage `tongpin:notification-open`，并 focus / navigate 到目标 URL。
+- `/api/notifications/stream` 的 `afterCreatedAt` 游标必须兼容 ISO 时间、Postgres `Date` 对象和旧浏览器/旧前端留下的 JS `Date.toString()` 字符串；不能把未归一化字符串直接传给 Postgres `timestamptz`，否则 SSE 重连会触发 `notification_stream_failed`。
 - 用户当前没有 Apple Developer Program 账号；在用户准备好前，不推进 iOS 原生 APNs 推送上线。
 
 ## 测试与验证

@@ -174,6 +174,34 @@ async function openNotificationStream({ coupleId, token }) {
   };
 }
 
+async function assertLegacyCursorNotificationStream({ coupleId, token }) {
+  const legacyCursor = new Date(Date.UTC(2026, 5, 21, 3, 49, 42)).toString();
+  const response = await fetch(`${baseUrl}/api/notifications/stream?coupleId=${coupleId}&afterCreatedAt=${encodeURIComponent(legacyCursor)}`, {
+    headers: {
+      Accept: "text/event-stream",
+      Authorization: `Bearer ${token}`,
+    },
+    signal: AbortSignal.timeout(5000),
+  });
+  assert(response.ok && response.body, `legacy cursor notification stream returned ${response.status}`);
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  try {
+    while (!buffer.includes("event: ready")) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      buffer += decoder.decode(value, { stream: true });
+      assert(!buffer.includes("event: error"), `legacy cursor notification stream errored: ${buffer}`);
+    }
+  } finally {
+    await reader.cancel().catch(() => {});
+  }
+  assert(buffer.includes("event: ready"), `legacy cursor notification stream did not become ready: ${buffer}`);
+}
+
 async function register(email) {
   const result = await request("/api/auth/register", {
     method: "POST",
@@ -204,6 +232,7 @@ async function main() {
 
   const stream = await openNotificationStream({ coupleId, token: userB });
   await stream.ready;
+  await assertLegacyCursorNotificationStream({ coupleId, token: userB });
 
   const secretBody = `secret-body-${suffix}`;
   const created = await requestOnFreshSocket(`/api/messages?coupleId=${coupleId}`, {
@@ -255,7 +284,7 @@ async function main() {
     status: "ok",
     baseUrl,
     coupleId,
-    checks: ["message_create_notification", "notification_sse", "low_sensitive_body", "outsider_empty", "mark_read", "dismiss"],
+    checks: ["message_create_notification", "notification_sse", "legacy_cursor_sse", "low_sensitive_body", "outsider_empty", "mark_read", "dismiss"],
   }));
 }
 

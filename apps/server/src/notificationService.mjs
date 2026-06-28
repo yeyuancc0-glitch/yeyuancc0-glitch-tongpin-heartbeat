@@ -17,6 +17,17 @@ const defaultNotificationListLimit = 1000;
 const maxNotificationListLimit = 5000;
 const allowedPlatforms = new Set(["ios", "android", "web", "unknown"]);
 
+function timestampCursor(value) {
+  if (!value) {
+    return null;
+  }
+  if (value instanceof Date) {
+    return Number.isFinite(value.getTime()) ? value.toISOString() : null;
+  }
+  const timestamp = Date.parse(String(value));
+  return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : null;
+}
+
 function assertUuid(value, code, message) {
   if (!uuidPattern.test(String(value || ""))) {
     throw new AuthError(code, 400, message);
@@ -36,7 +47,7 @@ function publicNotification(row) {
     relatedId: row.related_id,
     readAt: row.read_at,
     dismissedAt: row.dismissed_at,
-    createdAt: row.created_at,
+    createdAt: timestampCursor(row.created_at),
   };
 }
 
@@ -478,14 +489,14 @@ export function createNotificationService({ pool, logger = console }) {
     const row = result.rows[0];
     return {
       notificationId: row?.id ?? null,
-      createdAt: row?.created_at ?? null,
+      createdAt: timestampCursor(row?.created_at),
     };
   }
 
   async function listNotificationEvents(input, current) {
     const coupleId = String(input.coupleId || input.couple_id || "").toLowerCase();
     assertUuid(coupleId, "invalid_couple_id", "A valid couple id is required.");
-    const afterCreatedAt = String(input.afterCreatedAt || input.after_created_at || "").trim();
+    const afterCreatedAt = timestampCursor(input.afterCreatedAt || input.after_created_at);
     const afterNotificationId = String(input.afterNotificationId || input.after_notification_id || "").trim().toLowerCase();
     const limit = Math.min(Math.max(Number(input.limit || 20), 1), 50);
     if (afterNotificationId) {
