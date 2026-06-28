@@ -146,6 +146,7 @@
 - 首页 dashboard 的头像/相册 signed URL 水合必须逐资源容错；单个历史 Storage 对象缺失、签名失败或缩略图异常只能让该图片降级为空/占位，不能让整个 dashboard 刷新失败或清空其它业务数据。
 - self-host 路径下头像使用 MinIO `profile-avatars`，相册使用 MinIO `couple-media`。数据库只保存 Storage path，前端展示时通过自建 API 生成 signed URL，不能把 signed URL 写回数据库。
 - 头像与相册缩略图使用独立 Storage path：`profiles.avatar_thumbnail_url`、`media_files.thumbnail_storage_path`；列表/九宫格/记忆流优先展示缩略图，点开预览才按需读取原图。
+- 自建完整性审计必须校验 ready 相册原图、头像原图与数据库路径在 MinIO 中真实存在；原图缺失是 failure。头像/相册缩略图缺失是 warning，读取缩略图 signed URL 时必须回退原图，避免迁移或对象缺失让图片表现为“上传后消失”。
 - 相册大图预览应保留缩略图托底，并对当前与相邻照片的原图 signed URL 做预签名和图片预取；已加载图片 URL 需要跨组件实例记忆，避免切图后立即重复闪加载。
 - self-host 头像上传、移除或资料保存成功后，前端必须把返回的 profile 合并回当前 dashboard 状态，并保留路径未变时已有的头像 signed URL；不要只依赖返回上一页后的全量 reload，否则会表现成“上传后消失”。
 - self-host 相册上传完成并拿到 ready `media_files` 记录后，前端必须先把新媒体合并进当前 dashboard / 相册状态；后台 reload 只做校准，不能把上传成功后的显示完全依赖一次全量刷新，否则刷新被跳过、失败或列表上限不一致时会表现成“上传后消失”。

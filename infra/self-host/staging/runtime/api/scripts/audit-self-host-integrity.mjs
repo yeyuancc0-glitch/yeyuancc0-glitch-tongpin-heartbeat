@@ -2,7 +2,10 @@
 
 import process from "node:process";
 
+import { HeadObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import pg from "pg";
+
+import { loadConfig } from "../src/config.mjs";
 
 const targetUrl = process.env.SELF_HOST_DB_URL || process.env.MIGRATION_SELF_HOST_DB_URL || buildSelfHostDbUrlFromEnv(process.env);
 const staleUploadHours = positiveInteger(process.env.INTEGRITY_AUDIT_STALE_UPLOAD_HOURS, 1);
@@ -14,6 +17,16 @@ if (!targetUrl) {
 }
 
 const pool = new pg.Pool({ connectionString: targetUrl, max: 2 });
+const config = loadConfig(process.env);
+const s3 = new S3Client({
+  endpoint: config.storage.endpoint,
+  region: config.storage.region,
+  forcePathStyle: true,
+  credentials: {
+    accessKeyId: config.storage.accessKeyId,
+    secretAccessKey: config.storage.secretAccessKey,
+  },
+});
 
 async function main() {
   const [
@@ -45,6 +58,10 @@ async function main() {
     invalidCouplePetMemories,
     stalePendingMedia,
     stalePendingAvatarUploads,
+    missingMediaObjects,
+    missingAvatarObjects,
+    missingMediaThumbnailObjects,
+    missingAvatarThumbnailObjects,
   ] = await Promise.all([
     totalsSummary(),
     sampleCount(`
@@ -216,6 +233,38 @@ async function main() {
     relationExists("public.profile_avatar_uploads").then((exists) => exists
       ? staleUploads("public.profile_avatar_uploads", "upload_status = 'pending'", "created_at")
       : { count: 0, samples: [], skipped: "missing_relation" }),
+    missingStorageObjects({
+      relation: "public.media_files",
+      idColumn: "id",
+      pathColumn: "storage_path",
+      bucket: config.storage.bucket,
+      filter: "deleted_at is null and upload_status = 'ready'",
+      orderColumn: "created_at",
+    }),
+    missingStorageObjects({
+      relation: "public.profiles",
+      idColumn: "id",
+      pathColumn: "avatar_storage_path",
+      bucket: config.storage.avatarBucket,
+      filter: "avatar_storage_path is not null",
+      orderColumn: "updated_at",
+    }),
+    missingStorageObjects({
+      relation: "public.media_files",
+      idColumn: "id",
+      pathColumn: "thumbnail_storage_path",
+      bucket: config.storage.bucket,
+      filter: "deleted_at is null and upload_status = 'ready' and thumbnail_storage_path is not null",
+      orderColumn: "created_at",
+    }),
+    missingStorageObjects({
+      relation: "public.profiles",
+      idColumn: "id",
+      pathColumn: "avatar_thumbnail_storage_path",
+      bucket: config.storage.avatarBucket,
+      filter: "avatar_thumbnail_storage_path is not null",
+      orderColumn: "updated_at",
+    }),
   ]);
 
   const failures = {
@@ -244,10 +293,14 @@ async function main() {
     invalidCoupleCreationSpaces,
     invalidCoupleCreationActions,
     invalidCouplePetMemories,
+    missingMediaObjects,
+    missingAvatarObjects,
   };
   const warnings = {
     stalePendingMedia,
     stalePendingAvatarUploads,
+    missingMediaThumbnailObjects,
+    missingAvatarThumbnailObjects,
   };
   const failureCount = Object.values(failures).reduce((sum, item) => sum + Number(item.count || 0), 0);
   const warningCount = Object.values(warnings).reduce((sum, item) => sum + Number(item.count || 0), 0);
@@ -355,6 +408,39 @@ async function staleUploads(relation, predicate, orderColumn) {
     `,
     [staleUploadHours],
   );
+}
+
+async function missingStorageObjects({ relation, idColumn, pathColumn, bucket, filter, orderColumn }) {
+  if (!(await relationExists(relation))) {
+    return { count: 0, samples: [], skipped: "missing_relation" };
+  }
+  const result = await pool.query(
+    `
+      select ${idColumn} as id, ${pathColumn} as storage_path, ${orderColumn} as created_at
+        from ${relation}
+       where ${filter}
+       order by ${orderColumn} desc nulls last
+    `,
+  );
+  const missing = [];
+  for (const row of result.rows) {
+    if (!(await storageObjectExists(bucket, row.storage_path))) {
+      missing.push(row);
+    }
+  }
+  return {
+    count: missing.length,
+    samples: missing.slice(0, sampleLimit).map(sanitizeSample),
+  };
+}
+
+async function storageObjectExists(bucket, key) {
+  try {
+    await s3.send(new HeadObjectCommand({ Bucket: bucket, Key: key }));
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function sampleCount(sql, values = []) {

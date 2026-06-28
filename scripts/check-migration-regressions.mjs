@@ -90,6 +90,7 @@ requireIncludes("apps/app/features/home/useHomePhotoActions.ts", "mergeMediaFile
 requireIncludes("apps/app/features/profile/ProfileScreen.tsx", "onProfileChanged?.(nextProfile);", "profile/avatar changes must merge returned profile into dashboard state");
 requireIncludes("apps/app/features/home/useCoupleData.ts", "mergeMediaFile", "dashboard data hook must expose media merge helper");
 requireIncludes("apps/app/features/home/useCoupleData.ts", "mergeProfile", "dashboard data hook must expose profile merge helper");
+requireIncludes("apps/server/src/storageService.mjs", "variant !== \"thumbnail\" || key === row.avatar_storage_path", "avatar thumbnail read URLs must fall back to the original avatar object when the thumbnail object is missing");
 
 requireIncludes("apps/server/src/emailService.mjs", "isReservedTestRecipient(to)", "reserved .test emails must not call Resend");
 requireIncludes("apps/server/src/emailService.mjs", "resend_daily_quota_exceeded", "Resend daily quota cooldown must remain in place");
@@ -173,6 +174,11 @@ requireIncludes(integrityAuditScript, "invalidCoupleCheckins", "self-host integr
 requireIncludes(integrityAuditScript, "invalidCoupleCreationSpaces", "self-host integrity audit must catch creation data attached to missing or malformed active couples");
 requireIncludes(integrityAuditScript, "invisibleMoodStatuses", "self-host integrity audit must catch mood status rows hidden by membership issues");
 requireIncludes(integrityAuditScript, "stalePendingMedia", "self-host integrity audit must catch media uploads stuck pending");
+requireIncludes(integrityAuditScript, "missingStorageObjects", "self-host integrity audit must check ready media/avatar database paths against object storage");
+requireIncludes(integrityAuditScript, "missingMediaObjects", "self-host integrity audit must fail when ready media originals are missing from object storage");
+requireIncludes(integrityAuditScript, "missingAvatarObjects", "self-host integrity audit must fail when avatar originals are missing from object storage");
+requireIncludes(integrityAuditScript, "missingMediaThumbnailObjects", "self-host integrity audit must warn when media thumbnails are missing from object storage");
+requireIncludes(integrityAuditScript, "missingAvatarThumbnailObjects", "self-host integrity audit must warn when avatar thumbnails are missing from object storage");
 requireIncludes("apps/server/package.json", "audit:self-host-integrity", "server package must expose the self-host integrity audit command");
 requireIncludes("infra/self-host/staging/scripts/monitor-staging.sh", "audit:self-host-integrity", "staging monitor must run the self-host integrity audit");
 

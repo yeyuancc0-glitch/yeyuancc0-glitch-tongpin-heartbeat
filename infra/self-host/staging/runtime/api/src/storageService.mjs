@@ -363,8 +363,16 @@ export function createStorageService({ pool, config }) {
       throw new AuthError("avatar_not_found", 404, "Avatar was not found.");
     }
 
-    const key = variant === "thumbnail" && row.avatar_thumbnail_storage_path ? row.avatar_thumbnail_storage_path : row.avatar_storage_path;
-    await s3.send(new HeadObjectCommand({ Bucket: config.storage.avatarBucket, Key: key }));
+    let key = variant === "thumbnail" && row.avatar_thumbnail_storage_path ? row.avatar_thumbnail_storage_path : row.avatar_storage_path;
+    try {
+      await s3.send(new HeadObjectCommand({ Bucket: config.storage.avatarBucket, Key: key }));
+    } catch (error) {
+      if (variant !== "thumbnail" || key === row.avatar_storage_path) {
+        throw error;
+      }
+      key = row.avatar_storage_path;
+      await s3.send(new HeadObjectCommand({ Bucket: config.storage.avatarBucket, Key: key }));
+    }
     const url = await getSignedUrl(
       publicS3,
       new GetObjectCommand({ Bucket: config.storage.avatarBucket, Key: key }),
