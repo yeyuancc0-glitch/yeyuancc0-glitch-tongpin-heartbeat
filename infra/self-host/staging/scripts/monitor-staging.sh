@@ -115,6 +115,17 @@ check_local_dependencies() {
   fi
 }
 
+check_web_push_vapid_config() {
+  local vapid_status
+  vapid_status="$("${DOCKER_COMPOSE[@]}" --env-file .env -f compose.yml exec -T worker sh -lc \
+    'test -n "${WEB_PUSH_VAPID_PUBLIC_KEY:-}" && test -n "${WEB_PUSH_VAPID_PRIVATE_KEY:-}" && printf configured || printf missing' 2>/dev/null || true)"
+  if [ "$vapid_status" = "configured" ]; then
+    ok "web_push_vapid configured=true"
+  else
+    fail "web_push_vapid configured=false"
+  fi
+}
+
 check_public_endpoints() {
   local deep
   deep="$(curl -fsS --max-time 20 "$API_URL/api/health/deep" 2>/dev/null || true)"
@@ -253,6 +264,7 @@ check_command curl
 check_command awk
 check_required_services
 check_local_dependencies
+check_web_push_vapid_config
 check_public_endpoints
 check_disk
 check_backup_freshness

@@ -183,6 +183,7 @@
 - Android Edge 在中国大陆环境下不作为可用网页后台推送渠道；即使通知权限已允许，`PushManager.subscribe()` 仍可能报 `Registration failed - push service error`。前端应提示使用站内通知，可靠系统推送需要后续接入原生 Android 国内厂商推送通道。
 - iPhone 网页推送要求 iOS 16.4+，且用户先将网站添加到主屏幕，再从主屏幕图标打开并授权。
 - Web 构建时不要让 `expo export` 直接解析原生推送依赖；平台拆分逻辑用于绕开 `expo-application` / `expo-device` / `expo-notifications`。
+- 自建 staging 已配置 Web Push VAPID：私钥只保存在服务器 `/opt/tongpin/.env`，不要写入仓库或聊天；发布自建 Web 静态前端时必须带 `EXPO_PUBLIC_WEB_PUSH_VAPID_PUBLIC_KEY` 构建，否则浏览器订阅会进入 `missing_vapid_key`。
 - `send-push-notifications` 只接受 service role key 或 `PUSH_DELIVERY_WORKER_SECRET`；前端客户端不要直接调用该函数。
 - 需要推送的是对方新留言、快捷互动、今日胶囊和胶囊信；默认不推送自己触发的通知、删除/已读/设置变更、普通日历事件、喂养类事件、相册上传和历史快捷互动留言。
 - 快捷互动通知标题需兼容 `TA 投递了一点心情` 和 `TA 向你投递了一点心情`；不要只用单一标题判断快捷互动提醒。
