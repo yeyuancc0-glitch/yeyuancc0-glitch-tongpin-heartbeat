@@ -43,7 +43,7 @@
 - 环境变量检查：`npm run check:env`
 - 自建 API 语法检查：`npm run check:server`
 - 自建 Auth 邮件投递自检：`node apps/server/scripts/check-email-service.mjs`
-- 自建目标库整体完整性审计：服务器 `/opt/tongpin` 下执行 `sudo docker compose exec -T api npm run audit:self-host-integrity --silent`；本地可用 `SELF_HOST_DB_URL="postgresql://..." npm run audit:self-host-integrity -w @tongpin/server`。该审计只输出计数和脱敏 id，用于发现账号/profile 缺失、active couple 异常、业务数据因关系边界不可见、上传长期 pending 等迁移维稳问题。
+- 自建目标库整体完整性审计：服务器 `/opt/tongpin` 下执行 `sudo docker compose exec -T api npm run audit:self-host-integrity --silent`；本地可用 `SELF_HOST_DB_URL="postgresql://..." npm run audit:self-host-integrity -w @tongpin/server`。该审计只输出计数和脱敏 id，用于发现账号/profile 缺失、active couple 异常、业务数据因关系边界不可见、上传长期 pending 等迁移维稳问题。对象存储 HEAD 校验由 `INTEGRITY_AUDIT_STORAGE_CHECK=auto|true|false` 控制：服务器/监控必须在 MinIO 环境齐全时启用；本地只连 DB 且缺少 MinIO 环境时可自动跳过，避免误报图片对象全部缺失。
 - 服务器 Supabase 旧数据迁移编排 dry-run：服务器 `/opt/tongpin` 下执行 `bash scripts/run-supabase-migration.sh`
 - 服务器 Supabase 旧数据迁移编排 apply：服务器 `/opt/tongpin` 下执行 `bash scripts/run-supabase-migration.sh --apply`
 - Supabase 旧数据迁移前置检查：`SUPABASE_DB_URL="postgresql://..." SELF_HOST_DB_URL="postgresql://..." SUPABASE_STORAGE_S3_ENDPOINT="https://<project-ref>.storage.supabase.co/storage/v1/s3" SUPABASE_STORAGE_S3_REGION="..." SUPABASE_STORAGE_S3_ACCESS_KEY_ID="..." SUPABASE_STORAGE_S3_SECRET_ACCESS_KEY="..." npm run migrate:supabase:preflight -w @tongpin/server`

@@ -5,11 +5,10 @@ import process from "node:process";
 import { HeadObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import pg from "pg";
 
-import { loadConfig } from "../src/config.mjs";
-
 const targetUrl = process.env.SELF_HOST_DB_URL || process.env.MIGRATION_SELF_HOST_DB_URL || buildSelfHostDbUrlFromEnv(process.env);
 const staleUploadHours = positiveInteger(process.env.INTEGRITY_AUDIT_STALE_UPLOAD_HOURS, 1);
 const sampleLimit = positiveInteger(process.env.INTEGRITY_AUDIT_SAMPLE_LIMIT, 10);
+const storageAudit = createStorageAudit(process.env);
 
 if (!targetUrl) {
   console.error("Missing self-host database URL. Set SELF_HOST_DB_URL or POSTGRES_* self-host variables.");
@@ -17,16 +16,7 @@ if (!targetUrl) {
 }
 
 const pool = new pg.Pool({ connectionString: targetUrl, max: 2 });
-const config = loadConfig(process.env);
-const s3 = new S3Client({
-  endpoint: config.storage.endpoint,
-  region: config.storage.region,
-  forcePathStyle: true,
-  credentials: {
-    accessKeyId: config.storage.accessKeyId,
-    secretAccessKey: config.storage.secretAccessKey,
-  },
-});
+const s3 = storageAudit.enabled ? new S3Client(storageAudit.s3ClientConfig) : null;
 
 async function main() {
   const [
@@ -237,7 +227,7 @@ async function main() {
       relation: "public.media_files",
       idColumn: "id",
       pathColumn: "storage_path",
-      bucket: config.storage.bucket,
+      bucket: storageAudit.mediaBucket,
       filter: "deleted_at is null and upload_status = 'ready'",
       orderColumn: "created_at",
     }),
@@ -245,7 +235,7 @@ async function main() {
       relation: "public.profiles",
       idColumn: "id",
       pathColumn: "avatar_storage_path",
-      bucket: config.storage.avatarBucket,
+      bucket: storageAudit.avatarBucket,
       filter: "avatar_storage_path is not null",
       orderColumn: "updated_at",
     }),
@@ -253,7 +243,7 @@ async function main() {
       relation: "public.media_files",
       idColumn: "id",
       pathColumn: "thumbnail_storage_path",
-      bucket: config.storage.bucket,
+      bucket: storageAudit.mediaBucket,
       filter: "deleted_at is null and upload_status = 'ready' and thumbnail_storage_path is not null",
       orderColumn: "created_at",
     }),
@@ -261,7 +251,7 @@ async function main() {
       relation: "public.profiles",
       idColumn: "id",
       pathColumn: "avatar_thumbnail_storage_path",
-      bucket: config.storage.avatarBucket,
+      bucket: storageAudit.avatarBucket,
       filter: "avatar_thumbnail_storage_path is not null",
       orderColumn: "updated_at",
     }),
@@ -309,6 +299,11 @@ async function main() {
     status: failureCount > 0 ? "needs_attention" : warningCount > 0 ? "warning" : "ok",
     generatedAt: new Date().toISOString(),
     staleUploadHours,
+    storageAudit: {
+      mode: storageAudit.mode,
+      enabled: storageAudit.enabled,
+      skipped: storageAudit.enabled ? null : storageAudit.reason,
+    },
     totals,
     failures,
     warnings,
@@ -411,6 +406,9 @@ async function staleUploads(relation, predicate, orderColumn) {
 }
 
 async function missingStorageObjects({ relation, idColumn, pathColumn, bucket, filter, orderColumn }) {
+  if (!storageAudit.enabled) {
+    return { count: 0, samples: [], skipped: storageAudit.reason };
+  }
   if (!(await relationExists(relation))) {
     return { count: 0, samples: [], skipped: "missing_relation" };
   }
@@ -441,6 +439,62 @@ async function storageObjectExists(bucket, key) {
   } catch {
     return false;
   }
+}
+
+function createStorageAudit(env) {
+  const mode = normalizeStorageAuditMode(env.INTEGRITY_AUDIT_STORAGE_CHECK);
+  if (mode === "false") {
+    return { mode, enabled: false, reason: "storage_audit_disabled" };
+  }
+
+  const missing = [];
+  for (const name of ["MINIO_ENDPOINT", "MINIO_ROOT_USER", "MINIO_ROOT_PASSWORD"]) {
+    if (!String(env[name] ?? "").trim()) {
+      missing.push(name);
+    }
+  }
+  if (missing.length > 0) {
+    if (mode === "true") {
+      throw new Error(`INTEGRITY_AUDIT_STORAGE_CHECK=true requires ${missing.join(", ")}.`);
+    }
+    return { mode, enabled: false, reason: "storage_not_configured" };
+  }
+
+  return {
+    mode,
+    enabled: true,
+    reason: null,
+    mediaBucket: env.MINIO_COUPLE_MEDIA_BUCKET || "couple-media",
+    avatarBucket: env.MINIO_PROFILE_AVATAR_BUCKET || "profile-avatars",
+    s3ClientConfig: {
+      endpoint: endpointUrl(env.MINIO_ENDPOINT),
+      region: env.MINIO_REGION || "us-east-1",
+      forcePathStyle: true,
+      credentials: {
+        accessKeyId: env.MINIO_ROOT_USER,
+        secretAccessKey: env.MINIO_ROOT_PASSWORD,
+      },
+    },
+  };
+}
+
+function normalizeStorageAuditMode(value) {
+  const text = String(value ?? "auto").trim().toLowerCase();
+  if (!text || text === "auto") {
+    return "auto";
+  }
+  if (["1", "true", "yes", "on", "required"].includes(text)) {
+    return "true";
+  }
+  if (["0", "false", "no", "off", "disabled"].includes(text)) {
+    return "false";
+  }
+  throw new Error("INTEGRITY_AUDIT_STORAGE_CHECK must be auto, true, or false.");
+}
+
+function endpointUrl(value) {
+  const text = String(value ?? "").trim();
+  return text.includes("://") ? text : `http://${text}`;
 }
 
 async function sampleCount(sql, values = []) {

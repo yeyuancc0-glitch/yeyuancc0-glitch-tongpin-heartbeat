@@ -174,6 +174,8 @@ requireIncludes(integrityAuditScript, "invalidCoupleCheckins", "self-host integr
 requireIncludes(integrityAuditScript, "invalidCoupleCreationSpaces", "self-host integrity audit must catch creation data attached to missing or malformed active couples");
 requireIncludes(integrityAuditScript, "invisibleMoodStatuses", "self-host integrity audit must catch mood status rows hidden by membership issues");
 requireIncludes(integrityAuditScript, "stalePendingMedia", "self-host integrity audit must catch media uploads stuck pending");
+requireIncludes(integrityAuditScript, "INTEGRITY_AUDIT_STORAGE_CHECK", "self-host integrity audit must make object-storage checks explicit for local DB-only audits");
+requireIncludes(integrityAuditScript, "storage_not_configured", "self-host integrity audit must skip storage HEAD checks instead of false-failing when local MinIO env is absent");
 requireIncludes(integrityAuditScript, "missingStorageObjects", "self-host integrity audit must check ready media/avatar database paths against object storage");
 requireIncludes(integrityAuditScript, "missingMediaObjects", "self-host integrity audit must fail when ready media originals are missing from object storage");
 requireIncludes(integrityAuditScript, "missingAvatarObjects", "self-host integrity audit must fail when avatar originals are missing from object storage");
