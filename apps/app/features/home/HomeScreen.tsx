@@ -111,6 +111,7 @@ export function HomeScreen() {
   useAppPullToRefresh(reload);
   const [activeTab, setActiveTab] = useState<BottomTabKey>("home");
   const [subPage, setSubPage] = useState<SubPage>("main");
+  const [subPageReturnTab, setSubPageReturnTab] = useState<BottomTabKey>("home");
   const [endingCouple, setEndingCouple] = useState(false);
   const [dismissedLetterPopupIds, setDismissedLetterPopupIds] = useState<string[]>([]);
   const [activePhotoPreview, setActivePhotoPreview] = useState<PhotoPreviewState | null>(null);
@@ -488,17 +489,30 @@ export function HomeScreen() {
 
   function goTab(tab: BottomTabKey) {
     setSubPage("main");
+    setSubPageReturnTab(tab);
     setActiveTab(tab);
   }
 
   function returnToMePage() {
     setActiveTab("me");
+    setSubPageReturnTab("me");
     setSubPage("main");
   }
 
   function openSettingPage(page: SettingPage) {
     setActiveTab("me");
+    setSubPageReturnTab("me");
     setSubPage(page);
+  }
+
+  function openSubPage(page: Exclude<SubPage, "main" | SettingPage>, ownerTab: BottomTabKey = activeTab) {
+    setSubPageReturnTab(ownerTab);
+    setSubPage(page);
+  }
+
+  function returnToSubPageOwner() {
+    setActiveTab(subPageReturnTab);
+    setSubPage("main");
   }
 
   async function closeMoodPopup(notification: Notification) {
@@ -510,8 +524,8 @@ export function HomeScreen() {
   async function openLetterPopup(notification: Notification) {
     setDismissedLetterPopupIds((ids) => (ids.includes(notification.id) ? ids : [...ids, notification.id]));
     await markNotificationRead(notification.id);
-    setSubPage("letterInbox");
     setActiveTab("home");
+    openSubPage("letterInbox", "home");
     reload();
   }
 
@@ -535,16 +549,16 @@ export function HomeScreen() {
 
   let content = null;
   if (subPage === "messages") {
-    content = <MessagesPage coupleId={coupleId} messages={visibleMessages} onChanged={reload} onBack={() => setSubPage("main")} />;
+    content = <MessagesPage coupleId={coupleId} messages={visibleMessages} onChanged={reload} onBack={returnToSubPageOwner} />;
   } else if (subPage === "addEvent") {
-    content = <AddEventPage coupleId={coupleId} onSaved={reload} onBack={() => setSubPage("main")} onMovePetForMemoryEvent={movePetForMemoryEventHandler} />;
+    content = <AddEventPage coupleId={coupleId} onSaved={reload} onBack={returnToSubPageOwner} onMovePetForMemoryEvent={movePetForMemoryEventHandler} />;
   } else if (subPage === "writeLetter") {
     content = (
       <WriteLetterPage
         coupleId={coupleId}
         partner={partnerProfile}
         onSaved={reload}
-        onBack={() => setSubPage("main")}
+        onBack={returnToSubPageOwner}
         onMovePetForLetterDelivery={movePetForLetterDeliveryHandler}
         onSendLetter={sendSelfHostLetter}
       />
@@ -555,8 +569,8 @@ export function HomeScreen() {
         letters={data.letters}
         me={me}
         partner={partnerProfile}
-        onBack={() => setSubPage("main")}
-        onReply={() => setSubPage("writeLetter")}
+        onBack={returnToSubPageOwner}
+        onReply={() => openSubPage("writeLetter", subPageReturnTab)}
         onChanged={reload}
         onDismissLetter={dismissSelfHostLetterHandler}
         onMarkLetterRead={markSelfHostLetterReadHandler}
@@ -577,7 +591,7 @@ export function HomeScreen() {
         petUserSettings={petUserSettings}
         townView={creationTownView}
         onTownViewChange={setCreationTownView}
-        onBack={() => setSubPage("main")}
+        onBack={returnToSubPageOwner}
         onChanged={reload}
         disabled={false}
         accessToken={session?.access_token}
@@ -604,7 +618,7 @@ export function HomeScreen() {
         onProfileChanged={mergeProfile}
         onOpenLetters={() => {
           setActiveTab("home");
-          setSubPage("letterInbox");
+          openSubPage("letterInbox", "me");
         }}
       />
     );
@@ -629,13 +643,13 @@ export function HomeScreen() {
         onCancelCustomQuickInteraction={() => {
           cancelCustomQuickInteraction();
         }}
-        onWriteLetter={() => setSubPage("writeLetter")}
+        onWriteLetter={() => openSubPage("writeLetter", "home")}
         onUploadPhoto={(options) => uploadPhoto({ maxFiles: maxMemoryPhotos, currentCount: data.mediaFiles.length, ...options })}
         onPhotoFiles={(files, options) => handlePhotoFiles(files, { maxFiles: maxMemoryPhotos, currentCount: data.mediaFiles.length, ...options })}
         onPreviewPhoto={(file, index) => setActivePhotoPreview({ id: file.id, index: index ?? 0 })}
         onDeletePhoto={deletePhoto}
         onChanged={reload}
-        onOpenMessages={() => setSubPage("messages")}
+        onOpenMessages={() => openSubPage("messages", "home")}
         onQuickInteraction={sendQuickInteraction}
         interactionText={interactionText}
         quickSending={quickSending}
@@ -670,8 +684,8 @@ export function HomeScreen() {
         creationSpace={data.creationSpace}
         petWorldProp={petWorldPropFromDecision(data.creationSpace?.last_world_decision)}
         currentUserId={user?.id ?? ""}
-        onAddEvent={() => setSubPage("addEvent")}
-        onOpenLetter={() => setSubPage("letterInbox")}
+        onAddEvent={() => openSubPage("addEvent", "calendar")}
+        onOpenLetter={() => openSubPage("letterInbox", "calendar")}
         onChanged={reload}
         onUploadMemoryPhoto={({ files, memory, currentCount }) => {
           const options = { caption: memory.title, currentCount, maxFiles: maxMemoryPhotos, successTitle: "图片已加入这段记忆" };
@@ -680,6 +694,7 @@ export function HomeScreen() {
         onPreviewMemoryPhoto={(file) => setActivePhotoPreview({ id: file.id, index: Math.max(0, data.mediaFiles.findIndex((item) => item.id === file.id)) })}
         onCreateCapsule={() => {
           setSubPage("main");
+          setSubPageReturnTab("checkins");
           setActiveTab("checkins");
         }}
         onDeleteCheckin={deleteSelfHostMemoryCheckin}
@@ -712,7 +727,7 @@ export function HomeScreen() {
         surface={visibleGlobalPetSurface ?? "home"}
         creationSpace={data.creationSpace}
         realtimeReaction={realtimePetReaction}
-        onOpenCreation={() => setSubPage("creation")}
+        onOpenCreation={() => openSubPage("creation", activeTab)}
         userSettings={petUserSettings}
       />
       {pendingMoodPopup ? (
@@ -730,7 +745,7 @@ export function HomeScreen() {
           onClose={() => void closeLetterPopup(pendingLetterPopup)}
         />
       ) : null}
-      {subPage === "main" && activeTab === "home" ? <FloatingCreationEntry onOpen={() => setSubPage("creation")} /> : null}
+      {subPage === "main" && activeTab === "home" ? <FloatingCreationEntry onOpen={() => openSubPage("creation", "home")} /> : null}
       {activePhotoPreview ? (
         <PhotoPreviewPopup
           files={data.mediaFiles}

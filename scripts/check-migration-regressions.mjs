@@ -45,10 +45,12 @@ function requireOrder(file, first, second, message) {
 
 const homeScreen = "apps/app/features/home/HomeScreen.tsx";
 requireRegex(homeScreen, /const showsBottomTabBar = subPage === "main" \|\| isSettingDetailPage;/, "setting detail pages must keep the bottom tab bar visible");
-requireOrder(homeScreen, "function openSettingPage(page: SettingPage)", 'setActiveTab("me");\n    setSubPage(page);', "opening settings must keep activeTab on me before setting subPage");
+requireIncludes(homeScreen, 'function openSettingPage(page: SettingPage) {\n    setActiveTab("me");\n    setSubPageReturnTab("me");\n    setSubPage(page);\n  }', "opening settings must keep activeTab on me and record the me return tab before setting subPage");
 requireIncludes(homeScreen, "function returnToMePage()", "settings back path must return to me page state");
 requireIncludes(homeScreen, "onBack={returnToMePage}", "settings detail back must use the me-page return helper");
-requireIncludes(homeScreen, 'setActiveTab("home");\n          setSubPage("letterInbox");', "settings-to-letters navigation must sync activeTab with subPage");
+requireIncludes(homeScreen, 'openSubPage("letterInbox", "me");', "settings-to-letters navigation must return to the me tab instead of dumping users on home");
+requireIncludes(homeScreen, "function returnToSubPageOwner()", "business subpage back path must restore the tab that opened it");
+requireIncludes(homeScreen, 'onBack={returnToSubPageOwner}', "business subpages must use the owner-tab return helper");
 
 forbidRegex("apps/app/features/memory/MemoryPage.tsx", /\b(checkins|messages|events|letters|footprints|mediaFiles|memories|visibleMemories)\.slice\s*\(\s*0\s*,/g, "memory timeline must not truncate historical business lists");
 forbidRegex("apps/app/features/checkins/TodayStoryPage.tsx", /\b(checkins|visibleCheckins)\.slice\s*\(\s*0\s*,/g, "today capsule history must not truncate historical checkins");
