@@ -196,7 +196,7 @@
 - 权限、RLS、RPC、Storage policy、推送队列或数据删除语义变更后，执行 `packages/db/tests/rls_acceptance.sql` 的验收场景。
 - `npm run check:env` 要求 `EXPO_PUBLIC_SELF_HOST_API_URL`，并禁止 `apps/app/.env` 或 shell 环境里继续出现 `EXPO_PUBLIC_SUPABASE_URL` / `EXPO_PUBLIC_SUPABASE_ANON_KEY`；前端 public env 不能再混入 Supabase。
 - `npm run build:web` 会执行 `expo export --platform web --clear && node ../../scripts/prepare-web-dist.mjs`；后处理脚本必须校验 HTML 引用的入口资源和 `/assets/assets/...` 资源存在且非空。
-- Web 静态后处理必须把所有 `.html` 路由（包括 `auth/reset-password.html` 这类嵌套路由）复制为同名目录下的 `index.html`，因为 Caddy 使用无扩展路径服务邮件验证/密码重置等入口；部署时不要用整目录替换破坏 Docker bind mount，优先就地同步文件后重启/刷新 Caddy。
+- Web 静态后处理必须把所有 `.html` 路由（包括 `auth/reset-password.html` 这类嵌套路由）复制为同名目录下的 `index.html`，因为 Caddy 使用无扩展路径服务邮件验证/密码重置等入口；Caddy Web 兜底必须在 `/index.html` 前尝试 `{path}.html` 和 `{path}/index.html`，否则 `/auth/reset-password`、`/auth/verify-email` 会返回首页静态壳而不是对应 Auth 页面；部署时不要用整目录替换破坏 Docker bind mount，优先就地同步文件后重启/刷新 Caddy。
 - 浏览器验收：启动静态预览后打开 `http://localhost:<port>`，检查首页内容、底部导航、相册预览和控制台 error/warn。
 - 大重构或清理类改动应保持严格未使用检查通过：`npm run typecheck -w apps/app -- --noUnusedLocals --noUnusedParameters --pretty false`。
 

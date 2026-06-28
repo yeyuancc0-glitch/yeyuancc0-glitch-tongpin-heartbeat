@@ -5,7 +5,7 @@
 {$APP_DOMAIN} {
 	encode zstd gzip
 	root * /srv/tongpin-web/current
-	try_files {path} /index.html
+	try_files {path} {path}.html {path}/index.html /index.html
 	file_server
 }
 

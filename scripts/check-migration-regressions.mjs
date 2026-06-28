@@ -101,6 +101,11 @@ requireIncludes("apps/server/src/authService.mjs", "email_verification_recently_
 requireIncludes("apps/server/db/migrations/022_password_reset_rate_limit.sql", "password_reset_tokens_ip_created_idx", "password reset rate limiting must keep an indexed IP prefix");
 requireIncludes("apps/server/db/migrations/023_auth_email_verification_rate_limit.sql", "email_verification_tokens_ip_created_idx", "email verification rate limiting must keep an indexed IP prefix");
 requireIncludes("apps/app/features/auth/AuthProvider.tsx", "邮件服务今日额度已达上限", "forgot-password UI must explain Resend daily quota state");
+requireIncludes(
+  "infra/self-host/staging/Caddyfile",
+  "try_files {path} {path}.html {path}/index.html /index.html",
+  "Caddy must serve extensionless nested auth routes from their static HTML before falling back to the home shell",
+);
 
 const userAuditScript = "apps/server/scripts/audit-supabase-user-migration.mjs";
 requireIncludes(userAuditScript, "MIGRATION_AUDIT_TARGET_ONLY", "single-user migration audit must support target-only checks after source credentials are removed");
