@@ -1,6 +1,9 @@
 import { AuthError } from "./authService.mjs";
 import { withTransaction } from "./db.mjs";
 
+const defaultCalendarEventListLimit = 1000;
+const maxCalendarEventListLimit = 5000;
+
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const datePattern = /^\d{4}-\d{2}-\d{2}$/;
 const allowedTypes = new Set(["anniversary", "date", "todo", "other"]);
@@ -58,7 +61,7 @@ export function createCalendarService({ notificationService, pool }) {
   async function listEvents(input, current) {
     const coupleId = String(input.coupleId || input.couple_id || "").toLowerCase();
     assertUuid(coupleId, "invalid_couple_id", "A valid couple id is required.");
-    const limit = Math.min(Math.max(Number(input.limit || 60), 1), 200);
+    const limit = Math.min(Math.max(Number(input.limit || defaultCalendarEventListLimit), 1), maxCalendarEventListLimit);
     const result = await pool.query(
       `
         select *

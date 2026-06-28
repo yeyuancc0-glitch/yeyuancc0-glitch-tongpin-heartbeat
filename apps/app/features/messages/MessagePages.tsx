@@ -115,12 +115,14 @@ export function HomeMessageBoard({
   currentUserId,
   latestMessage,
   onChanged,
+  onOpenAll,
 }: {
   coupleId: string;
   messages: Message[];
   currentUserId: string;
   latestMessage: string;
   onChanged: () => void;
+  onOpenAll: () => void;
 }) {
   const { showToast } = useToast();
   const { session } = useAuth();
@@ -174,8 +176,18 @@ export function HomeMessageBoard({
       <View {...petAnchorProps("home-message-board", "message-board")} style={styles.messageBoardAnchorWrap}>
       <View pointerEvents="none" style={styles.messagePaperFold} />
       <View style={styles.sectionHeader}>
-        <Text style={styles.sectionTitle}>留言板</Text>
-        <MessageCircle color={colors.accentDark} size={18} strokeWidth={2.4} />
+        <View style={styles.sectionTitleGroup}>
+          <Text style={styles.sectionTitle}>留言板</Text>
+          {messages.length > 0 ? <Text style={styles.sectionMetaText}>共 {messages.length} 条</Text> : null}
+        </View>
+        <View style={styles.homeMessageHeaderActions}>
+          {messages.length > 4 ? (
+            <BouncyPressable accessibilityRole="button" accessibilityLabel="查看全部留言" onPress={onOpenAll} haptic="selection" style={styles.homeMessageViewAllButton}>
+              <Text style={styles.homeMessageViewAllText}>查看全部</Text>
+            </BouncyPressable>
+          ) : null}
+          <MessageCircle color={colors.accentDark} size={18} strokeWidth={2.4} />
+        </View>
       </View>
       {messages.length === 0 ? <Text style={styles.bodyText}>{latestMessage}</Text> : null}
       <View style={styles.homeMessageComposer}>

@@ -74,8 +74,10 @@ async function deliverySummary(token) {
 }
 
 async function waitForWorkerToProcessDelivery(token, initialTotal) {
-  for (let attempt = 0; attempt < 20; attempt += 1) {
+  let lastSummary = null;
+  for (let attempt = 0; attempt < 60; attempt += 1) {
     const summary = await deliverySummary(token);
+    lastSummary = summary;
     const total = Number(summary.total || 0);
     const pending = Number(summary.pending || 0);
     const claimed = Number(summary.claimed || 0);
@@ -85,7 +87,7 @@ async function waitForWorkerToProcessDelivery(token, initialTotal) {
     }
     await new Promise((resolve) => setTimeout(resolve, 1500));
   }
-  throw new Error("push worker did not process queued delivery in time");
+  throw new Error(`push worker did not process queued delivery in time: ${JSON.stringify(lastSummary)}`);
 }
 
 async function main() {

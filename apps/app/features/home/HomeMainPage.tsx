@@ -51,6 +51,7 @@ export function HomeMainPage({
   onPreviewPhoto,
   onDeletePhoto,
   onChanged,
+  onOpenMessages,
   interactionText,
   quickSending,
   mediaFiles,
@@ -79,6 +80,7 @@ export function HomeMainPage({
   onPreviewPhoto: (file: MediaFile, index?: number) => void;
   onDeletePhoto: (file: MediaFile) => void;
   onChanged: () => void;
+  onOpenMessages: () => void;
   interactionText: string;
   quickSending: boolean;
   mediaFiles: MediaFile[];
@@ -222,6 +224,7 @@ export function HomeMainPage({
         currentUserId={currentUserId}
         latestMessage={latestMessage}
         onChanged={onChanged}
+        onOpenAll={onOpenMessages}
       />
 
       <PhotoAlbumCard mediaFiles={mediaFiles} onUploadPhoto={onUploadPhoto} onPhotoFiles={onPhotoFiles} onPreviewPhoto={onPreviewPhoto} onDeletePhoto={onDeletePhoto} />

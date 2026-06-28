@@ -38,7 +38,7 @@ export async function listSelfHostCalendarEvents(input: {
     accessToken: input.accessToken,
     query: {
       coupleId: input.coupleId,
-      limit: input.limit ?? 60,
+      limit: input.limit ?? 1000,
     },
   });
   return response.events.map(mapSelfHostCalendarEvent);

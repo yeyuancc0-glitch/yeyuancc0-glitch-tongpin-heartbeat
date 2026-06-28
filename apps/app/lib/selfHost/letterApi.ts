@@ -46,7 +46,7 @@ export async function listSelfHostLetters(input: {
     accessToken: input.accessToken,
     query: {
       coupleId: input.coupleId,
-      limit: input.limit ?? 30,
+      limit: input.limit ?? 1000,
     },
   });
   return response.letters.map(mapSelfHostLetter);

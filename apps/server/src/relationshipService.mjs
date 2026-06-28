@@ -57,6 +57,26 @@ function relationshipStartedAtInput(input) {
   return String(value);
 }
 
+function rethrowInviteAcceptError(error) {
+  if (error?.code !== "P0001") {
+    throw error;
+  }
+  const code = String(error.message || "invite_accept_failed");
+  const status =
+    code === "invite_not_found" ? 404 :
+    code === "invite_not_pending" || code === "active_couple_exists" ? 409 :
+    code === "invite_expired" ? 410 :
+    400;
+  const message =
+    code === "invite_not_found" ? "Invite was not found." :
+    code === "invite_not_pending" ? "Invite is no longer pending." :
+    code === "invite_expired" ? "Invite has expired." :
+    code === "cannot_accept_own_invite" ? "You cannot accept your own invite." :
+    code === "active_couple_exists" ? "User already has an active couple." :
+    "Invite could not be accepted.";
+  throw new AuthError(code, status, message);
+}
+
 export function createRelationshipService({ pool }) {
   async function activeCouple(current) {
     const result = await pool.query(
@@ -138,20 +158,27 @@ export function createRelationshipService({ pool }) {
       throw new AuthError("invalid_invite_code", 400, "Invite code is invalid.");
     }
     const startedAt = relationshipStartedAtInput(input);
-    const result = await pool.query(
-      `
-        with accepted as (
-          select public.accept_pair_invite($1, $2, $3::date) as couple_id
-        )
-        select c.*
-        from public.couples c
-        join accepted on accepted.couple_id = c.id
-      `,
-      [code, current.user.id, startedAt],
-    );
-    return {
-      couple: publicCouple(result.rows[0]),
-    };
+    try {
+      return await withTransaction(pool, async (client) => {
+        const accepted = await client.query(
+          "select public.accept_pair_invite($1, $2, $3::date) as couple_id",
+          [code, current.user.id, startedAt],
+        );
+        const coupleId = accepted.rows[0]?.couple_id;
+        if (!coupleId) {
+          throw new AuthError("invite_accept_failed", 500, "Invite could not be accepted.");
+        }
+        const result = await client.query("select * from public.couples where id = $1", [coupleId]);
+        if (!result.rows[0]) {
+          throw new AuthError("invite_accept_failed", 500, "Accepted couple could not be loaded.");
+        }
+        return {
+          couple: publicCouple(result.rows[0]),
+        };
+      });
+    } catch (error) {
+      rethrowInviteAcceptError(error);
+    }
   }
 
   return {

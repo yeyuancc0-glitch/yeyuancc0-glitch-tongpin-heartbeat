@@ -488,12 +488,12 @@ export function TodayStoryPage({
       <Card style={styles.historyCapsuleCard}>
         <View style={styles.sectionHeader}>
           <Text style={styles.sectionTitle}>历史胶囊</Text>
-          <Text style={styles.linkText}>查看全部</Text>
+          {visibleCheckins.length ? <Text style={styles.linkText}>共 {visibleCheckins.length} 颗</Text> : null}
         </View>
         {visibleCheckins.length === 0 ? (
           <EmptyState title="还没有历史胶囊" description="第一颗日常胶囊会从今天开始。" />
         ) : (
-          visibleCheckins.slice(0, 4).map((item) => {
+          visibleCheckins.map((item) => {
             const story = splitStory(item.content);
             return <ActivityRow key={item.id} title={`${story.mood ? `${story.mood}：` : ""}${story.body}`} meta={item.checkin_date} icon={story.iconImage} />;
           })

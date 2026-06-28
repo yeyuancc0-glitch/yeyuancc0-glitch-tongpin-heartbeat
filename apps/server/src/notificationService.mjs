@@ -13,6 +13,8 @@ const allowedPreferenceKeys = new Set([
   "calendar_enabled",
   "quiet_hours_enabled",
 ]);
+const defaultNotificationListLimit = 1000;
+const maxNotificationListLimit = 5000;
 const allowedPlatforms = new Set(["ios", "android", "web", "unknown"]);
 
 function assertUuid(value, code, message) {
@@ -440,7 +442,7 @@ export function createNotificationService({ pool, logger = console }) {
   async function listNotifications(input, current) {
     const coupleId = String(input.coupleId || input.couple_id || "").toLowerCase();
     assertUuid(coupleId, "invalid_couple_id", "A valid couple id is required.");
-    const limit = Math.min(Math.max(Number(input.limit || 16), 1), 100);
+    const limit = Math.min(Math.max(Number(input.limit || defaultNotificationListLimit), 1), maxNotificationListLimit);
     const result = await pool.query(
       `
         select *

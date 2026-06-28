@@ -1,6 +1,9 @@
 import { AuthError } from "./authService.mjs";
 import { withTransaction } from "./db.mjs";
 
+const defaultMessageListLimit = 1000;
+const maxMessageListLimit = 5000;
+
 const messageSelect = `
   select
     m.*,
@@ -56,7 +59,7 @@ export function createMessageService({ notificationService, pool }) {
   async function listMessages(input, current) {
     const coupleId = String(input.coupleId || input.couple_id || "").toLowerCase();
     assertUuid(coupleId, "invalid_couple_id", "A valid couple id is required.");
-    const limit = Math.min(Math.max(Number(input.limit || 30), 1), 100);
+    const limit = Math.min(Math.max(Number(input.limit || defaultMessageListLimit), 1), maxMessageListLimit);
     const result = await pool.query(
       `
         ${messageSelect}

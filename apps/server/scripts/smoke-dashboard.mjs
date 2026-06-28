@@ -141,6 +141,21 @@ async function main() {
     body: { coupleId, title: "dashboard event", eventDate: "2026-06-24", type: "date" },
   });
   assert(event.response.status === 201, statusMessage("create event", event));
+  const historicalEvents = [];
+  for (let index = 0; index < historicalListCount; index += 1) {
+    const historicalEvent = await request("/api/calendar-events", {
+      method: "POST",
+      token: userA,
+      body: {
+        coupleId,
+        title: `dashboard historical event ${index}`,
+        eventDate: dateDaysBefore("2026-06-23", index),
+        type: "date",
+      },
+    });
+    assert(historicalEvent.response.status === 201, statusMessage(`create historical event ${index}`, historicalEvent));
+    historicalEvents.push(historicalEvent.json.event);
+  }
   const historicalFootprints = [];
   for (let index = 0; index < historicalListCount; index += 1) {
     const footprint = await request("/api/footprints", {
@@ -191,6 +206,10 @@ async function main() {
     assert(dashboard.json.dashboard?.letters?.some((item) => item.id === historicalLetter.id), `dashboard historical letter missing: ${historicalLetter.id}`);
   }
   assert(dashboard.json.dashboard?.events?.some((item) => item.id === event.json.event.id), "dashboard event missing");
+  assert(dashboard.json.dashboard?.events?.length >= historicalEvents.length + 1, "dashboard should include historical events beyond old dashboard limits");
+  for (const historicalEvent of historicalEvents) {
+    assert(dashboard.json.dashboard?.events?.some((item) => item.id === historicalEvent.id), `dashboard historical event missing: ${historicalEvent.id}`);
+  }
   assert(dashboard.json.dashboard?.footprints?.length >= historicalFootprints.length, "dashboard should include historical footprints beyond old dashboard limits");
   for (const historicalFootprint of historicalFootprints) {
     assert(dashboard.json.dashboard?.footprints?.some((item) => item.id === historicalFootprint.id), `dashboard historical footprint missing: ${historicalFootprint.id}`);
@@ -201,11 +220,30 @@ async function main() {
   }
   assert(Array.isArray(dashboard.json.dashboard?.notifications), "dashboard notifications missing");
 
+  const directMessages = await request(`/api/messages?coupleId=${coupleId}`, { token: userB });
+  assert(directMessages.response.status === 200, statusMessage("direct messages default list", directMessages));
+  assert(directMessages.json.messages?.length >= historicalMessages.length + 32, "direct messages default list should not use old preview limit");
+  const directCheckins = await request(`/api/checkins?coupleId=${coupleId}`, { token: userB });
+  assert(directCheckins.response.status === 200, statusMessage("direct checkins default list", directCheckins));
+  assert(directCheckins.json.checkins?.length >= historicalCheckins.length + 1, "direct checkins default list should include historical checkins");
+  const directLetters = await request(`/api/letters?coupleId=${coupleId}`, { token: userB });
+  assert(directLetters.response.status === 200, statusMessage("direct letters default list", directLetters));
+  assert(directLetters.json.letters?.length >= historicalLetters.length, "direct letters default list should not use old preview limit");
+  const directEvents = await request(`/api/calendar-events?coupleId=${coupleId}`, { token: userB });
+  assert(directEvents.response.status === 200, statusMessage("direct events default list", directEvents));
+  assert(directEvents.json.events?.length >= historicalEvents.length + 1, "direct events default list should not use old preview limit");
+  const directFootprints = await request(`/api/footprints?coupleId=${coupleId}`, { token: userB });
+  assert(directFootprints.response.status === 200, statusMessage("direct footprints default list", directFootprints));
+  assert(directFootprints.json.footprints?.length >= historicalFootprints.length, "direct footprints default list should not use old preview limit");
+  const directActions = await request(`/api/creation/actions?coupleId=${coupleId}`, { token: userB });
+  assert(directActions.response.status === 200, statusMessage("direct creation actions default list", directActions));
+  assert(directActions.json.creationActions?.length >= historicalActions.length, "direct creation actions default list should not use old preview limit");
+
   console.log(JSON.stringify({
     status: "ok",
     baseUrl,
     coupleId,
-    checks: ["profile_without_couple", "pending_invites", "paired_dashboard", "members", "historical_messages_above_100", "historical_checkins_above_100", "historical_letters_above_100", "events", "historical_footprints_above_100", "historical_creation_actions_above_100"],
+    checks: ["profile_without_couple", "pending_invites", "paired_dashboard", "members", "historical_messages_above_100", "historical_checkins_above_100", "historical_letters_above_100", "historical_events_above_100", "historical_footprints_above_100", "historical_creation_actions_above_100", "direct_default_lists_above_old_preview_limits"],
   }));
 }
 

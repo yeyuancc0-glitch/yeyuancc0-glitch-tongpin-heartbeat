@@ -42,7 +42,7 @@ export async function listSelfHostNotifications(input: {
     accessToken: input.accessToken,
     query: {
       coupleId: input.coupleId,
-      limit: input.limit ?? 100,
+      limit: input.limit ?? 1000,
     },
   });
   return response.notifications.map(mapSelfHostNotification);

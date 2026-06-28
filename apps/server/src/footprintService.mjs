@@ -1,6 +1,9 @@
 import { AuthError } from "./authService.mjs";
 import { withTransaction } from "./db.mjs";
 
+const defaultFootprintListLimit = 1000;
+const maxFootprintListLimit = 5000;
+
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const datePattern = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -81,7 +84,7 @@ export function createFootprintService({ pool }) {
   async function listFootprints(input, current) {
     const coupleId = String(input.coupleId || input.couple_id || "").toLowerCase();
     assertUuid(coupleId, "invalid_couple_id", "A valid couple id is required.");
-    const limit = Math.min(Math.max(Number(input.limit || 12), 1), 100);
+    const limit = Math.min(Math.max(Number(input.limit || defaultFootprintListLimit), 1), maxFootprintListLimit);
     const result = await pool.query(
       `
         select *

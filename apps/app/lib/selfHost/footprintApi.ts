@@ -40,7 +40,7 @@ export async function listSelfHostFootprints(input: {
     accessToken: input.accessToken,
     query: {
       coupleId: input.coupleId,
-      limit: input.limit ?? 12,
+      limit: input.limit ?? 1000,
     },
   });
   return response.footprints.map(mapSelfHostFootprint);

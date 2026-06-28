@@ -601,7 +601,7 @@ export function CreationSpacePage({
     });
   }
 
-  const displayedFootprints = footprints.slice(0, 6);
+  const displayedFootprints = footprints;
   const canSaveFootprint = Boolean(footprintTitle.trim() && footprintDate);
   const currentPuzzle = creationPuzzles.find((puzzle) => puzzle.id === selectedPuzzleId) ?? creationPuzzles[0];
   const basicFoodCount = activeSpace?.basic_food_count ?? 2;

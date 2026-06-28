@@ -43,6 +43,7 @@
 - 环境变量检查：`npm run check:env`
 - 自建 API 语法检查：`npm run check:server`
 - 自建 Auth 邮件投递自检：`node apps/server/scripts/check-email-service.mjs`
+- 自建目标库整体完整性审计：服务器 `/opt/tongpin` 下执行 `sudo docker compose exec -T api npm run audit:self-host-integrity --silent`；本地可用 `SELF_HOST_DB_URL="postgresql://..." npm run audit:self-host-integrity -w @tongpin/server`。该审计只输出计数和脱敏 id，用于发现账号/profile 缺失、active couple 异常、业务数据因关系边界不可见、上传长期 pending 等迁移维稳问题。
 - 服务器 Supabase 旧数据迁移编排 dry-run：服务器 `/opt/tongpin` 下执行 `bash scripts/run-supabase-migration.sh`
 - 服务器 Supabase 旧数据迁移编排 apply：服务器 `/opt/tongpin` 下执行 `bash scripts/run-supabase-migration.sh --apply`
 - Supabase 旧数据迁移前置检查：`SUPABASE_DB_URL="postgresql://..." SELF_HOST_DB_URL="postgresql://..." SUPABASE_STORAGE_S3_ENDPOINT="https://<project-ref>.storage.supabase.co/storage/v1/s3" SUPABASE_STORAGE_S3_REGION="..." SUPABASE_STORAGE_S3_ACCESS_KEY_ID="..." SUPABASE_STORAGE_S3_SECRET_ACCESS_KEY="..." npm run migrate:supabase:preflight -w @tongpin/server`
@@ -50,12 +51,14 @@
 - Supabase 旧数据迁移导入：`SUPABASE_DB_URL="postgresql://..." SELF_HOST_DB_URL="postgresql://..." npm run migrate:supabase:data:apply -w @tongpin/server`
 - Supabase Storage 旧对象迁移：`SUPABASE_DB_URL="postgresql://..." SELF_HOST_DB_URL="postgresql://..." SUPABASE_STORAGE_S3_ENDPOINT="https://<project-ref>.storage.supabase.co/storage/v1/s3" SUPABASE_STORAGE_S3_REGION="..." SUPABASE_STORAGE_S3_ACCESS_KEY_ID="..." SUPABASE_STORAGE_S3_SECRET_ACCESS_KEY="..." npm run migrate:supabase:data:copy-storage -w @tongpin/server`
 - Supabase 旧数据迁移对账：`SUPABASE_DB_URL="postgresql://..." SELF_HOST_DB_URL="postgresql://..." npm run migrate:supabase:data:verify -w @tongpin/server`
+- 单用户 Supabase 迁移审计：`SUPABASE_DB_URL="postgresql://..." SELF_HOST_DB_URL="postgresql://..." MIGRATION_AUDIT_EMAIL="user@example.com" npm run migrate:supabase:audit-user -w @tongpin/server`，也可用 `MIGRATION_AUDIT_USER_ID="<uuid>"` 精确按用户 id 对账；迁移后已按安全要求移除 Supabase 源凭证时，用 `MIGRATION_AUDIT_TARGET_ONLY=true MIGRATION_AUDIT_EMAIL="user@example.com" npm run migrate:supabase:audit-user -w @tongpin/server -- --target-only` 只审计自建目标库账号、profile、active couple 和历史胶囊可见性。
 - 自建 staging 全量备份：服务器 `/opt/tongpin` 下执行 `bash scripts/backup-all.sh`
 - 安装自建 staging 备份 cron：服务器 `/opt/tongpin` 下执行 `sudo bash scripts/install-backup-cron.sh`
 - 自建 staging 恢复演练：服务器 `/opt/tongpin` 下执行 `bash scripts/verify-backups-restore.sh`
 - 安装自建 staging 恢复演练 cron：服务器 `/opt/tongpin` 下执行 `sudo bash scripts/install-restore-verify-cron.sh`
 - Supabase 直连基线检查：`npm run check:supabase-usage`
 - Supabase 直连严格清零检查：`npm run check:supabase-usage:strict`
+- 迁移事故回归检查：`npm run check:migration-regressions`
 - 完整验证：`npm run verify`
 - 自建数据库 migration：`npm run db:apply`，或服务器 `/opt/tongpin` 下执行 `sh scripts/apply-db-migrations.sh`
 - 静态预览：`cd apps/app && ruby -run -e httpd dist -p 4173`
@@ -82,6 +85,7 @@
 - 自建 `/api/profile` 更新必须保持 patch 语义：未传的生日、头像 path / 缩略图 path 不能被清空，只有显式传 `null` 才表示清除，避免局部资料更新造成用户数据“丢失”。
 - 一个用户同一时间只能拥有一个 active couple；情侣关系必须通过 `pair_invites` 接受事务创建，不要在创建邀请时提前创建空 `couples`。
 - 自建 `/api/pair-invites/accept` 必须兼容 `relationshipStartedAt` 与 `relationship_started_at`，并在接受邀请时保留恋爱开始日期，避免旧脚本或迁移调用方传 snake_case 时日期丢失。
+- 自建 `/api/pair-invites/accept` 调用 Postgres `accept_pair_invite(...)` 后，必须在同一事务里用第二条 SQL 按返回的 `couple_id` 读取 `couples`；不要把函数调用和 `join couples` 写进同一条 SQL，否则 Postgres 语句快照可能看不到函数刚插入的情侣行，导致接受邀请 500。
 - 自建关系/Profile/Dashboard API 返回给前端的日期型字段应统一为 `YYYY-MM-DD` date key，不要直接把 Postgres `date` 对象或 ISO 时间串透出给日期输入控件。
 - 邀请码创建走 `create_pair_invite(invite_expires_at)` RPC；查询 `pair_invites` 时只取当前用户创建或接受的记录。
 - 所有情侣业务数据必须带 `couple_id`，权限边界以 active couple member 为准；不要只靠前端隐藏按钮做数据权限。
@@ -93,6 +97,8 @@
 - 认证恢复、账号切换和首页初次加载期间不能渲染 mock / 测试用户数据；加载态应显示无个人信息的首页骨架，并按 `userId` 隔离缓存。
 - 首页 dashboard 首次加载失败、超时或临时网络错误不能当成用户缺少 `profiles` 记录，也不能自动把用户导向个人资料补全页；只有 API 成功返回 profile 为空时才进入资料补全。
 - self-host Auth 恢复遇到网络错误、CORS/DNS 超时或 API 5xx 时不能清除本地 session；只有明确 401/403 或 refresh token 被拒绝时才清 session，避免短暂后端故障让用户看起来“数据丢失”。
+- staging / production 配置真实 Resend 时，Auth 冒烟和调试账号必须使用 `.test` 保留域；后端邮件服务必须对 `.test` 收件人短路返回 `test_email_skipped` 并提供 debug token，不能调用 Resend 或消耗真实邮件额度。
+- Resend 返回 `daily_quota_exceeded` 后，后端邮件服务必须进入短期熔断并返回 `email_quota_exceeded` / `resend_daily_quota_exceeded`，不能在额度耗尽当天继续反复请求 Resend；前端忘记密码需提示“邮件服务今日额度已达上限”。
 - 运行时产品文案和选项常量放在 `apps/app/lib/constants/appContent.ts`；不要把真实界面常量放回 mock 文件。
 
 ## 前端与体验
@@ -106,6 +112,7 @@
 - Web 端按 App 式体验禁用用户缩放；`+html.tsx` viewport 保留 `initial-scale=1`、`maximum-scale=1`、`user-scalable=no` 和 `viewport-fit=cover`。
 - iOS Safari 底部导航要兼容地址栏收缩和回弹，但不要跟随 `visualViewport` / 键盘高度移动。
 - 个人页设置详情由 `HomeScreen` 的 `subPage` 承载；从“我的”打开任一设置页时必须同时保持 `activeTab = "me"`，不要只裸设 `subPage`，否则刷新或返回时容易表现成跳回首页、底部导航状态丢失。
+- 从设置详情跳到其它业务子页时，也必须同步切到该子页所属的 `activeTab`；设置详情返回必须回到 `activeTab = "me"` + `subPage = "main"`，避免出现设置页/信件页内容和底部导航状态不一致。
 - 触感反馈使用 `expo-haptics` 经 `apps/app/motion/haptics.ts` 封装；Web 或不支持设备必须静默降级。
 - Web portal 统一通过 `apps/app/lib/platform/portal` 调用；跨端组件不要顶层直接导入 `react-dom`。
 
@@ -126,7 +133,12 @@
 - 首页 dashboard 数据辅助逻辑已拆到 `homeDashboardTypes.ts`、`homeDashboardSelects.ts`、`homeDashboardCache.ts`、`homeDashboardUtils.ts`、`homeAvatarHydration.ts`、`homeMediaHydration.ts` 和 `homeNotificationRefresh.ts`；云宠路由/仪式 helper 在 `homePetWorldHelpers.ts`。后续维护优先复用这些模块，不要把缓存、水合或云宠仪式逻辑堆回 `useCoupleData.ts` / `HomeScreen.tsx`。
 - 首页 dashboard 加载分阶段：首屏只阻塞 profiles 与 active couple 基础信息；留言、相册、心情、信件、通知和图片 signed URL 后台补齐。
 - 首页 dashboard 当前也驱动完整留言、相册、信件、记忆和家园子页；在没有分页/增量加载前，聚合 limit 不能恢复到很小的首屏预览值，否则迁移后的历史数据会被误认为“丢失”。今日胶囊是日更历史数据，dashboard/checkins 服务上限必须覆盖超过 100 天的历史；如需降首屏 payload，必须先给完整页面补独立分页或全量加载入口。
-- 记忆页历史胶囊必须使用 dashboard 返回的完整 `checkins` 列表参与时间线，不要用 `slice(0, 4)` 或最终 `slice(0, 6)` 这类首页预览截断；否则迁移后的旧胶囊会被误认为“丢失”。
+- 自建业务列表 API 的默认 limit 也不能保留旧首页预览值；`messages`、`letters`、`media`、`calendar-events`、`footprints`、`creation/actions`、`notifications` 等直接列表在没有独立分页前默认应覆盖完整页面历史需求，显式传小 limit 才能作为预览。
+- 前端 `apps/app/lib/selfHost/*Api.ts` 的直接列表 helper 默认 limit 也必须与后端完整历史默认保持一致；不要在客户端封装层保留 12、30、60、100 这类旧预览默认值，否则未来完整页绕过 dashboard 时会再次看起来“数据丢失”。
+- 记忆页历史胶囊、留言、信件、足迹和相册独立记忆必须使用 dashboard 返回的完整列表参与时间线，不要用 `slice(0, 4)`、`slice(0, 6)` 这类首页预览截断；单张记忆卡内部图片预览可限制数量，但时间线入口不能截断，否则迁移后的旧数据会被误认为“丢失”。
+- 今日胶囊页的“历史胶囊”入口也必须展示 dashboard 返回的完整胶囊列表；不要用 `slice(0, 4)` 截断，也不要显示没有真实点击行为的“查看全部”，否则用户会把界面预览限制误认为迁移数据丢失。
+- 来信、足迹、今日胶囊、记忆等完整业务页不能沿用首页预览式 `slice(0, N)` 截断历史；如需性能优化，必须先补真实分页、加载更多或完整入口。首页小预览可以保留有限数量，但要避免让用户误以为迁移数据丢失。
+- 首页留言板这类预览式列表若只展示最近几条，必须提供真实完整页入口和总数提示；不能把完整留言页藏起来，否则迁移后用户会误以为旧留言丢失。
 - 首页/设置页通知列表当前也依赖 dashboard 与后台通知刷新结果；通知刷新 limit 必须与 dashboard 聚合保持一致，不能用很小的预览值覆盖已有通知列表，否则刷新/SSE 后历史提醒会被误认为“丢失”。
 - 首页后台刷新应静默运行；兜底刷新保持温和频率，通知轮询 90 秒，全量 dashboard 兜底刷新 120 秒且仅页面可见时运行。
 - 首页本地缓存只保存低敏骨架数据；不要持久化留言、通知、胶囊、信件、足迹、宠物记忆、caption、signed URL、AI 气泡或 world decision 正文。头像和相册只缓存 Storage path，刷新后后台重新签名。
@@ -134,6 +146,8 @@
 - self-host 路径下头像使用 MinIO `profile-avatars`，相册使用 MinIO `couple-media`。数据库只保存 Storage path，前端展示时通过自建 API 生成 signed URL，不能把 signed URL 写回数据库。
 - 头像与相册缩略图使用独立 Storage path：`profiles.avatar_thumbnail_url`、`media_files.thumbnail_storage_path`；列表/九宫格/记忆流优先展示缩略图，点开预览才按需读取原图。
 - 相册大图预览应保留缩略图托底，并对当前与相邻照片的原图 signed URL 做预签名和图片预取；已加载图片 URL 需要跨组件实例记忆，避免切图后立即重复闪加载。
+- self-host 头像上传、移除或资料保存成功后，前端必须把返回的 profile 合并回当前 dashboard 状态，并保留路径未变时已有的头像 signed URL；不要只依赖返回上一页后的全量 reload，否则会表现成“上传后消失”。
+- self-host 相册上传完成并拿到 ready `media_files` 记录后，前端必须先把新媒体合并进当前 dashboard / 相册状态；后台 reload 只做校准，不能把上传成功后的显示完全依赖一次全量刷新，否则刷新被跳过、失败或列表上限不一致时会表现成“上传后消失”。
 - 旧头像缺少 `avatar_thumbnail_url` 时，小尺寸头像只能使用 Storage transform / 本地缩略图 blob 兜底，不要回退到原图 signed URL。
 - 用户只需选择一次图片；前端负责自动上传原图和缩略图。缩略图失败时不要写入缩略图 path；数据库保存失败要清理本次上传对象。
 - self-host 相册上传创建记录时只有收到并成功校验缩略图对象，才允许写入 `media_files.thumbnail_storage_path`；如果历史记录有缩略图 path 但 MinIO 对象不存在，读缩略图 signed URL 必须回退原图，避免首页九宫格/相册显示破图。
@@ -177,9 +191,11 @@
 ## 测试与验证
 
 - 前端或共享包修改后至少运行 `npm run typecheck` 和 `npm run build:web`。
+- 迁移维稳相关改动后运行 `npm run check:migration-regressions`；该检查守住个人页设置导航、历史列表完整展示、self-host 默认 limit、上传后本地合并和 Resend 测试/额度保护等已踩坑规则。
 - 权限、RLS、RPC、Storage policy、推送队列或数据删除语义变更后，执行 `packages/db/tests/rls_acceptance.sql` 的验收场景。
 - `npm run check:env` 要求 `EXPO_PUBLIC_SELF_HOST_API_URL`，并禁止 `apps/app/.env` 或 shell 环境里继续出现 `EXPO_PUBLIC_SUPABASE_URL` / `EXPO_PUBLIC_SUPABASE_ANON_KEY`；前端 public env 不能再混入 Supabase。
 - `npm run build:web` 会执行 `expo export --platform web --clear && node ../../scripts/prepare-web-dist.mjs`；后处理脚本必须校验 HTML 引用的入口资源和 `/assets/assets/...` 资源存在且非空。
+- Web 静态后处理必须把所有 `.html` 路由（包括 `auth/reset-password.html` 这类嵌套路由）复制为同名目录下的 `index.html`，因为 Caddy 使用无扩展路径服务邮件验证/密码重置等入口；部署时不要用整目录替换破坏 Docker bind mount，优先就地同步文件后重启/刷新 Caddy。
 - 浏览器验收：启动静态预览后打开 `http://localhost:<port>`，检查首页内容、底部导航、相册预览和控制台 error/warn。
 - 大重构或清理类改动应保持严格未使用检查通过：`npm run typecheck -w apps/app -- --noUnusedLocals --noUnusedParameters --pretty false`。
 
@@ -203,6 +219,10 @@
 - 自建迁移进入真实 API/BFF 前必须维护五个门槛文档：`docs/supabase-usage-inventory.md`、`docs/self-host-authorization-map.md`、`docs/self-host-data-constraints.md`、`docs/self-host-cutover-rollback.md`、`docs/self-host-security-ops.md`。
 - 新增业务代码不得增加 Supabase 直连；`npm run check:supabase-usage` 以当前存量基线拦截新增，迁移完成阶段用 `npm run check:supabase-usage:strict` 要求业务代码清零。
 - 旧数据迁移验收不能只看表级 count/hash；`checkins` 还要做按 `user_id` 的覆盖对账，避免某个用户的历史胶囊在迁移后“看起来丢了”却没有被脚本验出来。
+- 自建目标库整体完整性审计应作为迁移维稳常规门槛：重点看 active account 缺 profile、用户多个 active couple、active couple 成员数异常、未删除业务数据的作者/上传者/收件人不再是对应 active couple member，以及头像/相册上传长期 pending；报告不得输出正文、图片路径、邮箱或 token。
+- 单用户迁移审计默认不得输出胶囊正文预览；只有明确设置 `MIGRATION_AUDIT_INCLUDE_CONTENT_PREVIEW=true` 才允许输出短预览，日常排查只看计数、日期、可见性和脱敏 id。
+- Supabase 旧数据迁移不能假设每个有业务数据的账号都存在 `public.profiles`；迁移脚本必须从 `auth.users` 和业务表 user id 引用合成缺失的 profile/account，再迁 `checkins`、`couple_members`、留言、相册等依赖 `profiles` FK 的业务数据，否则会出现账号能登录但历史胶囊或其它历史数据没迁入/不可见。
+- Supabase 旧数据迁移不能假设源库已经跑到最新历史 schema；读取 `profiles`、`checkins`、`media_files`、`calendar_events`、`future_letters` 等旧表时，后加的可选列要在迁移脚本里用兼容默认值读取，关键列缺失时要在报告里 warning，避免旧账号少量历史胶囊或相册因源列不存在而整表漏迁。
 - 前端 Auth 已切为 self-host-only：`AuthProvider` 通过 `apps/app/lib/selfHost/authApi.ts` 和 `authSession.ts` 处理登录、注册、邮箱验证、密码重置、refresh 和登出；不要把 Supabase 或散写 fetch 调回页面。
 - self-host Auth 邮件链接前端路由为 `/auth/verify-email?token=...` 和 `/auth/reset-password?token=...`，共用 `features/auth/AuthLinkScreen.tsx`；密码重置成功后自建后端只返回 `status: ok` 并撤销会话，前端应让用户用新密码重新登录，不要假设会返回新 session。
 - `apps/app/scripts/smoke-self-host-auth.mjs` 验证前端 self-host Auth 约定：register、邮箱验证确认、`/api/me`、refresh、logout 和密码重置确认；受 Codex 沙箱 DNS 限制时需要外网权限执行。
@@ -246,10 +266,10 @@
 - 自建 staging 执行前先看 `docs/self-host-staging-preflight.md` 和 `infra/self-host/staging/RUNBOOK.md`；服务器重启自恢复验证、真实自建 API 替换和生产切换都要单独确认。
 - 自建 staging DB migration 放在 `apps/server/db/migrations/`，打包部署时同步到 `infra/self-host/staging/runtime/db/migrations/`；服务器脚本会记录 `public.self_host_schema_migrations` 并在需要时自动使用 `sudo docker compose`。`infra/self-host/staging/compose.yml` 已把 `runtime/api/scripts` 只读挂载到 API 容器 `/app/scripts`，可在容器内运行 smoke/自检脚本。
 - 旧 Supabase 数据迁移源变量必须从服务器 `/opt/tongpin/.env` 注入 API 容器；`infra/self-host/staging/compose.yml` 的 `api.environment` 显式传入 `SUPABASE_DB_URL` 与 `SUPABASE_STORAGE_S3_*`。如果只修改宿主机 `.env`，需重建 API 容器（服务器 `/opt/tongpin` 下执行 `sudo docker compose up -d --force-recreate api`）后 `run-supabase-migration.sh` 才能在容器内看到新值。
-- 自建 staging 运维巡检脚本为 `/opt/tongpin/scripts/monitor-staging.sh`，模板位于 `infra/self-host/staging/scripts/monitor-staging.sh`；检查 Docker 服务/health、local API、Postgres、Redis、public API deep health + `requestId`、Web auth 路由、assets endpoint、磁盘使用率、Postgres dump 和可恢复 MinIO 数据归档备份新鲜度；MinIO 对象清单只作为辅助库存检查。默认磁盘阈值 85%，备份新鲜度 30 小时，可用 `MONITOR_DISK_WARN_PERCENT`、`MONITOR_BACKUP_MAX_AGE_HOURS` 覆盖；非零退出表示 staging 发布前需要处理。
-- 自建 staging 定时巡检通过 `/opt/tongpin/scripts/install-monitor-cron.sh` 安装，服务器已写入 `/etc/cron.d/tongpin-staging-monitor`，默认每 5 分钟运行并追加日志到 `/opt/tongpin/logs/monitor-staging.log`；cron 服务已验证为 active。巡检支持可选 `MONITOR_WEBHOOK_URL` 失败告警和 `MONITOR_ALERT_ON_SUCCESS=true` 测试成功告警，真实 webhook URL 只能写在服务器 `.env`，不要提交或写进聊天。服务器已验证正常路径 `SUMMARY checks=18 warnings=0 status=ok`，模拟磁盘阈值失败路径 `SUMMARY checks=19 warnings=1 status=failed` 且未配置 webhook 时会明确 `alert skipped=webhook_not_configured`。
+- 自建 staging 运维巡检脚本为 `/opt/tongpin/scripts/monitor-staging.sh`，模板位于 `infra/self-host/staging/scripts/monitor-staging.sh`；检查 Docker 服务/health、local API、Postgres、Redis、public API deep health + `requestId`、Web auth 路由、assets endpoint、磁盘使用率、Postgres dump 和可恢复 MinIO 数据归档备份新鲜度，并运行 `audit:self-host-integrity` 检查自建目标库完整性；MinIO 对象清单只作为辅助库存检查。默认磁盘阈值 85%，备份新鲜度 30 小时，可用 `MONITOR_DISK_WARN_PERCENT`、`MONITOR_BACKUP_MAX_AGE_HOURS` 覆盖；非零退出表示 staging 发布前需要处理。
+- 自建 staging 定时巡检通过 `/opt/tongpin/scripts/install-monitor-cron.sh` 安装，服务器已写入 `/etc/cron.d/tongpin-staging-monitor`，默认每 5 分钟运行并追加日志到 `/opt/tongpin/logs/monitor-staging.log`；cron 服务已验证为 active。巡检支持可选 `MONITOR_WEBHOOK_URL` 失败告警和 `MONITOR_ALERT_ON_SUCCESS=true` 测试成功告警，真实 webhook URL 只能写在服务器 `.env`，不要提交或写进聊天。服务器已验证正常路径 `SUMMARY checks=20 warnings=0 status=ok`，模拟磁盘阈值失败路径会明确 `alert skipped=webhook_not_configured`。
 - 自建 staging 备份脚本 `backup-postgres.sh`、`backup-minio-list.sh` 和 `healthcheck.sh` 已加固 Docker 权限检测：普通用户无法访问 Docker socket 时自动走 `sudo docker compose`。服务器普通用户已验证可创建新 Postgres dump、MinIO object-list，并使 `monitor-staging.sh` 检查全绿。
-- 自建 staging 备份入口为 `/opt/tongpin/scripts/backup-all.sh`，会生成 Postgres dump、可恢复 MinIO `/data` 归档和 MinIO 对象清单；MinIO 归档脚本使用 `docker cp` 从容器复制 `/data` 后在主机压缩，清理 root-owned 临时文件时会回退到 `sudo rm -rf`。服务器已安装 `/etc/cron.d/tongpin-staging-backup`，默认每天 `03:17` 执行并写入 `/opt/tongpin/logs/backup-staging.log`；最新巡检已验证 `SUMMARY checks=19 warnings=0 status=ok`。
+- 自建 staging 备份入口为 `/opt/tongpin/scripts/backup-all.sh`，会生成 Postgres dump、可恢复 MinIO `/data` 归档和 MinIO 对象清单；MinIO 归档脚本使用 `docker cp` 从容器复制 `/data` 后在主机压缩，清理 root-owned 临时文件时会回退到 `sudo rm -rf`。服务器已安装 `/etc/cron.d/tongpin-staging-backup`，默认每天 `03:17` 执行并写入 `/opt/tongpin/logs/backup-staging.log`；最新巡检已验证 `SUMMARY checks=20 warnings=0 status=ok`。
 - 自建 staging 恢复演练脚本为 `/opt/tongpin/scripts/verify-backups-restore.sh`，模板位于 `infra/self-host/staging/scripts/verify-backups-restore.sh`；它会检查最新新鲜 Postgres dump，导入临时库，验证 30 张关键表，删除临时库，再校验最新 MinIO 归档可读且包含 MinIO 元数据/业务桶信息。服务器已安装 `/etc/cron.d/tongpin-staging-restore-verify`，默认每周日 `04:17` 运行并写入 `/opt/tongpin/logs/restore-verify-staging.log`；手动演练已验证 `SUMMARY restore_verify status=ok`。
 - 腾讯云轻量服务器已配置 Docker registry mirror：`https://mirror.ccs.tencentyun.com`；回滚脚本在 `infra/self-host/staging/scripts/rollback-docker-mirror.sh`。
 - `/opt/tongpin` staging 栈已启动并通过本机健康检查：API `/health`、PostgreSQL `pg_isready`、Redis `PONG`；PostgreSQL dump、MinIO 数据归档与 MinIO 对象清单备份演练已通过；服务器 MinIO 对象清单脚本已改为 `ls -1R`，0 字节演练残留已清理；临时 `codex-tongpin-staging` SSH 公钥标记和上传临时包已清理。

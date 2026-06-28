@@ -183,6 +183,22 @@ check_backup_freshness() {
   fi
 }
 
+check_self_host_integrity() {
+  local audit_output
+  if audit_output="$("${DOCKER_COMPOSE[@]}" --env-file .env -f compose.yml exec -T api \
+    npm run audit:self-host-integrity --silent 2>&1)"; then
+    if echo "$audit_output" | grep -q '"status": "ok"'; then
+      ok "self_host_integrity status=ok"
+    elif echo "$audit_output" | grep -q '"status": "warning"'; then
+      warn "self_host_integrity status=warning"
+    else
+      warn "self_host_integrity status=unknown"
+    fi
+  else
+    fail "self_host_integrity status=failed"
+  fi
+}
+
 json_escape() {
   printf "%s" "$1" | python3 -c 'import json, sys; print(json.dumps(sys.stdin.read())[1:-1], end="")'
 }
@@ -236,6 +252,7 @@ check_local_dependencies
 check_public_endpoints
 check_disk
 check_backup_freshness
+check_self_host_integrity
 
 FINAL_STATUS="$([ "$STATUS" -eq 0 ] && echo ok || echo failed)"
 SUMMARY_LINE="SUMMARY checks=$CHECKS warnings=$WARNINGS status=$FINAL_STATUS"

@@ -1,10 +1,23 @@
+const resendQuotaCooldownMs = 24 * 60 * 60 * 1000;
+let resendQuotaExceededUntil = 0;
+
 export function createEmailService({ config, fetchImpl = globalThis.fetch }) {
   async function sendEmail({ to, subject, text, html, idempotencyKey }) {
+    if (isReservedTestRecipient(to)) {
+      return { status: "skipped", reason: "test_email_recipient" };
+    }
     if (!config.email.configured) {
       return { status: "skipped", reason: "email_delivery_not_configured" };
     }
     if (config.email.provider !== "resend") {
       return { status: "skipped", reason: "email_provider_not_supported" };
+    }
+    if (resendQuotaExceededUntil > Date.now()) {
+      return {
+        status: "skipped",
+        reason: "resend_daily_quota_exceeded",
+        retryAfter: new Date(resendQuotaExceededUntil).toISOString(),
+      };
     }
     const response = await fetchImpl("https://api.resend.com/emails", {
       method: "POST",
@@ -23,10 +36,15 @@ export function createEmailService({ config, fetchImpl = globalThis.fetch }) {
     });
     const body = await response.json().catch(() => ({}));
     if (!response.ok) {
+      const providerCode = body?.name || body?.error || body?.message || "resend_error";
+      if (providerCode === "daily_quota_exceeded") {
+        resendQuotaExceededUntil = Date.now() + resendQuotaCooldownMs;
+      }
       const error = new Error("email_delivery_failed");
       error.statusCode = response.status;
       error.provider = "resend";
-      error.providerCode = body?.name || body?.error || body?.message || "resend_error";
+      error.providerCode = providerCode;
+      error.retryAfter = resendQuotaExceededUntil ? new Date(resendQuotaExceededUntil).toISOString() : null;
       throw error;
     }
     return { status: "sent", provider: "resend", providerId: body?.id ?? null };
@@ -70,6 +88,11 @@ export function createEmailService({ config, fetchImpl = globalThis.fetch }) {
     sendPasswordResetEmail,
     sendVerificationEmail,
   };
+}
+
+function isReservedTestRecipient(email) {
+  const domain = String(email || "").trim().toLowerCase().split("@").pop() || "";
+  return domain === "example.test" || domain.endsWith(".test");
 }
 
 function escapeHtml(value) {

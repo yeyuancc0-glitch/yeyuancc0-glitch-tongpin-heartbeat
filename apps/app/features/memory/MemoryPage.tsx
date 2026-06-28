@@ -504,7 +504,7 @@ function buildMemoryTimeline(
       deleteAction: checkin.user_id === currentUserId ? { table: "checkins", id: checkin.id } : undefined,
     };
   });
-  const messageMemories: MemoryTimelineItem[] = messages.slice(0, 3).map((message) => ({
+  const messageMemories: MemoryTimelineItem[] = messages.map((message) => ({
     id: `message-${message.id}`,
     sortDate: message.created_at,
     date: formatMemoryDate(message.created_at),
@@ -517,7 +517,7 @@ function buildMemoryTimeline(
     iconImage: capsuleIcons.note,
     photos: photosForTitle("留给彼此的话"),
   }));
-  const letterMemories: MemoryTimelineItem[] = letters.slice(0, 6).map((letter) => ({
+  const letterMemories: MemoryTimelineItem[] = letters.map((letter) => ({
     id: `letter-${letter.id}`,
     sortDate: letter.deliver_at,
     date: formatMemoryDate(letter.deliver_at),
@@ -532,7 +532,7 @@ function buildMemoryTimeline(
     letter,
     deleteAction: letter.author_id === currentUserId ? { table: "future_letters", id: letter.id } : undefined,
   }));
-  const footprintMemories: MemoryTimelineItem[] = footprints.slice(0, 6).map((footprint) => ({
+  const footprintMemories: MemoryTimelineItem[] = footprints.map((footprint) => ({
     id: `footprint-${footprint.id}`,
     sortDate: footprint.visited_at,
     date: formatMemoryDate(footprint.visited_at),
@@ -556,7 +556,6 @@ function buildMemoryTimeline(
       }
       return ![...eventMemories, ...checkinMemories, ...messageMemories, ...letterMemories, ...footprintMemories].some((memory) => memory.title === file.caption || memory.title === `去过 ${file.caption}`);
     })
-    .slice(0, 3)
     .map((file) => ({
       id: `media-${file.id}`,
       sortDate: file.created_at,

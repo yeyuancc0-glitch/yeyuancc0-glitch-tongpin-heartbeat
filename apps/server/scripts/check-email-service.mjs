@@ -39,8 +39,17 @@ const sent = createEmailService({
   },
 });
 
-const result = await sent.sendPasswordResetEmail({
+const testRecipientResult = await sent.sendPasswordResetEmail({
   to: "b@example.test",
+  token: "reset-token",
+  idempotencyKey: "test-recipient",
+});
+assert(testRecipientResult.status === "skipped", "reserved .test recipients should not call Resend");
+assert(testRecipientResult.reason === "test_email_recipient", "reserved .test skip reason mismatch");
+assert(captured === null, "reserved .test recipient should not call fetch");
+
+const result = await sent.sendPasswordResetEmail({
+  to: "b@example.com",
   token: "reset-token",
   idempotencyKey: "reset-key",
 });
@@ -49,8 +58,48 @@ assert(captured.url === "https://api.resend.com/emails", "resend endpoint mismat
 assert(captured.init.headers.Authorization === "Bearer test-api-key", "resend auth header missing");
 assert(captured.init.headers["Idempotency-Key"] === "reset-key", "idempotency key missing");
 assert(captured.body.from === "Tongpin <noreply@example.test>", "from mismatch");
-assert(captured.body.to[0] === "b@example.test", "recipient mismatch");
+assert(captured.body.to[0] === "b@example.com", "recipient mismatch");
 assert(captured.body.text.includes("reset-token"), "reset token missing from email text");
 assert(captured.body.text.includes("https://tongpin.example.test/auth/reset-password"), "reset URL missing from email text");
 
-console.log(JSON.stringify({ status: "ok", checks: ["email_skip_without_provider", "resend_payload", "resend_idempotency"] }));
+let quotaFetchCount = 0;
+const quotaLimited = createEmailService({
+  config: {
+    email: {
+      configured: true,
+      provider: "resend",
+      resendApiKey: "test-api-key",
+      from: "Tongpin <noreply@example.test>",
+      verifyUrlBase: "https://tongpin.example.test/auth/verify-email",
+      resetUrlBase: "https://tongpin.example.test/auth/reset-password",
+    },
+  },
+  fetchImpl: async () => {
+    quotaFetchCount += 1;
+    return {
+      ok: false,
+      status: 429,
+      json: async () => ({ name: "daily_quota_exceeded" }),
+    };
+  },
+});
+
+await quotaLimited.sendVerificationEmail({
+  to: "quota@example.com",
+  token: "verify-token",
+  idempotencyKey: "quota-1",
+}).then(() => {
+  throw new Error("daily quota response should throw on first Resend failure");
+}).catch((error) => {
+  assert(error?.providerCode === "daily_quota_exceeded", "daily quota provider code mismatch");
+});
+const quotaSkippedResult = await quotaLimited.sendVerificationEmail({
+  to: "quota-next@example.com",
+  token: "verify-token",
+  idempotencyKey: "quota-2",
+});
+assert(quotaFetchCount === 1, "daily quota cooldown should prevent repeated Resend calls");
+assert(quotaSkippedResult.status === "skipped", "daily quota cooldown should skip delivery");
+assert(quotaSkippedResult.reason === "resend_daily_quota_exceeded", "daily quota cooldown reason mismatch");
+
+console.log(JSON.stringify({ status: "ok", checks: ["email_skip_without_provider", "test_recipient_skip", "resend_payload", "resend_idempotency", "resend_daily_quota_cooldown"] }));

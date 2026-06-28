@@ -5,6 +5,8 @@ import { listSelfHostNotifications, subscribeSelfHostNotificationEvents } from "
 import type {
   Checkin,
   DashboardProfile,
+  MediaFile,
+  Profile,
 } from "@/lib/supabase/database.types";
 import {
   createAvatarUrlMap,
@@ -20,6 +22,7 @@ const notificationFallbackRefreshMs = 90000;
 const dashboardFallbackRefreshMs = 120000;
 const maxDashboardFallbackRefreshMs = 10 * 60 * 1000;
 const notificationRealtimeDebounceMs = 1200;
+const dashboardListLimit = 1000;
 
 function isSameCheckinSlot(left: Checkin, right: Checkin) {
   return (
@@ -40,6 +43,37 @@ function mergeCheckinIntoList(checkins: Checkin[], checkin: Checkin) {
     return item;
   });
   return replaced ? merged : [checkin, ...checkins];
+}
+
+function mergeMediaFileIntoList(mediaFiles: MediaFile[], mediaFile: MediaFile) {
+  let replaced = false;
+  const merged = mediaFiles.map((item) => {
+    if (item.id === mediaFile.id) {
+      replaced = true;
+      return mediaFile;
+    }
+    return item;
+  });
+  return replaced ? merged : [mediaFile, ...mediaFiles];
+}
+
+function mergeProfileAvatarUrls(current: DashboardProfile | null | undefined, nextProfile: DashboardProfile) {
+  if (
+    current?.avatar_url === nextProfile.avatar_url &&
+    current?.avatar_thumbnail_url === nextProfile.avatar_thumbnail_url
+  ) {
+    return {
+      ...nextProfile,
+      avatar_signed_url: nextProfile.avatar_signed_url ?? current.avatar_signed_url ?? null,
+      avatar_thumb_signed_url: nextProfile.avatar_thumb_signed_url ?? current.avatar_thumb_signed_url ?? current.avatar_signed_url ?? null,
+    };
+  }
+  return nextProfile;
+}
+
+function mergeDashboardProfile(currentProfile: DashboardProfile | null | undefined, nextProfile: DashboardProfile) {
+  const mergedAvatarProfile = mergeProfileAvatarUrls(currentProfile, nextProfile);
+  return currentProfile ? { ...currentProfile, ...mergedAvatarProfile } : mergedAvatarProfile;
 }
 
 export function useCoupleData(userId?: string, accessToken?: string | null) {
@@ -203,7 +237,7 @@ export function useCoupleData(userId?: string, accessToken?: string | null) {
       const notifications = await listSelfHostNotifications({
         accessToken,
         coupleId: data.couple.id,
-        limit: 100,
+        limit: dashboardListLimit,
       });
 
       saveData((current) => {
@@ -325,9 +359,55 @@ export function useCoupleData(userId?: string, accessToken?: string | null) {
     });
   }, [loadedUserId, saveData, userId]);
 
+  const mergeMediaFile = useCallback((mediaFile: MediaFile) => {
+    if (!userId || loadedUserId !== userId) {
+      return;
+    }
+    saveData((current) => {
+      if (!current.couple?.id || current.couple.id !== mediaFile.couple_id) {
+        return current;
+      }
+      const nextData = {
+        ...current,
+        mediaFiles: mergeMediaFileIntoList(current.mediaFiles, mediaFile),
+      };
+      writeCachedDashboard(userId, nextData);
+      return nextData;
+    });
+  }, [loadedUserId, saveData, userId]);
+
+  const mergeProfile = useCallback((profile: Profile | DashboardProfile) => {
+    if (!userId || loadedUserId !== userId || profile.id !== userId) {
+      return;
+    }
+    saveData((current) => {
+      const nextProfile = mergeDashboardProfile(current.profile, profile);
+      const nextCouple = current.couple
+        ? {
+            ...current.couple,
+            couple_members: current.couple.couple_members.map((member) => (
+              member.user_id === profile.id
+                ? {
+                    ...member,
+                    profile: mergeDashboardProfile(member.profile, profile),
+                  }
+                : member
+            )),
+          }
+        : current.couple;
+      const nextData = {
+        ...current,
+        profile: nextProfile,
+        couple: nextCouple,
+      };
+      writeCachedDashboard(userId, nextData);
+      return nextData;
+    });
+  }, [loadedUserId, saveData, userId]);
+
   const currentData = loadedUserId === userId ? data : emptyDashboard;
   const currentLoading = loading || loadedUserId !== userId;
   const currentLoadError = loadedUserId === userId ? loadError : null;
 
-  return { data: currentData, loading: currentLoading, loadError: currentLoadError, refreshing, reload: load, mergeCheckin };
+  return { data: currentData, loading: currentLoading, loadError: currentLoadError, refreshing, reload: load, mergeCheckin, mergeMediaFile, mergeProfile };
 }

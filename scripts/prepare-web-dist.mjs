@@ -20,7 +20,6 @@ if (!(await exists(distDir))) {
   process.exit(0);
 }
 
-const entries = await readdir(distDir, { withFileTypes: true });
 let copied = 0;
 
 async function copyMisnamedExpoStaticDir() {
@@ -46,26 +45,23 @@ async function copyMisnamedExpoStaticDir() {
 }
 
 async function assertReferencedAssetsExist() {
-  const htmlEntries = await readdir(distDir, { withFileTypes: true });
+  const htmlFiles = await collectFiles(distDir, (filePath) => filePath.endsWith(".html"));
   const missingAssets = [];
   const assetPattern = /(?:src|href)="(\/_expo\/static\/[^"]+)"/g;
 
-  for (const entry of htmlEntries) {
-    if (!entry.isFile() || !entry.name.endsWith(".html")) {
-      continue;
-    }
-
-    const html = await readFile(path.join(distDir, entry.name), "utf8");
+  for (const htmlFile of htmlFiles) {
+    const relativePath = path.relative(distDir, htmlFile);
+    const html = await readFile(htmlFile, "utf8");
     for (const match of html.matchAll(assetPattern)) {
       const assetPath = path.join(distDir, match[1].slice(1));
       if (!(await exists(assetPath))) {
-        missingAssets.push(`${entry.name}: ${match[1]}`);
+        missingAssets.push(`${relativePath}: ${match[1]}`);
         continue;
       }
 
       const assetStat = await stat(assetPath);
       if (!assetStat.isFile() || assetStat.size === 0) {
-        missingAssets.push(`${entry.name}: ${match[1]} (${assetStat.size} bytes)`);
+        missingAssets.push(`${relativePath}: ${match[1]} (${assetStat.size} bytes)`);
       }
     }
   }
@@ -147,17 +143,26 @@ async function copyBundledAssetUris() {
 const repairedExpoStaticDir = await copyMisnamedExpoStaticDir();
 const copiedBundledAssets = await copyBundledAssetUris();
 
-for (const entry of entries) {
-  if (!entry.isFile() || !entry.name.endsWith(".html") || entry.name === "index.html") {
+const htmlFiles = await collectFiles(distDir, (filePath) => {
+  if (!filePath.endsWith(".html")) {
+    return false;
+  }
+  const relativePath = path.relative(distDir, filePath);
+  return relativePath !== "index.html" && !relativePath.startsWith(`_${path.sep}`);
+});
+
+for (const htmlFile of htmlFiles) {
+  const relativePath = path.relative(distDir, htmlFile);
+  if (relativePath.split(path.sep).some((part) => part === "index.html")) {
     continue;
   }
-  const routeName = entry.name.slice(0, -".html".length);
+  const routeName = relativePath.slice(0, -".html".length);
   if (!routeName || routeName.startsWith("_")) {
     continue;
   }
   const routeDir = path.join(distDir, routeName);
   await mkdir(routeDir, { recursive: true });
-  await cp(path.join(distDir, entry.name), path.join(routeDir, "index.html"));
+  await cp(htmlFile, path.join(routeDir, "index.html"));
   copied += 1;
 }
 

@@ -26,6 +26,8 @@ const interactionTypes = new Set(["pet", "clean", "play", "sleep"]);
 const petWorldSurfaces = new Set(["home", "share", "memory", "creation_hub", "pet_room"]);
 const sleepFullRecoverMs = 5 * 60 * 1000;
 const sleepFullEnergy = 18;
+const defaultCreationListLimit = 1000;
+const maxCreationListLimit = 5000;
 
 function assertUuid(value, code, message) {
   if (!uuidPattern.test(String(value || ""))) {
@@ -346,7 +348,7 @@ export function createCreationService({ pool }) {
   async function listCreationActions(input, current) {
     const coupleId = String(input.coupleId || input.couple_id || "").toLowerCase();
     assertUuid(coupleId, "invalid_couple_id", "A valid couple id is required.");
-    const limit = Math.min(Math.max(Number(input.limit || 12), 1), 100);
+    const limit = Math.min(Math.max(Number(input.limit || defaultCreationListLimit), 1), maxCreationListLimit);
     const result = await pool.query(
       `
         select *
@@ -385,7 +387,7 @@ export function createCreationService({ pool }) {
   async function listPetMemories(input, current) {
     const coupleId = String(input.coupleId || input.couple_id || "").toLowerCase();
     assertUuid(coupleId, "invalid_couple_id", "A valid couple id is required.");
-    const limit = Math.min(Math.max(Number(input.limit || 12), 1), 100);
+    const limit = Math.min(Math.max(Number(input.limit || defaultCreationListLimit), 1), maxCreationListLimit);
     const result = await pool.query(
       `
         select *

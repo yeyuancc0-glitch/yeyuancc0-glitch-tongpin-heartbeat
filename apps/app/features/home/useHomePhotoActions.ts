@@ -29,6 +29,7 @@ export function useHomePhotoActions({
   mediaFiles,
   showToast,
   reload,
+  mergeMediaFile,
   setActivePhotoPreview,
 }: {
   userId?: string;
@@ -37,6 +38,7 @@ export function useHomePhotoActions({
   mediaFiles: MediaFile[];
   showToast: (toast: ToastValue) => void;
   reload: () => void;
+  mergeMediaFile: (mediaFile: MediaFile) => void;
   setActivePhotoPreview: (updater: (current: PhotoPreviewState | null) => PhotoPreviewState | null) => void;
 }) {
   const handlePhotoFiles = useCallback(async (files: PhotoFileList, options: PhotoUploadOptions = {}): Promise<PhotoUploadResult> => {
@@ -76,13 +78,14 @@ export function useHomePhotoActions({
       try {
         const thumbOptions = imageTransforms.albumThumb;
         const thumbnailFile = await createImageThumbnail(file, thumbOptions.width, thumbOptions.quality);
-        await uploadSelfHostMedia({
+        const uploadedMediaFile = await uploadSelfHostMedia({
           accessToken,
           coupleId,
           file,
           thumbnailFile,
           caption: options.caption || file.name.replace(/\.[^.]+$/, ""),
         });
+        mergeMediaFile(uploadedMediaFile);
         uploadedCount += 1;
         uploadedFiles.push(file);
       } catch (error) {
@@ -104,7 +107,7 @@ export function useHomePhotoActions({
     }
 
     return { uploadedCount, uploadedFiles, failedFiles };
-  }, [accessToken, coupleId, mediaFiles.length, reload, showToast, userId]);
+  }, [accessToken, coupleId, mediaFiles.length, mergeMediaFile, reload, showToast, userId]);
 
   const uploadPhoto = useCallback(async (options: PhotoUploadOptions = {}): Promise<PhotoUploadResult> => {
     if (!userId) {

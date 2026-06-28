@@ -13,10 +13,11 @@
     "typecheck": "npm run typecheck -w apps/app && npm run typecheck -w @tongpin/shared",
     "build:web": "npm run check:env && npm run build:web -w apps/app",
     "check:env": "node scripts/check-env.mjs",
+    "check:migration-regressions": "node scripts/check-migration-regressions.mjs",
     "check:supabase-usage": "node scripts/check-supabase-usage.mjs",
     "check:supabase-usage:strict": "node scripts/check-supabase-usage.mjs --strict",
     "db:apply": "node scripts/apply-self-host-migrations.mjs",
-    "verify": "npm run typecheck && npm run build:web"
+    "verify": "npm run check:migration-regressions && npm run typecheck && npm run build:web"
   },
   "overrides": {
     "pixi-live2d-display": {

@@ -1,6 +1,9 @@
 import { AuthError } from "./authService.mjs";
 import { withTransaction } from "./db.mjs";
 
+const defaultLetterListLimit = 1000;
+const maxLetterListLimit = 5000;
+
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const letterSelect = `
@@ -74,7 +77,7 @@ export function createLetterService({ notificationService, pool }) {
   async function listLetters(input, current) {
     const coupleId = String(input.coupleId || input.couple_id || "").toLowerCase();
     assertUuid(coupleId, "invalid_couple_id", "A valid couple id is required.");
-    const limit = Math.min(Math.max(Number(input.limit || 30), 1), 100);
+    const limit = Math.min(Math.max(Number(input.limit || defaultLetterListLimit), 1), maxLetterListLimit);
     const result = await pool.query(
       `
         ${letterSelect}

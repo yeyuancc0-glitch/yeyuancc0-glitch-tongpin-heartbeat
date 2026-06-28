@@ -165,7 +165,7 @@ export function createDashboardService({
     ] = await Promise.all([
       checkinService.listCheckins({ coupleId, limit: dashboardListLimit }, current),
       messageService.listMessages({ coupleId, limit: dashboardListLimit }, current),
-      calendarService.listEvents({ coupleId, limit: 200 }, current),
+      calendarService.listEvents({ coupleId, limit: dashboardListLimit }, current),
       letterService.listLetters({ coupleId, limit: dashboardListLimit }, current),
       storageService.listMedia({ coupleId, limit: dashboardListLimit }, current),
       checkinService.listMoodStatuses({ coupleId }, current),

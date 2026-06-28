@@ -218,7 +218,12 @@ export function AuthProvider({ children }: PropsWithChildren) {
         const result = await requestSelfHostPasswordReset(email);
         const passwordReset = result.passwordReset ?? { status: result.status, debugToken: result.debugToken };
         if (!passwordReset.debugToken && passwordReset.status && passwordReset.status !== "sent") {
-          throw new Error(passwordReset.status === "delivery_failed" ? "重置邮件发送失败，请稍后重试。" : "无法发送重置邮件，请稍后重试。");
+          const message = passwordReset.status === "email_quota_exceeded"
+            ? "邮件服务今日额度已达上限，请稍后再试。"
+            : passwordReset.status === "delivery_failed"
+              ? "重置邮件发送失败，请稍后重试。"
+              : "无法发送重置邮件，请稍后重试。";
+          throw new Error(message);
         }
         setPasswordRecovery(true);
         return passwordReset;

@@ -1,0 +1,322 @@
+#!/usr/bin/env node
+
+import process from "node:process";
+
+import pg from "pg";
+
+const targetUrl = process.env.SELF_HOST_DB_URL || process.env.MIGRATION_SELF_HOST_DB_URL || buildSelfHostDbUrlFromEnv(process.env);
+const staleUploadHours = positiveInteger(process.env.INTEGRITY_AUDIT_STALE_UPLOAD_HOURS, 1);
+const sampleLimit = positiveInteger(process.env.INTEGRITY_AUDIT_SAMPLE_LIMIT, 10);
+
+if (!targetUrl) {
+  console.error("Missing self-host database URL. Set SELF_HOST_DB_URL or POSTGRES_* self-host variables.");
+  process.exit(1);
+}
+
+const pool = new pg.Pool({ connectionString: targetUrl, max: 2 });
+
+async function main() {
+  const [
+    totals,
+    missingProfiles,
+    orphanProfiles,
+    activeMemberDuplicates,
+    activeCoupleWrongMemberCount,
+    acceptedInviteBroken,
+    invisibleMessages,
+    invisibleCheckins,
+    invisibleMedia,
+    invisibleLettersForAuthor,
+    invisibleLettersForRecipient,
+    invisibleCalendarEvents,
+    invisibleFootprints,
+    invisibleCreationActions,
+    stalePendingMedia,
+    stalePendingAvatarUploads,
+  ] = await Promise.all([
+    totalsSummary(),
+    sampleCount(`
+      select a.id
+        from app_auth.accounts a
+        left join public.profiles p on p.id = a.id
+       where a.disabled_at is null
+         and p.id is null
+       order by a.created_at desc
+    `),
+    sampleCount(`
+      select p.id
+        from public.profiles p
+        left join app_auth.accounts a on a.id = p.id
+       where a.id is null
+       order by p.created_at desc
+    `),
+    sampleCount(`
+      select cm.user_id as id, count(*)::int as active_couple_count
+        from public.couple_members cm
+        join public.couples c on c.id = cm.couple_id
+       where cm.status = 'active'
+         and c.status = 'active'
+       group by cm.user_id
+      having count(*) > 1
+       order by active_couple_count desc, cm.user_id
+    `),
+    sampleCount(`
+      select c.id, count(cm.user_id)::int as active_member_count
+        from public.couples c
+        left join public.couple_members cm on cm.couple_id = c.id and cm.status = 'active'
+       where c.status = 'active'
+       group by c.id
+      having count(cm.user_id) <> 2
+       order by c.id
+    `),
+    sampleCount(`
+      select pi.id
+        from public.pair_invites pi
+        left join public.couples c on c.id = pi.couple_id
+       where pi.status = 'accepted'
+         and (
+           pi.couple_id is null
+           or c.id is null
+           or not exists (
+             select 1 from public.couple_members cm
+              where cm.couple_id = pi.couple_id
+                and cm.user_id = pi.inviter_user_id
+           )
+           or not exists (
+             select 1 from public.couple_members cm
+              where cm.couple_id = pi.couple_id
+                and cm.user_id = pi.accepted_by_user_id
+           )
+         )
+       order by pi.accepted_at desc nulls last, pi.created_at desc
+    `),
+    invisibleOwnerRows({
+      relation: "public.messages",
+      ownerColumn: "sender_id",
+      filter: "deleted_at is null",
+      orderColumn: "created_at",
+    }),
+    invisibleOwnerRows({
+      relation: "public.checkins",
+      ownerColumn: "user_id",
+      filter: "deleted_at is null",
+      orderColumn: "checkin_date",
+    }),
+    invisibleOwnerRows({
+      relation: "public.media_files",
+      ownerColumn: "uploader_id",
+      filter: "deleted_at is null and upload_status = 'ready'",
+      orderColumn: "created_at",
+    }),
+    invisibleOwnerRows({
+      relation: "public.future_letters",
+      ownerColumn: "author_id",
+      filter: "deleted_at is null",
+      orderColumn: "created_at",
+    }),
+    invisibleOwnerRows({
+      relation: "public.future_letters",
+      ownerColumn: "recipient_id",
+      filter: "deleted_at is null",
+      orderColumn: "created_at",
+    }),
+    invisibleOwnerRows({
+      relation: "public.calendar_events",
+      ownerColumn: "created_by",
+      filter: "deleted_at is null",
+      orderColumn: "event_date",
+    }),
+    invisibleOwnerRows({
+      relation: "public.couple_footprints",
+      ownerColumn: "created_by",
+      filter: "deleted_at is null",
+      orderColumn: "visited_at",
+    }),
+    invisibleOwnerRows({
+      relation: "public.creation_actions",
+      ownerColumn: "actor_id",
+      filter: "true",
+      orderColumn: "created_at",
+    }),
+    staleUploads("public.media_files", "upload_status = 'pending'", "created_at"),
+    relationExists("public.profile_avatar_uploads").then((exists) => exists
+      ? staleUploads("public.profile_avatar_uploads", "upload_status = 'pending'", "created_at")
+      : { count: 0, samples: [], skipped: "missing_relation" }),
+  ]);
+
+  const failures = {
+    missingProfiles,
+    orphanProfiles,
+    activeMemberDuplicates,
+    activeCoupleWrongMemberCount,
+    acceptedInviteBroken,
+    invisibleMessages,
+    invisibleCheckins,
+    invisibleMedia,
+    invisibleLettersForAuthor,
+    invisibleLettersForRecipient,
+    invisibleCalendarEvents,
+    invisibleFootprints,
+    invisibleCreationActions,
+  };
+  const warnings = {
+    stalePendingMedia,
+    stalePendingAvatarUploads,
+  };
+  const failureCount = Object.values(failures).reduce((sum, item) => sum + Number(item.count || 0), 0);
+  const warningCount = Object.values(warnings).reduce((sum, item) => sum + Number(item.count || 0), 0);
+
+  const report = {
+    status: failureCount > 0 ? "needs_attention" : warningCount > 0 ? "warning" : "ok",
+    generatedAt: new Date().toISOString(),
+    staleUploadHours,
+    totals,
+    failures,
+    warnings,
+  };
+
+  console.log(JSON.stringify(report, null, 2));
+  if (failureCount > 0) {
+    process.exit(2);
+  }
+}
+
+async function totalsSummary() {
+  const checks = [
+    ["accounts", "app_auth.accounts", "disabled_at is null"],
+    ["profiles", "public.profiles", "true"],
+    ["activeCouples", "public.couples", "status = 'active'"],
+    ["activeCoupleMembers", "public.couple_members", "status = 'active'"],
+    ["messages", "public.messages", "deleted_at is null"],
+    ["checkins", "public.checkins", "deleted_at is null"],
+    ["readyMedia", "public.media_files", "deleted_at is null and upload_status = 'ready'"],
+    ["letters", "public.future_letters", "deleted_at is null"],
+    ["calendarEvents", "public.calendar_events", "deleted_at is null"],
+    ["footprints", "public.couple_footprints", "deleted_at is null"],
+    ["creationActions", "public.creation_actions", "true"],
+    ["notifications", "public.notifications", "dismissed_at is null"],
+  ];
+  const totals = {};
+  for (const [key, relation, predicate] of checks) {
+    totals[key] = await countWhere(relation, predicate);
+  }
+  return totals;
+}
+
+async function invisibleOwnerRows({ relation, ownerColumn, filter, orderColumn }) {
+  if (!(await relationExists(relation))) {
+    return { count: 0, samples: [], skipped: "missing_relation" };
+  }
+  return sampleCount(`
+    select t.id, t.couple_id, t.${ownerColumn} as user_id
+      from ${relation} t
+     where ${filter}
+       and exists (
+         select 1
+           from public.couples row_couple
+          where row_couple.id = t.couple_id
+            and row_couple.status = 'active'
+       )
+       and not exists (
+         select 1
+           from public.couple_members cm
+           join public.couples c on c.id = cm.couple_id
+          where cm.couple_id = t.couple_id
+            and cm.user_id = t.${ownerColumn}
+            and cm.status = 'active'
+            and c.status = 'active'
+       )
+     order by t.${orderColumn} desc nulls last
+  `);
+}
+
+async function staleUploads(relation, predicate, orderColumn) {
+  if (!(await relationExists(relation))) {
+    return { count: 0, samples: [], skipped: "missing_relation" };
+  }
+  return sampleCount(
+    `
+      select id, created_at
+        from ${relation}
+       where ${predicate}
+         and created_at < now() - make_interval(hours => $1)
+       order by ${orderColumn} desc nulls last
+    `,
+    [staleUploadHours],
+  );
+}
+
+async function sampleCount(sql, values = []) {
+  const countSql = `select count(*)::int as count from (${sql}) audit_rows`;
+  const samplesSql = `select * from (${sql}) audit_rows limit ${sampleLimit}`;
+  const [countResult, samplesResult] = await Promise.all([
+    pool.query(countSql, values),
+    pool.query(samplesSql, values),
+  ]);
+  return {
+    count: Number(countResult.rows[0]?.count ?? 0),
+    samples: samplesResult.rows.map(sanitizeSample),
+  };
+}
+
+async function countWhere(relation, predicate) {
+  if (!(await relationExists(relation))) {
+    return null;
+  }
+  const result = await pool.query(`select count(*)::int as count from ${relation} where ${predicate}`);
+  return Number(result.rows[0]?.count ?? 0);
+}
+
+function sanitizeSample(row) {
+  const allowed = ["id", "couple_id", "user_id", "active_couple_count", "active_member_count", "created_at"];
+  const sample = {};
+  for (const key of allowed) {
+    if (row[key] !== undefined) {
+      sample[key] = row[key] instanceof Date ? row[key].toISOString() : row[key];
+    }
+  }
+  return sample;
+}
+
+async function relationExists(relation) {
+  const [schema, table] = relation.split(".");
+  const result = await pool.query(
+    `select exists (
+       select 1
+         from information_schema.tables
+        where table_schema = $1
+          and table_name = $2
+     ) as exists`,
+    [schema, table],
+  );
+  return Boolean(result.rows[0]?.exists);
+}
+
+function buildSelfHostDbUrlFromEnv(env) {
+  const database = env.POSTGRES_DB;
+  const user = env.POSTGRES_USER;
+  const password = env.POSTGRES_PASSWORD;
+  if (!database || !user || !password) {
+    return "";
+  }
+  const host = env.POSTGRES_HOST || "127.0.0.1";
+  const port = env.POSTGRES_PORT || "5432";
+  return `postgresql://${encodeURIComponent(user)}:${encodeURIComponent(password)}@${host}:${port}/${encodeURIComponent(database)}`;
+}
+
+function positiveInteger(value, fallback) {
+  if (!value) {
+    return fallback;
+  }
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+main()
+  .catch((error) => {
+    console.error(error instanceof Error ? error.message : error);
+    process.exit(1);
+  })
+  .finally(async () => {
+    await pool.end().catch(() => {});
+  });

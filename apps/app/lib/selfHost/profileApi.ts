@@ -126,7 +126,22 @@ export async function uploadSelfHostAvatar(input: {
     accessToken: input.accessToken,
     body: { avatarUploadId: created.avatarUpload.id },
   });
-  return mapSelfHostProfile(completed.profile);
+  const profile = mapSelfHostProfile(completed.profile);
+  const avatarSignedUrl = profile.avatar_url
+    ? await createSelfHostAvatarReadUrl({
+        accessToken: input.accessToken,
+        userId: profile.id,
+        variant: profile.avatar_thumbnail_url ? "thumbnail" : "original",
+      }).catch((error) => {
+        console.warn("Self-host avatar uploaded read-url failed:", error);
+        return null;
+      })
+    : null;
+  return {
+    ...profile,
+    avatar_signed_url: avatarSignedUrl,
+    avatar_thumb_signed_url: avatarSignedUrl,
+  };
 }
 
 export async function createSelfHostAvatarReadUrl(input: {

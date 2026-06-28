@@ -86,13 +86,27 @@ import { motionTokens } from "@/motion/tokens";
 import { colors } from "@/styles/theme";
 
 const petNightSleepWakeCheckMs = 60_000;
+const settingPages: readonly SettingPage[] = [
+  "profile",
+  "couple",
+  "pet",
+  "notifications",
+  "privacy",
+  "relationship",
+  "feedback",
+  "about",
+];
+
+function isSettingPage(page: SubPage): page is SettingPage {
+  return (settingPages as readonly SubPage[]).includes(page);
+}
 
 export { HomeScreenShell } from "@/features/home/HomeScreenShell";
 
 export function HomeScreen() {
   const { session, user, signOut } = useAuth();
   const { showToast } = useToast();
-  const { data, loading, loadError, reload, mergeCheckin } = useCoupleData(user?.id, session?.access_token);
+  const { data, loading, loadError, reload, mergeCheckin, mergeMediaFile, mergeProfile } = useCoupleData(user?.id, session?.access_token);
   const { settings: petUserSettings, setSettings: setPetUserSettings } = usePetUserSettings(user?.id);
   useAppPullToRefresh(reload);
   const [activeTab, setActiveTab] = useState<BottomTabKey>("home");
@@ -111,21 +125,8 @@ export function HomeScreen() {
     onPetEvent: (event) => petEventHandlerRef.current(event),
   });
 
-  const settingPages: readonly SettingPage[] = [
-    "profile",
-    "couple",
-    "pet",
-    "notifications",
-    "privacy",
-    "relationship",
-    "feedback",
-    "about",
-  ];
-  function isSettingPage(page: SubPage): page is SettingPage {
-    return (settingPages as readonly SubPage[]).includes(page);
-  }
-
   const isSettingDetailPage = isSettingPage(subPage);
+  const showsBottomTabBar = subPage === "main" || isSettingDetailPage;
 
   useEffect(() => {
     if (activePhotoPreview && !data.mediaFiles.some((file) => file.id === activePhotoPreview.id)) {
@@ -306,6 +307,7 @@ export function HomeScreen() {
     mediaFiles: data.mediaFiles,
     showToast,
     reload,
+    mergeMediaFile,
     setActivePhotoPreview,
   });
   const saveSelfHostCheckin = isSelfHostAuthEnabled
@@ -440,7 +442,7 @@ export function HomeScreen() {
   if (!data.profile) {
     return (
       <PageContainer>
-        <ProfileScreen onSaved={reload} />
+        <ProfileScreen onSaved={reload} onProfileChanged={mergeProfile} />
       </PageContainer>
     );
   }
@@ -487,6 +489,11 @@ export function HomeScreen() {
   function goTab(tab: BottomTabKey) {
     setSubPage("main");
     setActiveTab(tab);
+  }
+
+  function returnToMePage() {
+    setActiveTab("me");
+    setSubPage("main");
   }
 
   function openSettingPage(page: SettingPage) {
@@ -585,7 +592,7 @@ export function HomeScreen() {
         partner={partnerProfile}
         loveDays={loveDays}
         startedAt={data.couple.started_at}
-        onBack={() => setSubPage("main")}
+        onBack={returnToMePage}
         onEndCouple={endCouple}
         endingCouple={endingCouple}
         coupleId={coupleId}
@@ -594,7 +601,11 @@ export function HomeScreen() {
         petUserSettings={petUserSettings}
         onChangePetUserSettings={setPetUserSettings}
         onChanged={reload}
-        onOpenLetters={() => setSubPage("letterInbox")}
+        onProfileChanged={mergeProfile}
+        onOpenLetters={() => {
+          setActiveTab("home");
+          setSubPage("letterInbox");
+        }}
       />
     );
   } else if (activeTab === "home") {
@@ -624,6 +635,7 @@ export function HomeScreen() {
         onPreviewPhoto={(file, index) => setActivePhotoPreview({ id: file.id, index: index ?? 0 })}
         onDeletePhoto={deletePhoto}
         onChanged={reload}
+        onOpenMessages={() => setSubPage("messages")}
         onQuickInteraction={sendQuickInteraction}
         interactionText={interactionText}
         quickSending={quickSending}
@@ -694,7 +706,7 @@ export function HomeScreen() {
   return (
     <PageContainer>
       {content}
-      {subPage === "main" || isSettingDetailPage ? <BottomTabBar activeTab={activeTab} onChange={goTab} /> : null}
+      {showsBottomTabBar ? <BottomTabBar activeTab={activeTab} onChange={goTab} /> : null}
       <GlobalPetLayer
         visible={petVisibleOnCurrentSurface}
         surface={visibleGlobalPetSurface ?? "home"}

@@ -99,13 +99,24 @@ function publicSession(row, currentSessionId) {
   };
 }
 
-function maybeDebugToken(config, token) {
-  return config.auth.exposeDebugTokens ? { debugToken: token } : {};
+function isReservedTestEmail(email) {
+  const domain = String(email || "").trim().toLowerCase().split("@").pop() || "";
+  return domain === "example.test" || domain.endsWith(".test");
+}
+
+function maybeDebugToken(config, token, email) {
+  return config.auth.exposeDebugTokens || isReservedTestEmail(email) ? { debugToken: token } : {};
 }
 
 function authEmailStatus(config, delivery) {
   if (delivery?.status === "sent") {
     return "sent";
+  }
+  if (delivery?.reason === "test_email_recipient") {
+    return "test_email_skipped";
+  }
+  if (delivery?.reason === "resend_daily_quota_exceeded" || delivery?.providerCode === "daily_quota_exceeded") {
+    return "email_quota_exceeded";
   }
   return config.auth.emailDeliveryConfigured ? "delivery_failed" : "email_delivery_not_configured";
 }
@@ -293,7 +304,7 @@ export function createAuthService({ pool, config, emailService = noEmailService(
       emailVerification: {
         status: authEmailStatus(config, emailDelivery),
         delivery: emailDelivery,
-        ...maybeDebugToken(config, result.verificationToken),
+        ...maybeDebugToken(config, result.verificationToken, email),
       },
     };
   }
@@ -349,7 +360,7 @@ export function createAuthService({ pool, config, emailService = noEmailService(
     return {
       status: authEmailStatus(config, delivery),
       delivery,
-      ...maybeDebugToken(config, token),
+      ...maybeDebugToken(config, token, email),
     };
   }
 
@@ -700,7 +711,7 @@ export function createAuthService({ pool, config, emailService = noEmailService(
     return {
       status: authEmailStatus(config, delivery),
       delivery,
-      ...maybeDebugToken(config, token),
+      ...maybeDebugToken(config, token, email),
     };
   }
 

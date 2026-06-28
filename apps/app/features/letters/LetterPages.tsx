@@ -193,7 +193,7 @@ export function LetterInboxPage({
       ) : null}
       {letters.length > 1 ? (
         <View style={styles.memoryFilterRow}>
-          {letters.slice(0, 6).map((letter) => (
+          {letters.map((letter) => (
             <Pressable key={letter.id} onPress={() => setSelectedId(letter.id)} style={[styles.memoryFilterChip, selected?.id === letter.id ? styles.memoryFilterChipActive : null]}>
               <Text style={[styles.memoryFilterText, selected?.id === letter.id ? styles.memoryFilterTextActive : null]}>{letter.is_locked ? "待开启" : "可阅读"}</Text>
             </Pressable>

@@ -19,6 +19,8 @@ const extensionByMime = new Map([
   ["image/webp", "webp"],
   ["image/gif", "gif"],
 ]);
+const defaultMediaListLimit = 1000;
+const maxMediaListLimit = 5000;
 
 function publicMedia(row) {
   return {
@@ -591,7 +593,7 @@ export function createStorageService({ pool, config }) {
   async function listMedia(input, current) {
     const coupleId = String(input.coupleId || "").toLowerCase();
     assertUuid(coupleId, "invalid_couple_id", "A valid couple id is required.");
-    const limit = Math.min(Math.max(Number(input.limit || 30), 1), 100);
+    const limit = Math.min(Math.max(Number(input.limit || defaultMediaListLimit), 1), maxMediaListLimit);
     const result = await pool.query(
       `
         select *

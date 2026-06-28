@@ -293,6 +293,17 @@ const baseStyles = StyleSheet.create({
     alignItems: "center",
     gap: 12,
   },
+  sectionTitleGroup: {
+    flex: 1,
+    gap: 2,
+    minWidth: 0,
+  },
+  sectionMetaText: {
+    color: colors.muted,
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: "800",
+  },
   bodyText: {
     color: colors.muted,
     fontSize: 15,
@@ -546,6 +557,27 @@ const baseStyles = StyleSheet.create({
     flexDirection: "row",
     flexWrap: "wrap",
     gap: 10,
+  },
+  homeMessageHeaderActions: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  homeMessageViewAllButton: {
+    minHeight: 30,
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(255,255,255,0.72)",
+    borderWidth: 1,
+    borderColor: "rgba(184,95,123,0.12)",
+  },
+  homeMessageViewAllText: {
+    color: colors.accentDark,
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: "900",
   },
   notificationRow: {
     flexDirection: "row",

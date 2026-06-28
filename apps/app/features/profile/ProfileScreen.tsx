@@ -21,7 +21,17 @@ import {
 } from "@/lib/media/imageStorage";
 import { colors } from "@/styles/theme";
 
-export function ProfileScreen({ onSaved, onCancel, embedded = false }: { onSaved?: () => void; onCancel?: () => void; embedded?: boolean }) {
+export function ProfileScreen({
+  onSaved,
+  onCancel,
+  onProfileChanged,
+  embedded = false,
+}: {
+  onSaved?: () => void;
+  onCancel?: () => void;
+  onProfileChanged?: (profile: Profile) => void;
+  embedded?: boolean;
+}) {
   const { session, user } = useAuth();
   const { showToast } = useToast();
   const [profile, setProfile] = useState<Profile | null>(null);
@@ -115,6 +125,8 @@ export function ProfileScreen({ onSaved, onCancel, embedded = false }: { onSaved
         file,
         thumbnailFile,
       });
+      setProfile(nextProfile);
+      onProfileChanged?.(nextProfile);
       setAvatarPath(nextProfile.avatar_url ?? null);
       const nextPreviewUrl = URL.createObjectURL(file);
       setAvatarPreviewUrl((current) => {
@@ -141,7 +153,9 @@ export function ProfileScreen({ onSaved, onCancel, embedded = false }: { onSaved
         showToast({ title: "移除头像失败", message: "登录状态已失效，请重新登录。", tone: "error" });
         return;
       }
-      await deleteSelfHostAvatar(session.access_token);
+      const nextProfile = await deleteSelfHostAvatar(session.access_token);
+      setProfile(nextProfile);
+      onProfileChanged?.(nextProfile);
       setAvatarPath(null);
       setAvatarPreviewUrl(null);
       showToast({ title: "头像已移除", tone: "success" });
@@ -163,11 +177,13 @@ export function ProfileScreen({ onSaved, onCancel, embedded = false }: { onSaved
         showToast({ title: "保存失败", message: "登录状态已失效，请重新登录。", tone: "error" });
         return;
       }
-      await updateSelfHostProfile({
+      const nextProfile = await updateSelfHostProfile({
         accessToken: session.access_token,
         displayName: displayName.trim() || user.email?.split("@")[0] || "未命名",
         birthday: birthdate.trim() || null,
       });
+      setProfile(nextProfile);
+      onProfileChanged?.(nextProfile);
 
       let dateMessage = "";
       if (loveStartDate) {

@@ -19,7 +19,7 @@ import {
 } from "@/lib/selfHost/privacyApi";
 import { updateSelfHostActiveCoupleDates } from "@/lib/selfHost/profileApi";
 import { getSelfHostNotificationPreferences, updateSelfHostNotificationPreferences } from "@/lib/selfHost/pushApi";
-import type { Notification, NotificationPreference } from "@/lib/supabase/database.types";
+import type { Notification, NotificationPreference, Profile } from "@/lib/supabase/database.types";
 import type { PetUserSettings, PetUserSize } from "@/features/pet/userPetSettings";
 import { colors } from "@/styles/theme";
 
@@ -94,6 +94,7 @@ export function SettingsDetailPage({
   petUserSettings,
   onChangePetUserSettings,
   onChanged,
+  onProfileChanged,
   onOpenLetters,
 }: {
   page: SettingPage;
@@ -110,6 +111,7 @@ export function SettingsDetailPage({
   petUserSettings: PetUserSettings;
   onChangePetUserSettings: (next: Partial<PetUserSettings> | ((current: PetUserSettings) => PetUserSettings)) => void;
   onChanged: () => void;
+  onProfileChanged: (profile: Profile) => void;
   onOpenLetters: () => void;
 }) {
   const { showToast } = useToast();
@@ -136,6 +138,7 @@ export function SettingsDetailPage({
       <TopBar title={titles[page]} subtitle={settingSubtitle(page)} left={<BackButton onPress={onBack} />} />
       {page === "profile" ? (
         <ProfileScreen
+          onProfileChanged={onProfileChanged}
           onSaved={() => {
             onChanged();
             onBack();

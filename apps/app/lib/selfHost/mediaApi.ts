@@ -76,7 +76,7 @@ export async function listSelfHostMedia(input: {
     accessToken: input.accessToken,
     query: {
       coupleId: input.coupleId,
-      limit: input.limit ?? 30,
+      limit: input.limit ?? 1000,
     },
   });
   return response.media.map(mapSelfHostMedia);
@@ -126,7 +126,20 @@ export async function uploadSelfHostMedia(input: {
     accessToken: input.accessToken,
     body: { mediaId: created.media.id },
   });
-  return mapSelfHostMedia(completed.media);
+  const media = mapSelfHostMedia(completed.media);
+  const thumbnailSignedUrl = await createSelfHostMediaReadUrl({
+    accessToken: input.accessToken,
+    mediaId: media.id,
+    variant: media.thumbnail_storage_path ? "thumbnail" : "original",
+  }).catch((error) => {
+    console.warn("Self-host media uploaded thumbnail read-url failed:", error);
+    return null;
+  });
+  return {
+    ...media,
+    signedUrl: null,
+    thumbnailSignedUrl,
+  };
 }
 
 export async function createSelfHostMediaReadUrl(input: {

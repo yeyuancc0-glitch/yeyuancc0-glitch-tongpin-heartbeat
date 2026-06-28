@@ -41,6 +41,34 @@ const source = new pg.Pool({ connectionString: sourceUrl, max: 4 });
 const target = new pg.Pool({ connectionString: targetUrl, max: 4 });
 let sourceAuthUsersById = new Map();
 let sourceCoupleIdByMemberPair = new Map();
+let sourceReferencedUserIds = new Set();
+let syntheticProfileWarningEmitted = false;
+const sourceReadCompatibilityWarnings = new Set();
+
+const sourceColumnCompatibility = {
+  "public.profiles": {
+    avatar_thumbnail_url: "null::text",
+    account_status: "'active'::text",
+    deletion_requested_at: "null::timestamptz",
+  },
+  "public.checkins": {
+    deleted_at: "null::timestamptz",
+  },
+  "public.future_letters": {
+    title: "'一封写给你的信'::text",
+    read_at: "null::timestamptz",
+    dismissed_at: "null::timestamptz",
+    updated_at: "created_at",
+  },
+  "public.media_files": {
+    thumbnail_storage_path: "null::text",
+    caption: "null::text",
+    updated_at: "created_at",
+  },
+  "public.calendar_events": {
+    note: "null::text",
+  },
+};
 
 const tableSpecs = [
   {
@@ -170,6 +198,7 @@ async function main() {
   try {
     await preflight(report);
     sourceAuthUsersById = await loadSourceAuthUsers(report);
+    sourceReferencedUserIds = await loadSourceReferencedUserIds(report);
     sourceCoupleIdByMemberPair = await loadSourceCouplePairs(report);
     if (!verifyOnly) {
       const ordered = [...tableSpecs].sort((left, right) => left.order - right.order);
@@ -227,8 +256,22 @@ async function relationExists(pool, relation) {
   return Boolean(result.rows[0]?.exists);
 }
 
+async function columnExists(pool, relation, column) {
+  const { schema, table } = splitRelation(relation);
+  const result = await pool.query(
+    `select exists (
+       select 1 from information_schema.columns
+        where table_schema = $1
+          and table_name = $2
+          and column_name = $3
+     ) as exists`,
+    [schema, table, column]
+  );
+  return Boolean(result.rows[0]?.exists);
+}
+
 async function migrateTable(spec, report) {
-  const rows = await readRows(source, spec);
+  const rows = await sourceRowsForSpec(spec, report);
   const mapped = rows.map((row) => (spec.map ? spec.map(row) : row));
   const artifact = {
     table: spec.name,
@@ -263,13 +306,135 @@ async function migrateTable(spec, report) {
   report.tables.push(artifact);
 }
 
-async function readRows(pool, spec) {
+async function readRows(pool, spec, report = null) {
   if (!(await relationExists(pool, spec.source))) {
     return [];
   }
-  const where = spec.where ? ` where ${spec.where}` : "";
-  const result = await pool.query(`select ${spec.select} from ${spec.source}${where} order by 1`);
+  const readSpec = await sourceReadSpec(pool, spec);
+  if (readSpec.skip) {
+    if (readSpec.warning) {
+      warnSourceReadCompatibility(readSpec.warning, report);
+    }
+    return [];
+  }
+  for (const warning of readSpec.warnings) {
+    warnSourceReadCompatibility(warning, report);
+  }
+  const where = readSpec.where ? ` where ${readSpec.where}` : "";
+  const result = await pool.query(`select ${readSpec.select} from ${spec.source}${where} order by 1`);
   return result.rows;
+}
+
+async function sourceReadSpec(pool, spec) {
+  const compatibility = sourceColumnCompatibility[spec.source] ?? {};
+  const selectedColumns = parseSelectedColumns(spec.select);
+  const selectParts = [];
+  const warnings = [];
+  const missingColumns = [];
+
+  for (const column of selectedColumns) {
+    if (await columnExists(pool, spec.source, column)) {
+      selectParts.push(quoteIdent(column));
+      continue;
+    }
+    const fallbackExpression = compatibility[column];
+    if (!fallbackExpression) {
+      missingColumns.push(column);
+      continue;
+    }
+    selectParts.push(`${fallbackExpression} as ${quoteIdent(column)}`);
+    warnings.push(`${spec.source}.${column} missing in source; using migration compatibility fallback.`);
+  }
+
+  if (missingColumns.length) {
+    return {
+      skip: true,
+      warning: `${spec.source} missing required source column(s): ${missingColumns.join(", ")}; table treated as empty.`,
+    };
+  }
+
+  if (spec.name === "future_letters" && !(await columnExists(pool, spec.source, "recipient_id"))) {
+    return {
+      skip: true,
+      warning: "public.future_letters.recipient_id missing in source; old letters cannot be safely assigned to a recipient and are skipped.",
+    };
+  }
+
+  return {
+    skip: false,
+    select: selectParts.join(", "),
+    where: spec.where ?? "",
+    warnings,
+  };
+}
+
+function parseSelectedColumns(select) {
+  return select
+    .split(",")
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .map((part) => part.replace(/^"|"$/g, ""));
+}
+
+function warnSourceReadCompatibility(message, report = null) {
+  if (sourceReadCompatibilityWarnings.has(message)) {
+    return;
+  }
+  sourceReadCompatibilityWarnings.add(message);
+  if (report) {
+    report.warnings.push(message);
+  }
+  console.warn(`[migration compatibility] ${message}`);
+}
+
+async function sourceRowsForSpec(spec, report) {
+  const rows = await readRows(source, spec, report);
+  if (spec.name !== "profiles") {
+    return rows;
+  }
+  return augmentProfileRows(rows, report);
+}
+
+function augmentProfileRows(rows, report) {
+  const profileById = new Map(rows.map((row) => [String(row.id), row]));
+  const requiredUserIds = new Set([
+    ...sourceAuthUsersById.keys(),
+    ...sourceReferencedUserIds,
+  ]);
+  let syntheticCount = 0;
+  let syntheticWithoutAuthCount = 0;
+
+  for (const userId of requiredUserIds) {
+    if (profileById.has(userId)) {
+      continue;
+    }
+    const authUser = sourceAuthUsersById.get(userId);
+    if (!authUser) {
+      syntheticWithoutAuthCount += 1;
+    }
+    profileById.set(userId, {
+      id: userId,
+      display_name: null,
+      avatar_url: null,
+      avatar_thumbnail_url: null,
+      birthdate: null,
+      account_status: "active",
+      deletion_requested_at: null,
+      created_at: authUser?.createdAt ?? new Date(0),
+      updated_at: authUser?.updatedAt ?? authUser?.createdAt ?? new Date(0),
+    });
+    syntheticCount += 1;
+  }
+
+  if (syntheticCount && !syntheticProfileWarningEmitted) {
+    report.warnings.push(`profiles synthesized for ${syntheticCount} auth/business-referenced user(s) missing public.profiles in source.`);
+  }
+  if (syntheticWithoutAuthCount && !syntheticProfileWarningEmitted) {
+    report.warnings.push(`profiles synthesized for ${syntheticWithoutAuthCount} business-referenced user(s) missing auth.users in source; placeholder email requires MIGRATION_ALLOW_PLACEHOLDER_EMAIL=true.`);
+  }
+  syntheticProfileWarningEmitted = syntheticProfileWarningEmitted || syntheticCount > 0 || syntheticWithoutAuthCount > 0;
+
+  return Array.from(profileById.values()).sort((left, right) => String(left.id).localeCompare(String(right.id)));
 }
 
 async function upsertAccounts(client, profileRows) {
@@ -379,7 +544,7 @@ async function repairAcceptedInviteCoupleIds(client) {
 
 async function verifyTables(report) {
   for (const spec of tableSpecs) {
-    const sourceRows = (await readRows(source, spec)).map((row) => (spec.map ? spec.map(row) : row));
+    const sourceRows = (await sourceRowsForSpec(spec, report)).map((row) => (spec.map ? spec.map(row) : row));
     const columns = Object.keys(sourceRows[0] ?? sampleColumns(spec));
     const sourceHash = stableHash(sourceRows);
     const targetHash = await tableHashForRows(target, spec.target, sourceRows, columns);
@@ -410,8 +575,8 @@ async function verifyTables(report) {
 }
 
 async function verifyCheckinCoverage(report) {
-  const sourceRows = await readRows(source, tableSpecs.find((spec) => spec.name === "checkins"));
-  const targetRows = await readRows(target, tableSpecs.find((spec) => spec.name === "checkins"));
+  const sourceRows = await readRows(source, tableSpecs.find((spec) => spec.name === "checkins"), report);
+  const targetRows = await readRows(target, tableSpecs.find((spec) => spec.name === "checkins"), report);
   const sourceByUser = groupCheckinsByUser(sourceRows);
   const targetByUser = groupCheckinsByUser(targetRows);
   for (const [userId, sourceCount] of sourceByUser.entries()) {
@@ -428,8 +593,8 @@ async function verifyCheckinCoverage(report) {
 }
 
 async function inventoryStorage(report) {
-  const mediaRows = await readRows(source, tableSpecs.find((spec) => spec.name === "media_files"));
-  const profileRows = await readRows(source, tableSpecs.find((spec) => spec.name === "profiles"));
+  const mediaRows = await readRows(source, tableSpecs.find((spec) => spec.name === "media_files"), report);
+  const profileRows = await readRows(source, tableSpecs.find((spec) => spec.name === "profiles"), report);
   const storageObjects = [];
   for (const row of mediaRows) {
     addStorageObject(storageObjects, { bucket: "couple-media", path: row.storage_path, sourceTable: "media_files", sourceId: row.id, variant: "original" });
@@ -728,6 +893,59 @@ async function loadSourceAuthUsers(report) {
       updatedAt: row.updated_at,
     },
   ]));
+}
+
+async function loadSourceReferencedUserIds(report) {
+  const checks = [
+    ["public.couples", ["created_by"]],
+    ["public.couple_members", ["user_id"]],
+    ["public.pair_invites", ["created_by", "accepted_by"]],
+    ["public.messages", ["sender_id"]],
+    ["public.checkins", ["user_id"]],
+    ["public.mood_status", ["user_id"]],
+    ["public.future_letters", ["author_id", "recipient_id"]],
+    ["public.media_files", ["uploader_id"]],
+    ["public.calendar_events", ["created_by"]],
+    ["public.couple_footprints", ["created_by"]],
+    ["public.notifications", ["user_id", "actor_id"]],
+    ["public.notification_preferences", ["user_id"]],
+    ["public.push_tokens", ["user_id"]],
+    ["public.creation_actions", ["actor_id"]],
+    ["public.pet_memories", ["created_by"]],
+    ["public.reports", ["reporter_id", "reported_user_id"]],
+    ["public.blocks", ["blocker_id", "blocked_user_id"]],
+    ["public.account_deletion_requests", ["user_id"]],
+    ["public.app_feedback", ["user_id"]],
+  ];
+  const userIds = new Set();
+
+  for (const [relation, columns] of checks) {
+    if (!(await relationExists(source, relation))) {
+      continue;
+    }
+    const existingColumns = [];
+    for (const column of columns) {
+      if (await columnExists(source, relation, column)) {
+        existingColumns.push(column);
+      }
+    }
+    if (!existingColumns.length) {
+      continue;
+    }
+    const selects = existingColumns.map((column) => `select ${quoteIdent(column)} as user_id from ${relation} where ${quoteIdent(column)} is not null`);
+    const result = await source.query(selects.join(" union "));
+    for (const row of result.rows) {
+      if (row.user_id) {
+        userIds.add(String(row.user_id));
+      }
+    }
+  }
+
+  const missingAuthCount = Array.from(userIds).filter((userId) => !sourceAuthUsersById.has(userId)).length;
+  if (missingAuthCount) {
+    report.warnings.push(`${missingAuthCount} business-referenced user id(s) were not found in auth.users; migration will require placeholder emails or source repair.`);
+  }
+  return userIds;
 }
 
 async function loadSourceCouplePairs(report) {
