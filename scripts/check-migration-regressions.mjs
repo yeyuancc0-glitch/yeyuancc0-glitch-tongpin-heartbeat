@@ -106,6 +106,16 @@ requireIncludes(
   "try_files {path} {path}.html {path}/index.html /index.html",
   "Caddy must serve extensionless nested auth routes from their static HTML before falling back to the home shell",
 );
+requireIncludes(
+  "infra/self-host/staging/scripts/monitor-staging.sh",
+  "grep -q \"邮箱验证\"",
+  "staging monitor must verify the email verification route content, not just HTTP 200",
+);
+requireIncludes(
+  "infra/self-host/staging/scripts/monitor-staging.sh",
+  "grep -q \"设置新密码\"",
+  "staging monitor must verify the password reset route content, not just HTTP 200",
+);
 
 const userAuditScript = "apps/server/scripts/audit-supabase-user-migration.mjs";
 requireIncludes(userAuditScript, "MIGRATION_AUDIT_TARGET_ONLY", "single-user migration audit must support target-only checks after source credentials are removed");

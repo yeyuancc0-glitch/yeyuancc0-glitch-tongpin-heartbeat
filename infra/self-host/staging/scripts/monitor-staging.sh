@@ -124,16 +124,20 @@ check_public_endpoints() {
     fail "public_api_deep status=failed url=$API_URL/api/health/deep"
   fi
 
-  if curl -fsSI --max-time 20 "$WEB_URL/auth/verify-email?token=monitor" | grep -q " 200"; then
-    ok "public_web_route route=/auth/verify-email status=200"
+  local verify_page
+  verify_page="$(curl -fsS --max-time 20 "$WEB_URL/auth/verify-email?token=monitor" 2>/dev/null || true)"
+  if echo "$verify_page" | grep -q "邮箱验证"; then
+    ok "public_web_route route=/auth/verify-email content=邮箱验证"
   else
-    fail "public_web_route route=/auth/verify-email status=failed"
+    fail "public_web_route route=/auth/verify-email content=unexpected"
   fi
 
-  if curl -fsSI --max-time 20 "$WEB_URL/auth/reset-password?token=monitor" | grep -q " 200"; then
-    ok "public_web_route route=/auth/reset-password status=200"
+  local reset_page
+  reset_page="$(curl -fsS --max-time 20 "$WEB_URL/auth/reset-password?token=monitor" 2>/dev/null || true)"
+  if echo "$reset_page" | grep -q "设置新密码"; then
+    ok "public_web_route route=/auth/reset-password content=设置新密码"
   else
-    fail "public_web_route route=/auth/reset-password status=failed"
+    fail "public_web_route route=/auth/reset-password content=unexpected"
   fi
 
   if curl -sSI --max-time 20 "$ASSETS_URL" | grep -q " 200\| 400\| 403"; then
