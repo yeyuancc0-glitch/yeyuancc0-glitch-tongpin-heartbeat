@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Animated, Image, Keyboard, Platform, Pressable, Text, View, type ImageSourcePropType } from "react-native";
-import Reanimated from "react-native-reanimated";
-import { Heart, ImagePlus, Mail, Sparkles } from "lucide-react-native";
+import { Alert, Animated, Image, Keyboard, Platform, Pressable, Text, View, type ImageSourcePropType } from "react-native";
+import { Gesture, GestureDetector } from "react-native-gesture-handler";
+import Reanimated, { runOnJS, useAnimatedStyle, useSharedValue, withSpring } from "react-native-reanimated";
+import { Heart, ImagePlus, Mail, Sparkles, Trash2 } from "lucide-react-native";
 
 import {
   AppTextInput,
@@ -26,10 +27,12 @@ import type { Checkin, CreationSpace, MediaFile } from "@/lib/supabase/database.
 import { BouncyPressable } from "@/motion/BouncyPressable";
 import { BreathingSkeleton } from "@/motion/BreathingSkeleton";
 import { CrossFadeImage } from "@/motion/CrossFadeImage";
+import { haptics } from "@/motion/haptics";
 import { useErrorShake } from "@/motion/useErrorShake";
 import { colors } from "@/styles/theme";
 
 const todayCapsulePhotoLimit = 3;
+const historySwipeDeleteWidth = 82;
 
 type PetWorldDecisionProp = "photo" | "memory" | "letter" | "none" | null;
 
@@ -91,6 +94,7 @@ export function TodayStoryPage({
   onMovePetForMemoryEvent,
   onSaveCheckin,
   onSaveMoodStatus,
+  onDeleteCheckin,
 }: {
   coupleId: string;
   checkins: Checkin[];
@@ -102,6 +106,7 @@ export function TodayStoryPage({
   onMovePetForMemoryEvent: (coupleId: string, kind: "photo" | "memory" | "anniversary" | "today_capsule") => Promise<void>;
   onSaveCheckin?: (input: { checkinDate: string; content: string | null }) => Promise<Checkin>;
   onSaveMoodStatus?: (input: { mood: string; note: string | null }) => Promise<void>;
+  onDeleteCheckin?: (checkinId: string) => Promise<void>;
 }) {
   const { user } = useAuth();
   const { showToast } = useToast();
@@ -115,6 +120,8 @@ export function TodayStoryPage({
   const [photoBusy, setPhotoBusy] = useState(false);
   const [saveBurst, setSaveBurst] = useState(0);
   const [optimisticCheckin, setOptimisticCheckin] = useState<Checkin | null>(null);
+  const [openSwipeCheckinId, setOpenSwipeCheckinId] = useState<string | null>(null);
+  const [deletingCheckinId, setDeletingCheckinId] = useState<string | null>(null);
   const saveCardScale = useRef(new Animated.Value(1)).current;
   const washOpacity = useRef(new Animated.Value(0.72)).current;
   const washBreath = useRef(new Animated.Value(0)).current;
@@ -321,6 +328,39 @@ export function TodayStoryPage({
     }
   }
 
+  async function deleteCheckin(checkinId: string) {
+    if (!onDeleteCheckin || deletingCheckinId) {
+      return;
+    }
+    setDeletingCheckinId(checkinId);
+    try {
+      await onDeleteCheckin(checkinId);
+      setOpenSwipeCheckinId(null);
+      setOptimisticCheckin((current) => (current?.id === checkinId ? null : current));
+      showToast({ title: "历史胶囊已删除", tone: "success" });
+      onChanged();
+    } catch (error) {
+      showToast({ title: "删除失败", message: error instanceof Error ? error.message : "请稍后重试。", tone: "error" });
+    } finally {
+      setDeletingCheckinId(null);
+    }
+  }
+
+  function confirmDeleteCheckin(checkin: Checkin) {
+    haptics.warning();
+    if (Platform.OS !== "web") {
+      Alert.alert("删除这颗历史胶囊", "删除后会从你们的历史胶囊里移除。确定删除吗？", [
+        { text: "取消", style: "cancel" },
+        { text: "删除", style: "destructive", onPress: () => void deleteCheckin(checkin.id) },
+      ]);
+      return;
+    }
+
+    if (window.confirm("删除后会从你们的历史胶囊里移除。确定删除吗？")) {
+      void deleteCheckin(checkin.id);
+    }
+  }
+
   return (
     <View style={styles.todayStoryScreen}>
       <Card soft style={styles.capsulePreviewCard}>
@@ -495,7 +535,19 @@ export function TodayStoryPage({
         ) : (
           visibleCheckins.map((item) => {
             const story = splitStory(item.content);
-            return <ActivityRow key={item.id} title={`${story.mood ? `${story.mood}：` : ""}${story.body}`} meta={item.checkin_date} icon={story.iconImage} />;
+            return (
+              <SwipeableActivityRow
+                key={item.id}
+                title={`${story.mood ? `${story.mood}：` : ""}${story.body}`}
+                meta={item.checkin_date}
+                icon={story.iconImage}
+                canDelete={item.user_id === user?.id && Boolean(onDeleteCheckin)}
+                deleting={deletingCheckinId === item.id}
+                isOpen={openSwipeCheckinId === item.id}
+                onOpenChange={(open) => setOpenSwipeCheckinId(open ? item.id : null)}
+                onDelete={() => confirmDeleteCheckin(item)}
+              />
+            );
           })
         )}
       </Card>
@@ -658,6 +710,83 @@ function ActivityRow({ title, meta, icon }: { title: string; meta: string; icon?
         <Text style={styles.activityTitle}>{title}</Text>
         <Text style={styles.activityMeta}>{meta}</Text>
       </View>
+    </View>
+  );
+}
+
+function SwipeableActivityRow({
+  title,
+  meta,
+  icon,
+  canDelete,
+  deleting,
+  isOpen,
+  onOpenChange,
+  onDelete,
+}: {
+  title: string;
+  meta: string;
+  icon?: ImageSourcePropType;
+  canDelete: boolean;
+  deleting: boolean;
+  isOpen: boolean;
+  onOpenChange: (open: boolean) => void;
+  onDelete: () => void;
+}) {
+  const translateX = useSharedValue(isOpen ? -historySwipeDeleteWidth : 0);
+
+  useEffect(() => {
+    translateX.value = withSpring(isOpen ? -historySwipeDeleteWidth : 0);
+  }, [isOpen, translateX]);
+
+  const pan = Gesture.Pan()
+    .enabled(canDelete && !deleting)
+    .activeOffsetX([-10, 10])
+    .failOffsetY([-8, 8])
+    .onUpdate((event) => {
+      const startX = isOpen ? -historySwipeDeleteWidth : 0;
+      translateX.value = Math.max(-historySwipeDeleteWidth, Math.min(0, startX + event.translationX));
+    })
+    .onEnd((event) => {
+      const shouldOpen = translateX.value < -historySwipeDeleteWidth * 0.45 || event.velocityX < -460;
+      translateX.value = withSpring(shouldOpen ? -historySwipeDeleteWidth : 0);
+      runOnJS(onOpenChange)(shouldOpen);
+      if (shouldOpen) {
+        runOnJS(haptics.selection)();
+      }
+    });
+
+  const rowStyle = useAnimatedStyle(() => ({
+    transform: [{ translateX: translateX.value }],
+  }));
+
+  if (!canDelete) {
+    return (
+      <View style={styles.swipeableActivityContentStatic}>
+        <ActivityRow title={title} meta={meta} icon={icon} />
+      </View>
+    );
+  }
+
+  return (
+    <View style={styles.swipeableActivityRow}>
+      <View pointerEvents={isOpen ? "auto" : "none"} style={styles.swipeableActivityAction}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="删除这颗历史胶囊"
+          disabled={deleting}
+          onPress={onDelete}
+          style={[styles.swipeableDeleteButton, deleting ? styles.swipeableDeleteButtonDisabled : null]}
+        >
+          <Trash2 color="#fff" size={17} strokeWidth={2.5} />
+          <Text style={styles.swipeableDeleteText}>{deleting ? "删除中" : "删除"}</Text>
+        </Pressable>
+      </View>
+      <GestureDetector gesture={pan}>
+        <Reanimated.View style={[styles.swipeableActivityContent, rowStyle]}>
+          <ActivityRow title={title} meta={meta} icon={icon} />
+        </Reanimated.View>
+      </GestureDetector>
     </View>
   );
 }

@@ -106,7 +106,7 @@ export { HomeScreenShell } from "@/features/home/HomeScreenShell";
 export function HomeScreen() {
   const { session, user, signOut } = useAuth();
   const { showToast } = useToast();
-  const { data, loading, loadError, reload, mergeCheckin, mergeMediaFile, mergeProfile } = useCoupleData(user?.id, session?.access_token);
+  const { data, loading, loadError, reload, mergeCheckin, removeCheckin, mergeMediaFile, mergeProfile } = useCoupleData(user?.id, session?.access_token);
   const { settings: petUserSettings, setSettings: setPetUserSettings } = usePetUserSettings(user?.id);
   useAppPullToRefresh(reload);
   const [activeTab, setActiveTab] = useState<BottomTabKey>("home");
@@ -348,6 +348,7 @@ export function HomeScreen() {
           accessToken: session.access_token,
           checkinId,
         });
+        removeCheckin(checkinId);
       }
     : undefined;
   const deleteSelfHostMemoryCalendarEvent = isSelfHostAuthEnabled
@@ -670,6 +671,7 @@ export function HomeScreen() {
         onMovePetForMemoryEvent={movePetForMemoryEventHandler}
         onSaveCheckin={saveSelfHostCheckin}
         onSaveMoodStatus={saveSelfHostMoodStatus}
+        onDeleteCheckin={deleteSelfHostMemoryCheckin}
       />
     );
   } else if (activeTab === "calendar") {

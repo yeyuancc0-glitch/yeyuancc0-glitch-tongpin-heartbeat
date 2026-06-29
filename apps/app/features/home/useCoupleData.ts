@@ -359,6 +359,23 @@ export function useCoupleData(userId?: string, accessToken?: string | null) {
     });
   }, [loadedUserId, saveData, userId]);
 
+  const removeCheckin = useCallback((checkinId: string) => {
+    if (!userId || loadedUserId !== userId) {
+      return;
+    }
+    saveData((current) => {
+      if (!current.checkins.some((checkin) => checkin.id === checkinId)) {
+        return current;
+      }
+      const nextData = {
+        ...current,
+        checkins: current.checkins.filter((checkin) => checkin.id !== checkinId),
+      };
+      writeCachedDashboard(userId, nextData);
+      return nextData;
+    });
+  }, [loadedUserId, saveData, userId]);
+
   const mergeMediaFile = useCallback((mediaFile: MediaFile) => {
     if (!userId || loadedUserId !== userId) {
       return;
@@ -409,5 +426,5 @@ export function useCoupleData(userId?: string, accessToken?: string | null) {
   const currentLoading = loading || loadedUserId !== userId;
   const currentLoadError = loadedUserId === userId ? loadError : null;
 
-  return { data: currentData, loading: currentLoading, loadError: currentLoadError, refreshing, reload: load, mergeCheckin, mergeMediaFile, mergeProfile };
+  return { data: currentData, loading: currentLoading, loadError: currentLoadError, refreshing, reload: load, mergeCheckin, removeCheckin, mergeMediaFile, mergeProfile };
 }
