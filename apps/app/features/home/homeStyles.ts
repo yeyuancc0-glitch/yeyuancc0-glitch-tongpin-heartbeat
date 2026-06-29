@@ -1243,7 +1243,7 @@ const baseStyles = StyleSheet.create({
     minHeight: 56,
     borderRadius: 20,
     overflow: "hidden",
-    backgroundColor: "rgba(241,87,106,0.1)",
+    backgroundColor: "transparent",
   },
   swipeableActivityAction: {
     position: "absolute",
@@ -1278,7 +1278,7 @@ const baseStyles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 10,
     justifyContent: "center",
-    backgroundColor: "rgba(255,255,255,0.86)",
+    backgroundColor: "#fff",
     borderWidth: 1,
     borderColor: "rgba(184,95,123,0.08)",
     touchAction: "pan-y",
