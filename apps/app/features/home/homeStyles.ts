@@ -1281,6 +1281,8 @@ const baseStyles = StyleSheet.create({
     backgroundColor: "rgba(255,255,255,0.86)",
     borderWidth: 1,
     borderColor: "rgba(184,95,123,0.08)",
+    touchAction: "pan-y",
+    userSelect: "none",
   },
   swipeableActivityContentStatic: {
     minHeight: 56,

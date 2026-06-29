@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Alert, Animated, Image, Keyboard, Platform, Pressable, Text, View, type ImageSourcePropType } from "react-native";
-import { Gesture, GestureDetector } from "react-native-gesture-handler";
-import Reanimated, { runOnJS, useAnimatedStyle, useSharedValue, withSpring } from "react-native-reanimated";
+import { Alert, Animated, Image, Keyboard, PanResponder, Platform, Pressable, Text, View, type ImageSourcePropType } from "react-native";
+import Reanimated from "react-native-reanimated";
 import { Heart, ImagePlus, Mail, Sparkles, Trash2 } from "lucide-react-native";
 
 import {
@@ -733,32 +732,71 @@ function SwipeableActivityRow({
   onOpenChange: (open: boolean) => void;
   onDelete: () => void;
 }) {
-  const translateX = useSharedValue(isOpen ? -historySwipeDeleteWidth : 0);
+  const translateX = useRef(new Animated.Value(isOpen ? -historySwipeDeleteWidth : 0)).current;
+  const startOffsetRef = useRef(isOpen ? -historySwipeDeleteWidth : 0);
+
+  const settleOpen = (open: boolean) => {
+    const nextValue = open ? -historySwipeDeleteWidth : 0;
+    startOffsetRef.current = nextValue;
+    Animated.spring(translateX, {
+      toValue: nextValue,
+      friction: 8,
+      tension: 180,
+      useNativeDriver: false,
+    }).start();
+    onOpenChange(open);
+  };
 
   useEffect(() => {
-    translateX.value = withSpring(isOpen ? -historySwipeDeleteWidth : 0);
+    const nextValue = isOpen ? -historySwipeDeleteWidth : 0;
+    startOffsetRef.current = nextValue;
+    Animated.spring(translateX, {
+      toValue: nextValue,
+      friction: 8,
+      tension: 180,
+      useNativeDriver: false,
+    }).start();
   }, [isOpen, translateX]);
 
-  const pan = Gesture.Pan()
-    .enabled(canDelete && !deleting)
-    .activeOffsetX([-10, 10])
-    .failOffsetY([-8, 8])
-    .onUpdate((event) => {
-      const startX = isOpen ? -historySwipeDeleteWidth : 0;
-      translateX.value = Math.max(-historySwipeDeleteWidth, Math.min(0, startX + event.translationX));
-    })
-    .onEnd((event) => {
-      const shouldOpen = translateX.value < -historySwipeDeleteWidth * 0.45 || event.velocityX < -460;
-      translateX.value = withSpring(shouldOpen ? -historySwipeDeleteWidth : 0);
-      runOnJS(onOpenChange)(shouldOpen);
+  const panResponder = PanResponder.create({
+    onMoveShouldSetPanResponder: (_, gestureState) => (
+      canDelete &&
+      !deleting &&
+      Math.abs(gestureState.dx) > 8 &&
+      Math.abs(gestureState.dx) > Math.abs(gestureState.dy) * 1.15
+    ),
+    onMoveShouldSetPanResponderCapture: (_, gestureState) => (
+      canDelete &&
+      !deleting &&
+      Math.abs(gestureState.dx) > 8 &&
+      Math.abs(gestureState.dx) > Math.abs(gestureState.dy) * 1.15
+    ),
+    onPanResponderGrant: () => {
+      translateX.stopAnimation((value) => {
+        startOffsetRef.current = value;
+      });
+    },
+    onPanResponderMove: (_, gestureState) => {
+      const nextValue = Math.max(-historySwipeDeleteWidth, Math.min(0, startOffsetRef.current + gestureState.dx));
+      translateX.setValue(nextValue);
+    },
+    onPanResponderRelease: (_, gestureState) => {
+      const finalValue = Math.max(-historySwipeDeleteWidth, Math.min(0, startOffsetRef.current + gestureState.dx));
+      const shouldOpen = finalValue < -historySwipeDeleteWidth * 0.36 || gestureState.vx < -0.32;
+      settleOpen(shouldOpen);
       if (shouldOpen) {
-        runOnJS(haptics.selection)();
+        haptics.selection();
       }
-    });
+    },
+    onPanResponderTerminate: () => {
+      settleOpen(isOpen);
+    },
+    onShouldBlockNativeResponder: () => false,
+  });
 
-  const rowStyle = useAnimatedStyle(() => ({
-    transform: [{ translateX: translateX.value }],
-  }));
+  const rowStyle = {
+    transform: [{ translateX }],
+  };
 
   if (!canDelete) {
     return (
@@ -782,11 +820,9 @@ function SwipeableActivityRow({
           <Text style={styles.swipeableDeleteText}>{deleting ? "删除中" : "删除"}</Text>
         </Pressable>
       </View>
-      <GestureDetector gesture={pan}>
-        <Reanimated.View style={[styles.swipeableActivityContent, rowStyle]}>
-          <ActivityRow title={title} meta={meta} icon={icon} />
-        </Reanimated.View>
-      </GestureDetector>
+      <Animated.View {...panResponder.panHandlers} style={[styles.swipeableActivityContent, rowStyle]}>
+        <ActivityRow title={title} meta={meta} icon={icon} />
+      </Animated.View>
     </View>
   );
 }
