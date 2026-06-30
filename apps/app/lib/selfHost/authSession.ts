@@ -47,14 +47,26 @@ export function authResponseToSession(response: SelfHostAuthResponse): AppAuthSe
 
 async function readRawItem() {
   if (Platform.OS === "web" && typeof window !== "undefined") {
-    return window.sessionStorage.getItem(storageKey);
+    const localValue = window.localStorage.getItem(storageKey);
+    if (localValue) {
+      return localValue;
+    }
+
+    const sessionValue = window.sessionStorage.getItem(storageKey);
+    if (sessionValue) {
+      window.localStorage.setItem(storageKey, sessionValue);
+      window.sessionStorage.removeItem(storageKey);
+      return sessionValue;
+    }
+
+    return null;
   }
   return AsyncStorage.getItem(storageKey);
 }
 
 async function writeRawItem(value: string) {
   if (Platform.OS === "web" && typeof window !== "undefined") {
-    window.sessionStorage.setItem(storageKey, value);
+    window.localStorage.setItem(storageKey, value);
     return;
   }
   await AsyncStorage.setItem(storageKey, value);
@@ -62,6 +74,7 @@ async function writeRawItem(value: string) {
 
 async function removeRawItem() {
   if (Platform.OS === "web" && typeof window !== "undefined") {
+    window.localStorage.removeItem(storageKey);
     window.sessionStorage.removeItem(storageKey);
     return;
   }

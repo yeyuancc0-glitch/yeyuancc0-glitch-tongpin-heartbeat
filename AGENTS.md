@@ -102,6 +102,7 @@
 - 反馈入口必须通过 `submit_feedback(feedback_body, target_couple_id, feedback_metadata)` RPC 写入 `app_feedback`。
 - `parseBody` 默认上限现在是 64KB；只有真正需要更大的路由才显式放宽，避免继续沿用 32KB 旧限制。
 - 认证恢复、账号切换和首页初次加载期间不能渲染 mock / 测试用户数据；加载态应显示无个人信息的首页骨架，并按 `userId` 隔离缓存。
+- guest / 暂不登录进入首页后，页面必须直接展示可浏览的首页内容；“先认识一下你”资料页里的“稍后再补充”应当结束资料补充流程并回到首页，不要把 guest 用户继续困在资料页刷新里。
 - 首页 dashboard 首次加载失败、超时或临时网络错误不能当成用户缺少 `profiles` 记录，也不能自动把用户导向个人资料补全页；只有 API 成功返回 profile 为空时才进入资料补全。
 - self-host Auth 恢复遇到网络错误、CORS/DNS 超时或 API 5xx 时不能清除本地 session；只有明确 401/403 或 refresh token 被拒绝时才清 session，避免短暂后端故障让用户看起来“数据丢失”。
 - staging / production 配置真实 Resend 时，Auth 冒烟和调试账号必须使用 `.test` 保留域；后端邮件服务必须对 `.test` 收件人短路返回 `test_email_skipped` 并提供 debug token，不能调用 Resend 或消耗真实邮件额度。
@@ -119,6 +120,7 @@
 - `AppScroll` 的滚轮/触控板惯性回弹只使用浏览器 / RN Web 原生滚动；JS `rubberBand` 只用于真实触控下拉刷新。
 - Web 端按 App 式体验禁用用户缩放；`+html.tsx` viewport 保留 `initial-scale=1`、`maximum-scale=1`、`user-scalable=no` 和 `viewport-fit=cover`。
 - iOS Safari 底部导航要兼容地址栏收缩和回弹，但不要跟随 `visualViewport` / 键盘高度移动。
+- self-host Web 登录态必须持久化到 `localStorage`，并在首次读取时把旧 `sessionStorage` 会话迁移过去；登出和切换 guest 需同时清理两处存储，避免桌面网页重开后丢登录。
 - 个人页设置详情由 `HomeScreen` 的 `subPage` 承载；从“我的”打开任一设置页时必须同时保持 `activeTab = "me"`，不要只裸设 `subPage`，否则刷新或返回时容易表现成跳回首页、底部导航状态丢失。
 - 从设置详情跳到其它业务子页时，也必须同步切到该子页所属的 `activeTab`；设置详情返回必须回到 `activeTab = "me"` + `subPage = "main"`，避免出现设置页/信件页内容和底部导航状态不一致。
 - 触感反馈使用 `expo-haptics` 经 `apps/app/motion/haptics.ts` 封装；Web 或不支持设备必须静默降级。

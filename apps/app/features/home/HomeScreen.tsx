@@ -86,6 +86,7 @@ import type { MediaFile, Notification } from "@/lib/supabase/database.types";
 import { BouncyPressable } from "@/motion/BouncyPressable";
 import { motionTokens } from "@/motion/tokens";
 import { colors } from "@/styles/theme";
+import type { PhotoUploadResult } from "@/features/home/homeShared";
 
 const petNightSleepWakeCheckMs = 60_000;
 const settingPages: readonly SettingPage[] = [
@@ -119,6 +120,7 @@ export function HomeScreen() {
   const [activePhotoPreview, setActivePhotoPreview] = useState<PhotoPreviewState | null>(null);
   const [creationTownView, setCreationTownView] = useState<CreationTownView>("hub");
   const [realtimePetReaction, setRealtimePetReaction] = useState<CreationPetStageReaction | null>(null);
+  const [skippedProfileSetup, setSkippedProfileSetup] = useState(false);
   const lastSeenPetSurfaceRef = useRef<string | null>(null);
   const petEventHandlerRef = useRef<(event: { action: LivePetVisualAction; message: string }) => void>(() => {});
   const { partnerOnline: petRoomPartnerOnline, broadcastPetEvent } = usePetRealtime({
@@ -144,6 +146,10 @@ export function HomeScreen() {
       reload();
     });
   }, [reload]);
+
+  useEffect(() => {
+    setSkippedProfileSetup(false);
+  }, [user?.id]);
 
   petEventHandlerRef.current = (event) => {
     setRealtimePetReaction({
@@ -435,6 +441,51 @@ export function HomeScreen() {
     return <HomeScreenShell />;
   }
 
+  if (guestMode) {
+    return (
+      <PageContainer>
+        <HomeMainPage
+          me={me}
+          partner={partnerProfile}
+          startedAt={data.couple?.started_at ?? ""}
+          loveDays={0}
+          coupleId=""
+          checkins={[]}
+          messages={[]}
+          currentUserId={""}
+          quickInteractions={[]}
+          todayInteractionCount={0}
+          onAddCustomQuickInteraction={() => {}}
+          customQuickComposerOpen={false}
+          customQuickDraft=""
+          onChangeCustomQuickDraft={() => {}}
+          onSaveCustomQuickInteraction={() => {}}
+          onCancelCustomQuickInteraction={() => {}}
+          onQuickInteraction={async () => false}
+          onWriteLetter={() => void requireLogin()}
+          onUploadPhoto={() => void requireLogin()}
+          onPhotoFiles={async () =>
+            ({
+              uploadedCount: 0,
+              uploadedFiles: [],
+              failedFiles: [],
+            }) satisfies PhotoUploadResult}
+          onPreviewPhoto={() => void 0}
+          onDeletePhoto={() => void requireLogin()}
+          onChanged={reload}
+          onOpenMessages={() => void requireLogin()}
+          onRequireLogin={requireLogin}
+          interactionText=""
+          quickSending={false}
+          mediaFiles={[]}
+          moodStatuses={[]}
+          coupleReady={false}
+          onOpenPairing={openPairingPage}
+        />
+      </PageContainer>
+    );
+  }
+
   if (!data.profile && loadError) {
     return (
       <PageContainer>
@@ -443,10 +494,17 @@ export function HomeScreen() {
     );
   }
 
-  if (!data.profile) {
+  if (!data.profile && !guestMode && !skippedProfileSetup) {
     return (
       <PageContainer>
-        <ProfileScreen onSaved={reload} onProfileChanged={mergeProfile} />
+        <ProfileScreen
+          onSaved={() => {
+            setSkippedProfileSetup(false);
+            reload();
+          }}
+          onCancel={() => setSkippedProfileSetup(true)}
+          onProfileChanged={mergeProfile}
+        />
       </PageContainer>
     );
   }
@@ -729,24 +787,6 @@ export function HomeScreen() {
         onDeleteMedia={deleteSelfHostMemoryMedia}
         onDeleteFootprint={deleteSelfHostMemoryFootprint}
         onDeleteLetter={deleteSelfHostLetterHandler}
-      />
-    );
-  } else if (guestMode) {
-    content = (
-      <MePage
-        me={me}
-        partner={partnerProfile}
-        loveDays={0}
-        onSignOut={requireLogin}
-        onEndCouple={requireLogin}
-        endingCouple={false}
-        onOpenSetting={(page) => {
-          if (page === "profile") {
-            openSettingPage(page);
-            return;
-          }
-          void requireLogin();
-        }}
       />
     );
   } else {
