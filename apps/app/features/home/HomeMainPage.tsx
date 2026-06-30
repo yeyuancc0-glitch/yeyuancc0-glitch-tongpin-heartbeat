@@ -53,6 +53,7 @@ export function HomeMainPage({
   onDeletePhoto,
   onChanged,
   onOpenMessages,
+  onRequireLogin,
   interactionText,
   quickSending,
   mediaFiles,
@@ -84,6 +85,7 @@ export function HomeMainPage({
   onDeletePhoto: (file: MediaFile) => void;
   onChanged: () => void;
   onOpenMessages: () => void;
+  onRequireLogin: () => void;
   interactionText: string;
   quickSending: boolean;
   mediaFiles: MediaFile[];
@@ -195,8 +197,8 @@ export function HomeMainPage({
                 color={item.tone}
                 icon={item.icon ?? interactionIconFor(item.id)}
                 onPress={
-                  isSoloMode && item.id !== "message"
-                    ? onAddCustomQuickInteraction
+                  isSoloMode
+                    ? onRequireLogin
                     : item.id === "message"
                       ? onAddCustomQuickInteraction
                       : quickSending
@@ -221,9 +223,7 @@ export function HomeMainPage({
               </View>
             </View>
           ) : null}
-          {isSoloMode ? (
-            <InlineNotice tone="info">现在可以先浏览首页，绑定另一半后会自动解锁完整互动和情侣空间。</InlineNotice>
-          ) : null}
+          {isSoloMode ? <InlineNotice tone="info">现在可以先浏览首页，登录后会解锁留言、照片、心情和情侣空间。</InlineNotice> : null}
           {reaction ? <FloatingReaction key={reaction.id} icon={reaction.icon} label={reaction.label} image={reaction.image} /> : null}
           {interactionText ? <InlineNotice tone="success">{interactionText}</InlineNotice> : null}
         </Card>
@@ -240,7 +240,7 @@ export function HomeMainPage({
           onOpenPairing={onOpenPairing}
         />
 
-      <PhotoAlbumCard mediaFiles={mediaFiles} onUploadPhoto={onUploadPhoto} onPhotoFiles={onPhotoFiles} onPreviewPhoto={onPreviewPhoto} onDeletePhoto={onDeletePhoto} soloMode={isSoloMode} onOpenPairing={onOpenPairing} />
+      <PhotoAlbumCard mediaFiles={mediaFiles} onUploadPhoto={onUploadPhoto} onPhotoFiles={onPhotoFiles} onPreviewPhoto={onPreviewPhoto} onDeletePhoto={onDeletePhoto} soloMode={isSoloMode} onOpenPairing={onOpenPairing} onRequireLogin={onRequireLogin} />
     </View>
   );
 }

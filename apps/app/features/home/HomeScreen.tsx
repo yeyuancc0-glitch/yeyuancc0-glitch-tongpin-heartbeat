@@ -37,6 +37,7 @@ import {
 } from "@/components/app-ui/AppUI";
 import { useAppPullToRefresh, useToast } from "@/components/ui";
 import { useAuth } from "@/features/auth/AuthProvider";
+import { saveSelfHostGuestMode } from "@/lib/selfHost/authSession";
 import { AddEventPage } from "@/features/calendar/AddEventPage";
 import { TodayStoryPage } from "@/features/checkins/TodayStoryPage";
 import { storyIconImageFromText } from "@/features/checkins/checkinUtils";
@@ -105,7 +106,7 @@ function isSettingPage(page: SubPage): page is SettingPage {
 export { HomeScreenShell } from "@/features/home/HomeScreenShell";
 
 export function HomeScreen() {
-  const { session, user, signOut } = useAuth();
+  const { session, user, signOut, guestMode } = useAuth();
   const { showToast } = useToast();
   const { data, loading, loadError, reload, mergeCheckin, removeCheckin, mergeMediaFile, mergeProfile } = useCoupleData(user?.id, session?.access_token);
   const { settings: petUserSettings, setSettings: setPetUserSettings } = usePetUserSettings(user?.id);
@@ -430,7 +431,7 @@ export function HomeScreen() {
       }
     : undefined;
 
-  if (loading && !hasUsableContent) {
+  if (loading && !hasUsableContent && !guestMode) {
     return <HomeScreenShell />;
   }
 
@@ -503,6 +504,17 @@ export function HomeScreen() {
     setActiveTab("me");
     setSubPageReturnTab("me");
     setSubPage("pairing");
+  }
+
+  async function requireLogin() {
+    await saveSelfHostGuestMode(false);
+    if (session) {
+      await signOut();
+    }
+    setActiveTab("me");
+    setSubPageReturnTab("me");
+    setSubPage("main");
+    showToast({ title: "需要先登录", message: "这个功能要登录后才能使用。", tone: "info" });
   }
 
   function openSubPage(page: Exclude<SubPage, "main" | SettingPage>, ownerTab: BottomTabKey = activeTab) {
@@ -657,6 +669,7 @@ export function HomeScreen() {
         moodStatuses={data.moodStatuses}
         coupleReady={Boolean(data.couple)}
         onOpenPairing={openPairingPage}
+        onRequireLogin={requireLogin}
       />
     );
   } else if (subPage === "pairing") {
@@ -718,6 +731,24 @@ export function HomeScreen() {
         onDeleteLetter={deleteSelfHostLetterHandler}
       />
     );
+  } else if (guestMode) {
+    content = (
+      <MePage
+        me={me}
+        partner={partnerProfile}
+        loveDays={0}
+        onSignOut={requireLogin}
+        onEndCouple={requireLogin}
+        endingCouple={false}
+        onOpenSetting={(page) => {
+          if (page === "profile") {
+            openSettingPage(page);
+            return;
+          }
+          void requireLogin();
+        }}
+      />
+    );
   } else {
     content = (
       <MePage
@@ -759,7 +790,7 @@ export function HomeScreen() {
           onClose={() => void closeLetterPopup(pendingLetterPopup)}
         />
       ) : null}
-      {subPage === "main" && activeTab === "home" && data.couple ? <FloatingCreationEntry onOpen={() => openSubPage("creation", "home")} /> : null}
+      {subPage === "main" && activeTab === "home" && data.couple && !guestMode ? <FloatingCreationEntry onOpen={() => openSubPage("creation", "home")} /> : null}
       {activePhotoPreview ? (
         <PhotoPreviewPopup
           files={data.mediaFiles}

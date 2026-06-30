@@ -8,7 +8,7 @@ import { SetupRequiredScreen } from "@/features/setup/SetupRequiredScreen";
 import { isSelfHostConfigured } from "@/lib/selfHost/config";
 
 export default function IndexPage() {
-  const { user, loading, passwordRecovery } = useAuth();
+  const { user, loading, passwordRecovery, guestMode } = useAuth();
   const isAuthConfigured = isSelfHostConfigured;
 
   return (
@@ -22,7 +22,7 @@ export default function IndexPage() {
               <HomeScreenShell />
             ) : passwordRecovery ? (
               <AuthScreen />
-            ) : user ? (
+            ) : user || guestMode ? (
               <HomeScreen />
             ) : (
               <AuthScreen />

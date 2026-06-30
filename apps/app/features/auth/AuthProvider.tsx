@@ -12,7 +12,7 @@ import {
   registerSelfHost,
   requestSelfHostPasswordReset,
 } from "@/lib/selfHost/authApi";
-import { loadSelfHostSession, saveSelfHostSession } from "@/lib/selfHost/authSession";
+import { loadSelfHostGuestMode, loadSelfHostSession, saveSelfHostGuestMode, saveSelfHostSession } from "@/lib/selfHost/authSession";
 import type { AppAuthSession, AppAuthUser } from "@/lib/selfHost/types";
 
 type AuthFeedback = {
@@ -24,8 +24,10 @@ type AuthContextValue = {
   session: AppAuthSession | null;
   user: AppAuthUser | null;
   loading: boolean;
+  guestMode: boolean;
   passwordRecovery: boolean;
   clearPasswordRecovery: () => void;
+  enterGuestMode: () => Promise<void>;
   signInWithPassword: (input: { email: string; password: string }) => Promise<AuthFeedback>;
   signUpWithPassword: (input: { email: string; password: string; displayName?: string }) => Promise<AuthFeedback>;
   sendPasswordResetEmail: (email: string) => Promise<AuthFeedback>;
@@ -59,6 +61,7 @@ function readAuthHashError() {
 export function AuthProvider({ children }: PropsWithChildren) {
   const { showToast } = useToast();
   const [session, setSession] = useState<AppAuthSession | null>(null);
+  const [guestMode, setGuestMode] = useState(false);
   const [passwordRecovery, setPasswordRecovery] = useState(false);
   const [loading, setLoading] = useState(true);
 
@@ -81,10 +84,17 @@ export function AuthProvider({ children }: PropsWithChildren) {
         if (!mounted) {
           return;
         }
+        const storedGuestMode = await loadSelfHostGuestMode();
+        if (!mounted) {
+          return;
+        }
         if (!storedSession) {
+          setGuestMode(storedGuestMode);
           setSession(null);
           return;
         }
+        setGuestMode(false);
+        await saveSelfHostGuestMode(false);
         try {
           const user = await loadSelfHostMe(storedSession.access_token);
           if (!mounted) {
@@ -196,10 +206,13 @@ export function AuthProvider({ children }: PropsWithChildren) {
       session,
       user: session?.user ?? null,
       loading,
+      guestMode,
       passwordRecovery,
       clearPasswordRecovery: () => setPasswordRecovery(false),
       signInWithPassword: async ({ email, password }) => {
         const result = await loginSelfHost({ email, password });
+        await saveSelfHostGuestMode(false);
+        setGuestMode(false);
         if (result.session) {
           await saveSelfHostSession(result.session);
           setSession(result.session);
@@ -208,6 +221,8 @@ export function AuthProvider({ children }: PropsWithChildren) {
       },
       signUpWithPassword: async ({ displayName, email, password }) => {
         const result = await registerSelfHost({ email, password, displayName });
+        await saveSelfHostGuestMode(false);
+        setGuestMode(false);
         if (result.session) {
           await saveSelfHostSession(result.session);
           setSession(result.session);
@@ -234,6 +249,8 @@ export function AuthProvider({ children }: PropsWithChildren) {
         }
         const result = await confirmSelfHostPasswordReset({ token: resetToken, password });
         if (result.session) {
+          await saveSelfHostGuestMode(false);
+          setGuestMode(false);
           await saveSelfHostSession(result.session);
           setSession(result.session);
         } else {
@@ -257,11 +274,20 @@ export function AuthProvider({ children }: PropsWithChildren) {
           console.warn("Self-host logout cleanup failed:", error);
         }
         await saveSelfHostSession(null);
+        await saveSelfHostGuestMode(false);
         setPasswordRecovery(false);
+        setGuestMode(false);
+        setSession(null);
+      },
+      enterGuestMode: async () => {
+        await saveSelfHostSession(null);
+        await saveSelfHostGuestMode(true);
+        setPasswordRecovery(false);
+        setGuestMode(true);
         setSession(null);
       },
     }),
-    [loading, passwordRecovery, session]
+    [guestMode, loading, passwordRecovery, session]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

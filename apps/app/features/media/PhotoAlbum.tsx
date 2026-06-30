@@ -54,6 +54,7 @@ export function PhotoAlbumCard({
   onDeletePhoto,
   soloMode,
   onOpenPairing,
+  onRequireLogin,
 }: {
   mediaFiles: MediaFile[];
   onUploadPhoto: (options?: PhotoUploadOptions) => void;
@@ -62,6 +63,7 @@ export function PhotoAlbumCard({
   onDeletePhoto: (file: MediaFile) => void;
   soloMode?: boolean;
   onOpenPairing?: () => void;
+  onRequireLogin?: () => void;
 }) {
   const previews = mediaFiles.slice(0, 9);
   const hiddenCount = Math.max(0, mediaFiles.length - previews.length);
@@ -84,7 +86,7 @@ export function PhotoAlbumCard({
               <Text style={styles.photoAlbumViewAllText}>查看全部</Text>
             </BouncyPressable>
           ) : null}
-          <BouncyPressable accessibilityRole="button" accessibilityLabel="上传照片" onPress={soloMode ? onOpenPairing : Platform.OS === "web" ? undefined : () => onUploadPhoto()} haptic="selection" style={styles.photoAlbumUploadButton}>
+          <BouncyPressable accessibilityRole="button" accessibilityLabel="上传照片" onPress={soloMode ? onRequireLogin ?? onOpenPairing : Platform.OS === "web" ? undefined : () => onUploadPhoto()} haptic="selection" style={styles.photoAlbumUploadButton}>
             <ImagePlus color={colors.accentDark} size={17} />
             <PhotoUploadInput accessibilityLabel="上传照片" multiple onFiles={onPhotoFiles} />
           </BouncyPressable>
@@ -126,13 +128,13 @@ export function PhotoAlbumCard({
         })}
       </View>
       ) : (
-        <BouncyPressable accessibilityRole="button" accessibilityLabel="上传第一张照片" onPress={soloMode ? onOpenPairing : Platform.OS === "web" ? undefined : () => onUploadPhoto()} haptic="selection" style={styles.photoAlbumEmpty}>
+        <BouncyPressable accessibilityRole="button" accessibilityLabel="上传第一张照片" onPress={soloMode ? onRequireLogin ?? onOpenPairing : Platform.OS === "web" ? undefined : () => onUploadPhoto()} haptic="selection" style={styles.photoAlbumEmpty}>
           <PhotoUploadInput accessibilityLabel="上传第一张照片" multiple onFiles={onPhotoFiles} />
           <View style={styles.photoAlbumEmptyCamera}>
             <ImagePlus color="rgba(123,103,108,0.52)" size={28} />
           </View>
-          <Text style={styles.photoAlbumEmptyTitle}>{soloMode ? "先绑定再上传" : "下一个瞬间"}</Text>
-          <Text style={styles.photoAlbumEmptyText}>{soloMode ? "绑定另一半后，这里会变成你们的相册。" : "在这里，留存我们的下一个瞬间。"}</Text>
+          <Text style={styles.photoAlbumEmptyTitle}>{soloMode ? "先登录再上传" : "下一个瞬间"}</Text>
+          <Text style={styles.photoAlbumEmptyText}>{soloMode ? "登录后，这里会变成你们的相册。" : "在这里，留存我们的下一个瞬间。"}</Text>
         </BouncyPressable>
       )}
     </Card>

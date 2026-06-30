@@ -4,6 +4,7 @@ import { Platform } from "react-native";
 import type { AppAuthSession, AppAuthUser, SelfHostAuthResponse, SelfHostSession, SelfHostUser } from "./types";
 
 const storageKey = "tongpin.selfHost.authSession.v1";
+const guestModeStorageKey = "tongpin.selfHost.guestMode.v1";
 
 function expiresAtSeconds(value?: string | null) {
   if (!value) {
@@ -67,6 +68,29 @@ async function removeRawItem() {
   await AsyncStorage.removeItem(storageKey);
 }
 
+async function readGuestModeRawItem() {
+  if (Platform.OS === "web" && typeof window !== "undefined") {
+    return window.sessionStorage.getItem(guestModeStorageKey);
+  }
+  return AsyncStorage.getItem(guestModeStorageKey);
+}
+
+async function writeGuestModeRawItem(value: string | null) {
+  if (Platform.OS === "web" && typeof window !== "undefined") {
+    if (value === null) {
+      window.sessionStorage.removeItem(guestModeStorageKey);
+      return;
+    }
+    window.sessionStorage.setItem(guestModeStorageKey, value);
+    return;
+  }
+  if (value === null) {
+    await AsyncStorage.removeItem(guestModeStorageKey);
+    return;
+  }
+  await AsyncStorage.setItem(guestModeStorageKey, value);
+}
+
 export async function loadSelfHostSession() {
   const raw = await readRawItem();
   if (!raw) {
@@ -91,4 +115,12 @@ export async function saveSelfHostSession(session: AppAuthSession | null) {
     return;
   }
   await writeRawItem(JSON.stringify(session));
+}
+
+export async function loadSelfHostGuestMode() {
+  return (await readGuestModeRawItem()) === "true";
+}
+
+export async function saveSelfHostGuestMode(enabled: boolean) {
+  await writeGuestModeRawItem(enabled ? "true" : null);
 }

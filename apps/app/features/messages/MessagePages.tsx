@@ -118,6 +118,7 @@ export function HomeMessageBoard({
   onOpenAll,
   soloMode,
   onOpenPairing,
+  onRequireLogin,
 }: {
   coupleId: string;
   messages: Message[];
@@ -127,6 +128,7 @@ export function HomeMessageBoard({
   onOpenAll: () => void;
   soloMode?: boolean;
   onOpenPairing?: () => void;
+  onRequireLogin?: () => void;
 }) {
   const { showToast } = useToast();
   const { session } = useAuth();
@@ -203,13 +205,13 @@ export function HomeMessageBoard({
           <BouncyPressable
             accessibilityRole="button"
             accessibilityLabel="发送留言"
-            onPress={soloMode ? onOpenPairing : send}
+            onPress={soloMode ? onRequireLogin ?? onOpenPairing : send}
             disabled={!soloMode && (!body.trim() || busy)}
             haptic="success"
             style={[styles.homeMessageSendButton, !soloMode && (!body.trim() || busy) ? styles.homeMessageSendButtonDisabled : null]}
           >
             <Send color="#fff" size={15} strokeWidth={2.4} />
-            <Text style={styles.homeMessageSendText}>{soloMode ? "去绑定" : busy ? "发送中" : "发送"}</Text>
+            <Text style={styles.homeMessageSendText}>{soloMode ? "去登录" : busy ? "发送中" : "发送"}</Text>
           </BouncyPressable>
         </View>
       </View>

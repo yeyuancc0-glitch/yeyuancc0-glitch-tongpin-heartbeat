@@ -23,6 +23,7 @@ import { useToast } from "@/components/ui";
 import { useAuth } from "@/features/auth/AuthProvider";
 import { isSelfHostAuthEnabled } from "@/lib/selfHost/config";
 import { BouncyPressable } from "@/motion/BouncyPressable";
+import { SecondaryButton } from "@/components/app-ui/AppUI";
 
 type AuthView = "signIn" | "signUp";
 type AuthField = "displayName" | "email" | "password" | "confirmPassword" | "resetToken";
@@ -31,6 +32,7 @@ export function AuthScreen() {
   const { showToast } = useToast();
   const {
     clearPasswordRecovery,
+    enterGuestMode,
     passwordRecovery,
     sendPasswordResetEmail,
     signInWithPassword,
@@ -311,6 +313,8 @@ export function AuthScreen() {
               {busy ? <ActivityIndicator color="#fff" size="small" /> : null}
               <Text style={styles.primaryButtonText}>{primaryLabel}</Text>
             </BouncyPressable>
+
+            {passwordRecovery ? null : <SecondaryButton label="暂不登录" onPress={() => void enterGuestMode()} />}
 
             {passwordRecovery ? (
               <Pressable
