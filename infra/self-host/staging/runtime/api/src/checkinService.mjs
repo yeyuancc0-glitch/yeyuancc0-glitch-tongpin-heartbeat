@@ -104,7 +104,7 @@ export function createCheckinService({ notificationService, pool }) {
       return publicCheckin(result.rows[0]);
     });
 
-    await notificationService?.tryCreatePartnerNotification(pool, {
+    await notificationService?.tryCreatePartnerNotification({
       coupleId,
       type: "checkin",
       title: "TA 存下了一颗今日胶囊",

@@ -4,7 +4,7 @@ import type { PetWorldSurface } from "@/features/pet-world/logic/petWorldRoutes"
 import type { CreationSpace } from "@/lib/supabase/database.types";
 
 export type SettingPage = "profile" | "couple" | "pet" | "notifications" | "privacy" | "relationship" | "feedback" | "about";
-export type SubPage = "main" | "messages" | "addEvent" | "writeLetter" | "letterInbox" | "creation" | SettingPage;
+export type SubPage = "main" | "pairing" | "messages" | "addEvent" | "writeLetter" | "letterInbox" | "creation" | SettingPage;
 export type QuickInteractionItem = { id: string; label: string; tone: string; icon?: ImageSourcePropType };
 export type NotificationPreferenceToggleKey =
   | "push_enabled"

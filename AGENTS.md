@@ -16,6 +16,7 @@
 - 前端自建留言冒烟：`API_BASE_URL=https://api-staging.fancah.tech npm run smoke:self-host-messages -w apps/app`
 - 前端自建快捷互动冒烟：`API_BASE_URL=https://api-staging.fancah.tech npm run smoke:self-host-interactions -w apps/app`
 - 前端自建首页 dashboard 冒烟：`API_BASE_URL=https://api-staging.fancah.tech npm run smoke:self-host-dashboard -w apps/app`
+- 前端自建首页头像/相册图片验收：`API_BASE_URL=https://api-staging.fancah.tech npm run smoke:self-host-dashboard-images -w apps/app`
 - 前端自建今日胶囊冒烟：`API_BASE_URL=https://api-staging.fancah.tech npm run smoke:self-host-checkins -w apps/app`
 - 前端自建日历事件冒烟：`API_BASE_URL=https://api-staging.fancah.tech npm run smoke:self-host-calendar-events -w apps/app`
 - 前端自建足迹冒烟：`API_BASE_URL=https://api-staging.fancah.tech npm run smoke:self-host-footprints -w apps/app`
@@ -43,6 +44,8 @@
 - 环境变量检查：`npm run check:env`
 - 自建 API 语法检查：`npm run check:server`
 - 自建 Auth 邮件投递自检：`node apps/server/scripts/check-email-service.mjs`
+- 自建相册历史缩略图补齐 dry-run：服务器 `/opt/tongpin` 下执行 `sudo docker compose exec -T api npm run backfill:media-thumbnails -- --limit=200`
+- 自建相册历史缩略图补齐 apply：服务器 `/opt/tongpin` 下执行 `sudo docker compose exec -T api npm run backfill:media-thumbnails -- --apply --limit=200`；建议分批执行并观察失败计数。
 - 自建目标库整体完整性审计：服务器 `/opt/tongpin` 下执行 `sudo docker compose exec -T api npm run audit:self-host-integrity --silent`；本地可用 `SELF_HOST_DB_URL="postgresql://..." npm run audit:self-host-integrity -w @tongpin/server`。该审计只输出计数和脱敏 id，用于发现账号/profile 缺失、active couple 异常、业务数据因关系边界不可见、上传长期 pending 等迁移维稳问题。对象存储 HEAD 校验由 `INTEGRITY_AUDIT_STORAGE_CHECK=auto|true|false` 控制：服务器/监控必须在 MinIO 环境齐全时启用；本地只连 DB 且缺少 MinIO 环境时可自动跳过，避免误报图片对象全部缺失。
 - 服务器 Supabase 旧数据迁移编排 dry-run：服务器 `/opt/tongpin` 下执行 `bash scripts/run-supabase-migration.sh`
 - 服务器 Supabase 旧数据迁移编排 apply：服务器 `/opt/tongpin` 下执行 `bash scripts/run-supabase-migration.sh --apply`
@@ -56,6 +59,7 @@
 - 安装自建 staging 备份 cron：服务器 `/opt/tongpin` 下执行 `sudo bash scripts/install-backup-cron.sh`
 - 自建 staging 恢复演练：服务器 `/opt/tongpin` 下执行 `bash scripts/verify-backups-restore.sh`
 - 安装自建 staging 恢复演练 cron：服务器 `/opt/tongpin` 下执行 `sudo bash scripts/install-restore-verify-cron.sh`
+- 自建 staging runtime API 语法检查：`cd infra/self-host/staging/runtime/api && npm run check`
 - Supabase 直连基线检查：`npm run check:supabase-usage`
 - Supabase 直连严格清零检查：`npm run check:supabase-usage:strict`
 - 迁移事故回归检查：`npm run check:migration-regressions`
@@ -67,6 +71,7 @@
 
 - `apps/app`：Expo Router 应用，Web / iOS / Android 共用。
 - `apps/server`：自建后端 API/BFF，提供 Auth、关系、dashboard、相册/头像 MinIO、留言、胶囊、信件、通知/SSE、推送队列/worker、隐私反馈和家园/云宠安全子集。
+- `apps/server/src/{authRoutes,contentRoutes,notificationRoutes,privacyRoutes}.mjs`：主工程按业务域拆分的 HTTP 路由模块；staging runtime API 也保持同名同责拆分，入口 `http.mjs` 只负责编排。
 - `apps/app/features`：按业务域拆分页面和服务；首页 shell 在 `features/home/HomeScreen.tsx`。
 - `apps/app/components/app-ui`：跨页面 App UI 组件，`BottomTabBar.tsx` 从 `AppUI.tsx` re-export。
 - `apps/app/lib`：自建 API、通知、日期、平台封装、媒体工具和产品常量。
@@ -91,9 +96,11 @@
 - 所有情侣业务数据必须带 `couple_id`，权限边界以 active couple member 为准；不要只靠前端隐藏按钮做数据权限。
 - 信件产品文案统一叫“信件 / 胶囊信”，底层复用 `future_letters`；创建走 `create_future_letter(...)`，删除走 `delete_letter(letter_id)`。
 - 伴侣侧普通业务通知走 `create_partner_notification(...)` RPC；系统推送正文只放低敏摘要，不复述留言、信件、胶囊、照片或精确位置内容。
+- 通知 SSE 采用 `Postgres LISTEN/NOTIFY` 唤醒 + 进程内事件回调的组合，连接异常时允许退避轮询兜底，但不要退回纯固定轮询；通知写入后要发出 `pg_notify`，否则跨进程实例不会及时唤醒。
 - 留言发送、通知和删除统一走 `apps/app/features/messages/messageService.ts`；通知/推送失败不能回滚或阻塞留言本身。
 - 今日胶囊删除必须软删 `checkins.deleted_at`，不要从前端 hard delete。
 - 反馈入口必须通过 `submit_feedback(feedback_body, target_couple_id, feedback_metadata)` RPC 写入 `app_feedback`。
+- `parseBody` 默认上限现在是 64KB；只有真正需要更大的路由才显式放宽，避免继续沿用 32KB 旧限制。
 - 认证恢复、账号切换和首页初次加载期间不能渲染 mock / 测试用户数据；加载态应显示无个人信息的首页骨架，并按 `userId` 隔离缓存。
 - 首页 dashboard 首次加载失败、超时或临时网络错误不能当成用户缺少 `profiles` 记录，也不能自动把用户导向个人资料补全页；只有 API 成功返回 profile 为空时才进入资料补全。
 - self-host Auth 恢复遇到网络错误、CORS/DNS 超时或 API 5xx 时不能清除本地 session；只有明确 401/403 或 refresh token 被拒绝时才清 session，避免短暂后端故障让用户看起来“数据丢失”。
@@ -132,7 +139,8 @@
 - `HomeScreen.tsx` 只作为首页数据编排和路由 shell；主屏、今日胶囊、记忆页、家园、信件、设置、留言和相册放在对应 feature 目录，不要再把新业务整块堆回 HomeScreen。
 - 首页登录恢复骨架在 `features/home/HomeScreenShell.tsx`，`HomeScreen.tsx` 继续 re-export 以兼容旧导入；不要把这类静态骨架 UI 重新堆回主 shell。
 - 首页 dashboard 数据辅助逻辑已拆到 `homeDashboardTypes.ts`、`homeDashboardSelects.ts`、`homeDashboardCache.ts`、`homeDashboardUtils.ts`、`homeAvatarHydration.ts`、`homeMediaHydration.ts` 和 `homeNotificationRefresh.ts`；云宠路由/仪式 helper 在 `homePetWorldHelpers.ts`。后续维护优先复用这些模块，不要把缓存、水合或云宠仪式逻辑堆回 `useCoupleData.ts` / `HomeScreen.tsx`。
-- 首页 dashboard 加载分阶段：首屏只阻塞 profiles 与 active couple 基础信息；留言、相册、心情、信件、通知和图片 signed URL 后台补齐。
+- 首页 dashboard 加载分阶段：首屏必须带齐 profiles、active couple 基础信息、当前/伴侣头像 signed URL 和首屏可见相册缩略图 signed URL；其它留言、相册完整元数据、心情、信件、通知等仍可按现有聚合/后台刷新策略补齐。
+- 头像和相册首屏关键图不能依赖前端进入主页后再逐个请求 read-url；`/api/me/dashboard` 应只为当前/伴侣头像与首屏相册缩略图预签名，前端可短超时预取后再结束首次无缓存 loading。相册小图预览优先只显示缩略图；首页/预览首屏少量历史照片缺缩略图或缩略图对象缺失时，可有限回退原图 signed URL 避免看起来“照片丢失”，但不能后台全量签历史图片 URL；原图大图预览仍按需签名加载。
 - 首页 dashboard 当前也驱动完整留言、相册、信件、记忆和家园子页；在没有分页/增量加载前，聚合 limit 不能恢复到很小的首屏预览值，否则迁移后的历史数据会被误认为“丢失”。今日胶囊是日更历史数据，dashboard/checkins 服务上限必须覆盖超过 100 天的历史；如需降首屏 payload，必须先给完整页面补独立分页或全量加载入口。
 - 自建业务列表 API 的默认 limit 也不能保留旧首页预览值；`messages`、`letters`、`media`、`calendar-events`、`footprints`、`creation/actions`、`notifications` 等直接列表在没有独立分页前默认应覆盖完整页面历史需求，显式传小 limit 才能作为预览。
 - 前端 `apps/app/lib/selfHost/*Api.ts` 的直接列表 helper 默认 limit 也必须与后端完整历史默认保持一致；不要在客户端封装层保留 12、30、60、100 这类旧预览默认值，否则未来完整页绕过 dashboard 时会再次看起来“数据丢失”。
@@ -143,17 +151,19 @@
 - 首页留言板这类预览式列表若只展示最近几条，必须提供真实完整页入口和总数提示；不能把完整留言页藏起来，否则迁移后用户会误以为旧留言丢失。
 - 首页/设置页通知列表当前也依赖 dashboard 与后台通知刷新结果；通知刷新 limit 必须与 dashboard 聚合保持一致，不能用很小的预览值覆盖已有通知列表，否则刷新/SSE 后历史提醒会被误认为“丢失”。
 - 首页后台刷新应静默运行；兜底刷新保持温和频率，通知轮询 90 秒，全量 dashboard 兜底刷新 120 秒且仅页面可见时运行。
-- 首页本地缓存只保存低敏骨架数据；不要持久化留言、通知、胶囊、信件、足迹、宠物记忆、caption、signed URL、AI 气泡或 world decision 正文。头像和相册只缓存 Storage path，刷新后后台重新签名。
+- 首页本地缓存只保存低敏骨架数据；不要持久化留言、通知、胶囊、信件、足迹、宠物记忆、caption、signed URL、AI 气泡或 world decision 正文。头像图片体积小，允许按 `userId + avatar path` 持久化到头像专用本地 data URL 缓存，换头像时通过服务器返回的新 path 自动失效；为避免浏览器跨域读取 signed URL 导致缓存落盘失败，dashboard 可直接返回头像缩略图 data URL 供前端写入头像专用缓存。主 dashboard 骨架缓存仍应保持轻量，不要把头像 data URL 混入主 dashboard 缓存。相册只缓存 Storage path，不持久化 signed URL。
+- 用户二次打开首页时，如果已有本地 dashboard 骨架，不能因为头像 data URL / signed URL 或相册 signed URL 尚未补齐而继续显示首页骨架；应先进入主页，头像缺本地 data URL 时短暂显示昵称首字母兜底，相册缩略图后台刷新补齐，避免“退出再进仍像首次加载”。
 - 首页 dashboard 的头像/相册 signed URL 水合必须逐资源容错；单个历史 Storage 对象缺失、签名失败或缩略图异常只能让该图片降级为空/占位，不能让整个 dashboard 刷新失败或清空其它业务数据。
 - self-host 路径下头像使用 MinIO `profile-avatars`，相册使用 MinIO `couple-media`。数据库只保存 Storage path，前端展示时通过自建 API 生成 signed URL，不能把 signed URL 写回数据库。
-- 头像与相册缩略图使用独立 Storage path：`profiles.avatar_thumbnail_url`、`media_files.thumbnail_storage_path`；列表/九宫格/记忆流优先展示缩略图，点开预览才按需读取原图。
-- 自建完整性审计必须校验 ready 相册原图、头像原图与数据库路径在 MinIO 中真实存在；原图缺失是 failure。头像/相册缩略图缺失是 warning，读取缩略图 signed URL 时必须回退原图，避免迁移或对象缺失让图片表现为“上传后消失”。
+- 头像与相册缩略图使用独立 Storage path：`profiles.avatar_thumbnail_url`、`media_files.thumbnail_storage_path`；列表/九宫格/记忆流优先展示缩略图，首屏少量历史照片缺缩略图时可有限回退原图 signed URL 避免看起来“照片丢失”，点开预览再按需读取当前/相邻原图。
+- 自建完整性审计必须校验 ready 相册原图、头像原图与数据库路径在 MinIO 中真实存在；原图缺失是 failure。头像/相册缩略图缺失是 warning；相册小图默认优先缩略图，只有首页/预览首屏少量历史照片缺缩略图或缩略图对象丢失时，才允许用原图 signed URL 兜底，避免用户误以为照片丢失。
 - 相册大图预览应保留缩略图托底，并对当前与相邻照片的原图 signed URL 做预签名和图片预取；已加载图片 URL 需要跨组件实例记忆，避免切图后立即重复闪加载。
 - self-host 头像上传、移除或资料保存成功后，前端必须把返回的 profile 合并回当前 dashboard 状态，并保留路径未变时已有的头像 signed URL；不要只依赖返回上一页后的全量 reload，否则会表现成“上传后消失”。
 - self-host 相册上传完成并拿到 ready `media_files` 记录后，前端必须先把新媒体合并进当前 dashboard / 相册状态；后台 reload 只做校准，不能把上传成功后的显示完全依赖一次全量刷新，否则刷新被跳过、失败或列表上限不一致时会表现成“上传后消失”。
 - 旧头像缺少 `avatar_thumbnail_url` 时，小尺寸头像只能使用 Storage transform / 本地缩略图 blob 兜底，不要回退到原图 signed URL。
-- 用户只需选择一次图片；前端负责自动上传原图和缩略图。缩略图失败时不要写入缩略图 path；数据库保存失败要清理本次上传对象。
-- self-host 相册上传创建记录时只有收到并成功校验缩略图对象，才允许写入 `media_files.thumbnail_storage_path`；如果历史记录有缩略图 path 但 MinIO 对象不存在，读缩略图 signed URL 必须回退原图，避免首页九宫格/相册显示破图。
+- 用户只需选择一次图片，不要求用户自己提供缩略图；前端负责自动生成并上传原图和缩略图，服务端也必须在相册上传完成时从原图生成缩略图作为兜底。缩略图生成/校验失败时不要把新相册记录标记为 ready；数据库保存失败要清理本次上传对象。
+- 已有历史相册缺缩略图时，用 `npm run backfill:media-thumbnails -w @tongpin/server -- --apply --limit=<N>` 分批生成 WebP 缩略图并写回 `media_files.thumbnail_storage_path`；脚本输出只能包含计数和脱敏 id，不输出 Storage path。
+- self-host 相册上传创建记录时只有收到并成功校验缩略图对象，才允许写入 `media_files.thumbnail_storage_path`；如果历史记录有缩略图 path 但 MinIO 对象不存在，普通列表小图读缩略图 signed URL 应失败并显示占位；首页/预览首屏可有限回退原图 signed URL，不能后台全量回退原图拖慢九宫格/记忆流。
 - self-host 头像和相册签名 PUT 上传返回给浏览器的 `requiredHeaders` 不能包含 `content-length`；浏览器禁止手动设置该 header。服务端仍用创建上传时记录的 size 和完成阶段 S3 HEAD 校验文件大小，前端上传 helper 也要过滤旧响应中的 `content-length`。
 - 图片 MIME、缩略图和预取工具位于 `apps/app/lib/media/imageStorage.ts`；不要把纯媒体工具重新挂到 Supabase client 上。
 - 相册和记忆卡片图片上传当前最多 10 张；首页九宫格预览前 9 张，超过 9 张显示 `+N`。
@@ -204,6 +214,7 @@
 - Caddy 运行日志必须过滤 request query 中的认证 token 和 MinIO 预签名参数，至少包括 `token`、`access_token`、`refresh_token`、`X-Amz-Credential`、`X-Amz-Signature` 和 `X-Amz-Security-Token`；不要把密码重置/邮箱验证 token 或 Storage signed URL 签名完整写入容器日志。
 - API 应用层请求日志只能记录不带 query 的路径，不能直接记录 `request.url`；认证链接、密码重置、通知 SSE 游标和 Storage signed URL 都可能通过 query 携带敏感或短期授权信息。
 - 自建 staging monitor 必须检查备份 cron、恢复演练 cron 和 monitor cron 已安装；同时检查 `AUTH_EXPOSE_DEBUG_TOKENS` 未开启、Supabase 源库/源 Storage 凭证未重新进入 API 容器环境。
+- 大重构或清理类改动结束前，补跑 `npm run typecheck -w apps/app -- --noUnusedLocals --noUnusedParameters --pretty false`，确保路由拆分或其他收尾没有留下死分支和未使用代码。
 - 浏览器验收：启动静态预览后打开 `http://localhost:<port>`，检查首页内容、底部导航、相册预览和控制台 error/warn。
 - 大重构或清理类改动应保持严格未使用检查通过：`npm run typecheck -w apps/app -- --noUnusedLocals --noUnusedParameters --pretty false`。
 
@@ -247,6 +258,7 @@
 - 前端 self-host 模式已接入初步今日胶囊和心情状态：`useCoupleData` 从 `/api/checkins` 与 `/api/mood-status` 读取，`TodayStoryPage` 通过 `apps/app/lib/selfHost/checkinApi.ts` 保存胶囊与 mood，`MemoryPage` 的今日胶囊删除在 self-host 模式下走 `/api/checkins/delete` 软删。
 - 前端 self-host 模式已接入初步日历事件/纪念日：`useCoupleData` 从 `/api/calendar-events` 读取，`AddEventPage` 通过 `apps/app/lib/selfHost/calendarApi.ts` 创建事件，`MemoryPage` 的日历事件删除在 self-host 模式下走 `/api/calendar-events/delete` 软删；云宠记忆动作在 self-host 模式下暂时 no-op，等云宠 API 迁完再打开。
 - 前端 self-host 模式已接入初步足迹数据：`useCoupleData` 从 `/api/footprints` 读取，`MemoryPage` 的足迹删除在 self-host 模式下走 `/api/footprints/delete` 软删；家园足迹编辑器在 self-host 模式下只做足迹本身和低敏 creation action，足迹奖励仍未迁完，不要在前端自行发放粮食/星糖。
+- 未绑定用户登录后应直接进入正常首页壳子和底部导航，情侣专属内容以空态/引导态锁住，后续可随时去绑定后解锁完整互动；不要再把首页入口强制卡成纯绑定页。
 - 自建足迹坐标更新必须保持成对语义：创建时经纬度要么同时提供要么同时为空；更新时可只传一个坐标字段，但服务端必须用现有行补齐后校验，不能把未传字段当作清空导致合法局部编辑失败。
 - 前端 self-host 模式已接入初步信件/胶囊信：`useCoupleData` 从 `/api/letters` 读取，`WriteLetterPage` 通过 `apps/app/lib/selfHost/letterApi.ts` 创建信件，`LetterInboxPage` 走 `/api/letters/read`、`/api/letters/dismiss`、`/api/letters/delete`，`MemoryPage` 的信件删除也走自建 delete；通知提醒与 Push delivery 入队由自建后端处理，云宠送信动作等云宠 API 落地后再接。
 - 前端 self-host 模式已接入初步站内通知：`useCoupleData` 从 `/api/notifications` 读取并用 `/api/notifications/stream` SSE 做低敏实时刷新触发，90 秒轮询仍作为兜底；首页通知弹窗和设置页站内通知通过 `apps/app/lib/selfHost/notificationApi.ts` 调用 `/api/notifications/read`、`/api/notifications/dismiss`；系统推送发送由自建 Push worker 处理，前端仍保留站内通知兜底。

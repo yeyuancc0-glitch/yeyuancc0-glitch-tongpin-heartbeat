@@ -3,28 +3,37 @@ import { createSelfHostMediaReadUrl } from "@/lib/selfHost/mediaApi";
 
 export type PreservedMediaUrl = { path?: string | null; signedUrl: string | null; thumbnailSignedUrl: string | null };
 
-export async function hydrateMediaFile(file: MediaFile, signedMediaUrlById: Map<string, PreservedMediaUrl>, accessToken?: string | null) {
+export function withPreservedMediaUrls(file: MediaFile, signedMediaUrlById: Map<string, PreservedMediaUrl>) {
   const existingMediaUrl = signedMediaUrlById.get(file.id);
   const shouldPreserve = existingMediaUrl?.path === file.storage_path;
   const existingSignedUrl = shouldPreserve ? existingMediaUrl.signedUrl : null;
   const existingThumbnailSignedUrl = shouldPreserve ? existingMediaUrl.thumbnailSignedUrl : null;
+  return {
+    ...file,
+    signedUrl: file.signedUrl ?? existingSignedUrl,
+    thumbnailSignedUrl: file.thumbnailSignedUrl ?? existingThumbnailSignedUrl,
+  };
+}
+
+export async function hydrateMediaFile(file: MediaFile, signedMediaUrlById: Map<string, PreservedMediaUrl>, accessToken?: string | null) {
+  const preservedFile = withPreservedMediaUrls(file, signedMediaUrlById);
+  const existingSignedUrl = preservedFile.signedUrl ?? null;
+  const existingThumbnailSignedUrl = preservedFile.thumbnailSignedUrl ?? null;
   if (!accessToken) {
-    return {
-      ...file,
-      signedUrl: existingSignedUrl,
-      thumbnailSignedUrl: existingThumbnailSignedUrl ?? existingSignedUrl,
-    };
+    return preservedFile;
   }
   const thumbnailSignedUrl =
     existingThumbnailSignedUrl ??
-    await createSelfHostMediaReadUrl({
-      accessToken,
-      mediaId: file.id,
-      variant: file.thumbnail_storage_path ? "thumbnail" : "original",
-    }).catch((error) => {
-      console.warn("Self-host media thumbnail hydration failed:", error);
-      return null;
-    });
+    (file.thumbnail_storage_path
+      ? await createSelfHostMediaReadUrl({
+          accessToken,
+          mediaId: file.id,
+          variant: "thumbnail",
+        }).catch((error) => {
+          console.warn("Self-host media thumbnail hydration failed:", error);
+          return null;
+        })
+      : null);
   return {
     ...file,
     signedUrl: existingSignedUrl,

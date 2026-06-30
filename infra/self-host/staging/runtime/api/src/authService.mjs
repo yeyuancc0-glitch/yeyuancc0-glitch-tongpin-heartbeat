@@ -5,6 +5,7 @@ import { withTransaction } from "./db.mjs";
 import { createAccessToken, createOpaqueToken, hashOpaqueToken, verifyAccessToken } from "./tokens.mjs";
 
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const dummyPasswordHash = "$argon2id$v=19$m=65536,t=3,p=4$ZHVtbXktc2VlZC1oYXNoAAAAAA$ZHVtbXktc2VlZC1oYXNoAAAAAA";
 
 export class AuthError extends Error {
   constructor(code, statusCode = 400, message = "Authentication request failed.") {
@@ -536,7 +537,7 @@ export function createAuthService({ pool, config, emailService = noEmailService(
         [email],
       );
       const account = result.rows[0];
-      const verified = account ? await argon2.verify(account.password_hash, password) : false;
+      const verified = await argon2.verify(account?.password_hash || dummyPasswordHash, password).catch(() => false);
 
       if (!account || !verified || account.disabled_at) {
         await recordLoginAttempt(client, email, requestMeta, false);

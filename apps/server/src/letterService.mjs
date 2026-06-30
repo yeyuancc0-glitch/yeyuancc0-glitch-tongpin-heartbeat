@@ -128,7 +128,7 @@ export function createLetterService({ notificationService, pool }) {
     });
 
     const nearImmediate = unlockAt.getTime() <= Date.now() + 30_000;
-    await notificationService?.tryCreatePartnerNotification(pool, {
+    await notificationService?.tryCreatePartnerNotification({
       coupleId,
       type: "letter",
       title: nearImmediate ? "你收到了一封信" : "一封信已经寄到未来",

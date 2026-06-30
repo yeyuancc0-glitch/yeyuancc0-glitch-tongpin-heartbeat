@@ -116,6 +116,8 @@ export function HomeMessageBoard({
   latestMessage,
   onChanged,
   onOpenAll,
+  soloMode,
+  onOpenPairing,
 }: {
   coupleId: string;
   messages: Message[];
@@ -123,6 +125,8 @@ export function HomeMessageBoard({
   latestMessage: string;
   onChanged: () => void;
   onOpenAll: () => void;
+  soloMode?: boolean;
+  onOpenPairing?: () => void;
 }) {
   const { showToast } = useToast();
   const { session } = useAuth();
@@ -196,15 +200,22 @@ export function HomeMessageBoard({
           <AppTextInput value={body} onChangeText={setBody} placeholder="把今天想说的话写在这里" multiline maxLength={200} style={styles.homeMessageInput} />
         </View>
         <View style={styles.homeMessageActionRow}>
-          <BouncyPressable accessibilityRole="button" accessibilityLabel="发送留言" onPress={send} disabled={!body.trim() || busy} haptic="success" style={[styles.homeMessageSendButton, !body.trim() || busy ? styles.homeMessageSendButtonDisabled : null]}>
+          <BouncyPressable
+            accessibilityRole="button"
+            accessibilityLabel="发送留言"
+            onPress={soloMode ? onOpenPairing : send}
+            disabled={!soloMode && (!body.trim() || busy)}
+            haptic="success"
+            style={[styles.homeMessageSendButton, !soloMode && (!body.trim() || busy) ? styles.homeMessageSendButtonDisabled : null]}
+          >
             <Send color="#fff" size={15} strokeWidth={2.4} />
-            <Text style={styles.homeMessageSendText}>{busy ? "发送中" : "发送"}</Text>
+            <Text style={styles.homeMessageSendText}>{soloMode ? "去绑定" : busy ? "发送中" : "发送"}</Text>
           </BouncyPressable>
         </View>
       </View>
       {messages.length > 0 ? (
         <View style={styles.homeMessageList}>
-          {messages.slice(0, 4).map((message) => (
+          {messages.map((message) => (
             <StickyMemoCard
               key={message.id}
               author={message.sender?.display_name || "匿名用户"}

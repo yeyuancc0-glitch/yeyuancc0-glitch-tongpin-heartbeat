@@ -108,7 +108,7 @@ export function createCalendarService({ notificationService, pool }) {
     });
 
     if (remind) {
-      await notificationService?.tryCreatePartnerNotification(pool, {
+      await notificationService?.tryCreatePartnerNotification({
         coupleId,
         type: "calendar_event",
         title: "新的记忆事件已保存",

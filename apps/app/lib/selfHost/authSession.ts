@@ -46,14 +46,14 @@ export function authResponseToSession(response: SelfHostAuthResponse): AppAuthSe
 
 async function readRawItem() {
   if (Platform.OS === "web" && typeof window !== "undefined") {
-    return window.localStorage.getItem(storageKey);
+    return window.sessionStorage.getItem(storageKey);
   }
   return AsyncStorage.getItem(storageKey);
 }
 
 async function writeRawItem(value: string) {
   if (Platform.OS === "web" && typeof window !== "undefined") {
-    window.localStorage.setItem(storageKey, value);
+    window.sessionStorage.setItem(storageKey, value);
     return;
   }
   await AsyncStorage.setItem(storageKey, value);
@@ -61,7 +61,7 @@ async function writeRawItem(value: string) {
 
 async function removeRawItem() {
   if (Platform.OS === "web" && typeof window !== "undefined") {
-    window.localStorage.removeItem(storageKey);
+    window.sessionStorage.removeItem(storageKey);
     return;
   }
   await AsyncStorage.removeItem(storageKey);

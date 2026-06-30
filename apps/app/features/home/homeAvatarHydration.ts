@@ -18,18 +18,30 @@ export async function createAvatarUrlMap(profiles: DashboardProfile[], accessTok
   const avatarUrlByPath = new Map<string, AvatarUrlPair>();
   await Promise.all(
     Array.from(avatarPathByOriginalPath.values()).map(async ({ originalPath, thumbnailPath, userId }) => {
-      const thumbSignedUrl = accessToken
-        ? await createSelfHostAvatarReadUrl({
-            accessToken,
-            userId,
-            variant: thumbnailPath ? "thumbnail" : "original",
-          }).catch((error) => {
-            console.warn("Self-host avatar hydration failed:", error);
-            return null;
-          })
-        : null;
+      const [signedUrl, thumbSignedUrl] = await Promise.all([
+        accessToken
+          ? createSelfHostAvatarReadUrl({
+              accessToken,
+              userId,
+              variant: "original",
+            }).catch((error) => {
+              console.warn("Self-host avatar hydration failed:", error);
+              return null;
+            })
+          : Promise.resolve(null),
+        thumbnailPath && accessToken
+          ? createSelfHostAvatarReadUrl({
+              accessToken,
+              userId,
+              variant: "thumbnail",
+            }).catch((error) => {
+              console.warn("Self-host avatar hydration failed:", error);
+              return null;
+            })
+          : Promise.resolve(null),
+      ]);
       avatarUrlByPath.set(originalPath, {
-        signedUrl: thumbSignedUrl,
+        signedUrl,
         thumbSignedUrl,
       });
     })

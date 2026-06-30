@@ -21,9 +21,12 @@ type SelfHostDashboardProfile = {
   displayName: string | null;
   avatarStoragePath: string | null;
   avatarThumbnailStoragePath: string | null;
+  avatarSignedUrl?: string | null;
+  avatarThumbSignedUrl?: string | null;
+  avatarThumbDataUrl?: string | null;
   birthday: string | null;
-  accountStatus?: DashboardProfile["account_status"];
-  deletionRequestedAt?: string | null;
+  accountStatus: DashboardProfile["account_status"];
+  deletionRequestedAt: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -41,6 +44,7 @@ type SelfHostDashboardMember = {
 type SelfHostDashboardCouple = {
   id: string;
   relationshipStartedAt: string | null;
+  createdByUserId: string;
   createdAt: string;
   endedAt: string | null;
   status: "active" | "ended";
@@ -75,6 +79,8 @@ type SelfHostMedia = {
   uploaderId: string;
   storagePath: string;
   thumbnailStoragePath: string | null;
+  signedUrl?: string | null;
+  thumbnailSignedUrl?: string | null;
   mimeType: string;
   sizeBytes: number;
   caption: string | null;
@@ -261,17 +267,18 @@ function mapProfile(profile: SelfHostDashboardProfile | null): DashboardProfile 
     display_name: profile.displayName,
     avatar_url: profile.avatarStoragePath,
     avatar_thumbnail_url: profile.avatarThumbnailStoragePath,
-    avatar_signed_url: null,
-    avatar_thumb_signed_url: null,
+    avatar_signed_url: profile.avatarSignedUrl ?? null,
+    avatar_thumb_signed_url: profile.avatarThumbSignedUrl ?? null,
+    avatar_thumb_data_url: profile.avatarThumbDataUrl ?? null,
     birthdate: profile.birthday,
-    account_status: profile.accountStatus ?? "active",
-    deletion_requested_at: profile.deletionRequestedAt ?? null,
+    account_status: profile.accountStatus,
+    deletion_requested_at: profile.deletionRequestedAt,
     created_at: profile.createdAt,
     updated_at: profile.updatedAt,
   };
 }
 
-function mapCouple(couple: SelfHostDashboardCouple | null, currentUserId: string): ActiveCouple | null {
+function mapCouple(couple: SelfHostDashboardCouple | null): ActiveCouple | null {
   if (!couple) {
     return null;
   }
@@ -280,7 +287,7 @@ function mapCouple(couple: SelfHostDashboardCouple | null, currentUserId: string
     started_at: couple.relationshipStartedAt ?? couple.createdAt,
     anniversary_date: null,
     status: couple.status,
-    created_by: currentUserId,
+    created_by: couple.createdByUserId,
     created_at: couple.createdAt,
     ended_at: couple.endedAt,
     couple_members: couple.members.map((member) => ({
@@ -334,6 +341,8 @@ function mapMedia(media: SelfHostMedia): MediaFile {
     created_at: media.createdAt,
     updated_at: media.updatedAt,
     deleted_at: media.deletedAt,
+    signedUrl: media.signedUrl ?? null,
+    thumbnailSignedUrl: media.thumbnailSignedUrl ?? null,
   };
 }
 
@@ -519,7 +528,7 @@ export async function getSelfHostDashboard(input: {
   const dashboard = response.dashboard;
   return {
     profile: mapProfile(dashboard.profile),
-    couple: mapCouple(dashboard.couple, input.currentUserId),
+    couple: mapCouple(dashboard.couple),
     pendingInvites: (dashboard.pendingInvites ?? []).map(mapPairInvite),
     checkins: dashboard.checkins.map(mapCheckin),
     messages: dashboard.messages.map(mapMessage),

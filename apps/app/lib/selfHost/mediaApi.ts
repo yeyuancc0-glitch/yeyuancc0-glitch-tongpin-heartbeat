@@ -7,6 +7,8 @@ type SelfHostMedia = {
   uploaderId: string;
   storagePath: string;
   thumbnailStoragePath: string | null;
+  signedUrl?: string | null;
+  thumbnailSignedUrl?: string | null;
   mimeType: string;
   sizeBytes: number;
   caption: string | null;
@@ -64,6 +66,8 @@ export function mapSelfHostMedia(media: SelfHostMedia): MediaFile {
     created_at: media.createdAt,
     updated_at: media.updatedAt,
     deleted_at: media.deletedAt,
+    signedUrl: media.signedUrl ?? null,
+    thumbnailSignedUrl: media.thumbnailSignedUrl ?? null,
   };
 }
 
@@ -127,17 +131,29 @@ export async function uploadSelfHostMedia(input: {
     body: { mediaId: created.media.id },
   });
   const media = mapSelfHostMedia(completed.media);
-  const thumbnailSignedUrl = await createSelfHostMediaReadUrl({
-    accessToken: input.accessToken,
-    mediaId: media.id,
-    variant: media.thumbnail_storage_path ? "thumbnail" : "original",
-  }).catch((error) => {
-    console.warn("Self-host media uploaded thumbnail read-url failed:", error);
-    return null;
-  });
+  const thumbnailSignedUrl = media.thumbnail_storage_path
+    ? await createSelfHostMediaReadUrl({
+        accessToken: input.accessToken,
+        mediaId: media.id,
+        variant: "thumbnail",
+      }).catch((error) => {
+        console.warn("Self-host media uploaded thumbnail read-url failed:", error);
+        return null;
+      })
+      : null;
+  const signedUrl = media.storage_path
+    ? await createSelfHostMediaReadUrl({
+        accessToken: input.accessToken,
+        mediaId: media.id,
+        variant: "original",
+      }).catch((error) => {
+        console.warn("Self-host media uploaded original read-url failed:", error);
+        return null;
+      })
+    : null;
   return {
     ...media,
-    signedUrl: null,
+    signedUrl,
     thumbnailSignedUrl,
   };
 }

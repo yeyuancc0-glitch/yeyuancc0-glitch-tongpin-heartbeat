@@ -51,6 +51,8 @@ function publicProfile(row) {
     displayName: row.display_name,
     avatarStoragePath: row.avatar_storage_path,
     avatarThumbnailStoragePath: row.avatar_thumbnail_storage_path,
+    accountStatus: row.account_status,
+    deletionRequestedAt: row.deletion_requested_at,
     birthday: dateKey(row.birthday),
     createdAt: row.created_at,
     updatedAt: row.updated_at,

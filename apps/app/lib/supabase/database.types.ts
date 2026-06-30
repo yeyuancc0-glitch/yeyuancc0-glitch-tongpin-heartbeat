@@ -13,6 +13,7 @@ export type Profile = {
   avatar_thumbnail_url: string | null;
   avatar_signed_url?: string | null;
   avatar_thumb_signed_url?: string | null;
+  avatar_thumb_data_url?: string | null;
   birthdate: string | null;
   account_status: "active" | "deletion_requested" | "frozen";
   deletion_requested_at: string | null;

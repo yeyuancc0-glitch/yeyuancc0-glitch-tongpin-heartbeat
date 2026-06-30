@@ -2,7 +2,7 @@ const baseUrl = process.env.API_BASE_URL || "http://127.0.0.1:3000";
 const suffix = Date.now();
 const password = `Storage-${suffix}-password`;
 const png = Buffer.from(
-  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
+  "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAYAAADED76LAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAAEklEQVQYlWP4H1DxHx9mGBkKAIddsYGXrYvIAAAAAElFTkSuQmCC",
   "base64",
 );
 
@@ -149,6 +149,41 @@ async function main() {
   assert(downloadedThumbnail.ok, `signed thumbnail read returned ${downloadedThumbnail.status}`);
   assert((await downloadedThumbnail.arrayBuffer()).byteLength === png.length, "downloaded thumbnail size mismatch");
 
+  const serverThumbnailUpload = await request("/api/media/uploads", {
+    method: "POST",
+    token: userA,
+    body: {
+      coupleId,
+      mimeType: "image/png",
+      sizeBytes: png.length,
+      caption: "storage smoke server thumbnail",
+    },
+  });
+  assert(serverThumbnailUpload.response.status === 201, `create server-thumbnail upload returned ${serverThumbnailUpload.response.status}`);
+  assert(serverThumbnailUpload.json.thumbnailUpload === null, "server-thumbnail upload should not require client thumbnail upload");
+  const putServerThumbnailOriginal = await fetch(serverThumbnailUpload.json.upload.url, {
+    method: "PUT",
+    headers: serverThumbnailUpload.json.upload.requiredHeaders,
+    body: png,
+  });
+  assert(putServerThumbnailOriginal.ok, `PUT server-thumbnail original returned ${putServerThumbnailOriginal.status}`);
+  const completeServerThumbnail = await request("/api/media/uploads/complete", {
+    method: "POST",
+    token: userA,
+    body: { mediaId: serverThumbnailUpload.json.media.id },
+  });
+  assert(completeServerThumbnail.response.status === 200, `complete server-thumbnail upload returned ${completeServerThumbnail.response.status}`);
+  assert(completeServerThumbnail.json.media?.thumbnailStoragePath, "server-generated thumbnail path missing");
+  const serverThumbnailRead = await request("/api/media/read-url", {
+    method: "POST",
+    token: userB,
+    body: { mediaId: serverThumbnailUpload.json.media.id, variant: "thumbnail" },
+  });
+  assert(serverThumbnailRead.response.status === 200, `server-generated thumbnail read URL returned ${serverThumbnailRead.response.status}`);
+  const downloadedServerThumbnail = await fetch(serverThumbnailRead.json.read.url);
+  assert(downloadedServerThumbnail.ok, `server-generated signed thumbnail read returned ${downloadedServerThumbnail.status}`);
+  assert((await downloadedServerThumbnail.arrayBuffer()).byteLength > 0, "server-generated downloaded thumbnail empty");
+
   const outsiderRead = await request("/api/media/read-url", {
     method: "POST",
     token: userC,
@@ -171,6 +206,13 @@ async function main() {
   });
   assert(readDeleted.response.status === 404, `deleted media read returned ${readDeleted.response.status}`);
 
+  const deletedServerThumbnail = await request("/api/media/delete", {
+    method: "POST",
+    token: userA,
+    body: { mediaId: serverThumbnailUpload.json.media.id },
+  });
+  assert(deletedServerThumbnail.response.status === 200, `delete server-thumbnail media returned ${deletedServerThumbnail.response.status}`);
+
   console.log(JSON.stringify({
     status: "ok",
     baseUrl,
@@ -182,6 +224,7 @@ async function main() {
       "complete_upload",
       "partner_read",
       "thumbnail_read",
+      "server_generated_thumbnail",
       "outsider_forbidden",
       "delete_sync",
     ],

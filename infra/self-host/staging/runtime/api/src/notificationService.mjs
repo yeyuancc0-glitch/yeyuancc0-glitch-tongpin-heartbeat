@@ -1,5 +1,6 @@
 import { AuthError } from "./authService.mjs";
 import { withTransaction } from "./db.mjs";
+import { EventEmitter } from "node:events";
 
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const allowedTypes = new Set(["letter", "message", "checkin", "calendar_event", "system"]);
@@ -16,6 +17,17 @@ const allowedPreferenceKeys = new Set([
 const defaultNotificationListLimit = 1000;
 const maxNotificationListLimit = 5000;
 const allowedPlatforms = new Set(["ios", "android", "web", "unknown"]);
+const notificationChannel = "tongpin_notification_created";
+const notificationListenerReconnectInitialDelayMs = 1000;
+const notificationListenerReconnectMaxDelayMs = 30_000;
+const notificationEvents = new EventEmitter();
+notificationEvents.setMaxListeners(0);
+let notificationListenerPool = null;
+let notificationListenerLogger = console;
+let notificationListenerClient = null;
+let notificationListenerReconnectTimer = null;
+let notificationListenerReconnectDelayMs = notificationListenerReconnectInitialDelayMs;
+let notificationListenerStopped = false;
 
 function timestampCursor(value) {
   if (!value) {
@@ -49,6 +61,134 @@ function publicNotification(row) {
     dismissedAt: row.dismissed_at,
     createdAt: timestampCursor(row.created_at),
   };
+}
+
+function emitNotificationCreated(notification) {
+  const notificationId = notification?.id || notification?.notificationId;
+  if (!notificationId || !notification?.userId || !notification?.coupleId || !notification?.createdAt) {
+    return;
+  }
+  notificationEvents.emit("notification_created", {
+    notificationId,
+    userId: notification.userId,
+    coupleId: notification.coupleId,
+    createdAt: notification.createdAt,
+  });
+}
+
+function subscribeNotificationCreated(listener) {
+  notificationEvents.on("notification_created", listener);
+  return () => notificationEvents.off("notification_created", listener);
+}
+
+function clearNotificationListenerReconnectTimer() {
+  if (notificationListenerReconnectTimer) {
+    clearTimeout(notificationListenerReconnectTimer);
+    notificationListenerReconnectTimer = null;
+  }
+}
+
+function closeNotificationListenerClient() {
+  const client = notificationListenerClient;
+  if (!client) {
+    return;
+  }
+  notificationListenerClient = null;
+  client.removeAllListeners("notification");
+  client.removeAllListeners("error");
+  client.removeAllListeners("end");
+  try {
+    client.release(new Error("notification listener closed"));
+  } catch {
+    // ignore listener cleanup errors
+  }
+}
+
+function scheduleNotificationListenerReconnect(reason) {
+  if (notificationListenerStopped || notificationListenerReconnectTimer || !notificationListenerPool) {
+    return;
+  }
+  notificationListenerLogger.warn?.({
+    event: "notification_listener_reconnect_scheduled",
+    reason,
+    delayMs: notificationListenerReconnectDelayMs,
+  });
+  notificationListenerReconnectTimer = setTimeout(() => {
+    notificationListenerReconnectTimer = null;
+    void ensureNotificationListener();
+  }, notificationListenerReconnectDelayMs);
+  notificationListenerReconnectDelayMs = Math.min(
+    notificationListenerReconnectDelayMs * 2,
+    notificationListenerReconnectMaxDelayMs,
+  );
+}
+
+async function ensureNotificationListener() {
+  if (notificationListenerStopped || notificationListenerClient || !notificationListenerPool) {
+    return;
+  }
+
+  let client = null;
+  try {
+    client = await notificationListenerPool.connect();
+    const onNotification = (message) => {
+      if (message.channel !== notificationChannel || !message.payload) {
+        return;
+      }
+      try {
+        const parsed = JSON.parse(message.payload);
+        emitNotificationCreated(parsed);
+      } catch (error) {
+        notificationListenerLogger.warn?.({
+          event: "notification_listener_payload_invalid",
+          message: error instanceof Error ? error.message : "invalid notification payload",
+        });
+      }
+    };
+    const onError = (error) => {
+      if (notificationListenerStopped) {
+        return;
+      }
+      notificationListenerLogger.warn?.({
+        event: "notification_listener_error",
+        message: error instanceof Error ? error.message : "unknown notification listener error",
+      });
+      closeNotificationListenerClient();
+      scheduleNotificationListenerReconnect("error");
+    };
+    const onEnd = () => {
+      if (notificationListenerStopped) {
+        return;
+      }
+      notificationListenerLogger.warn?.({ event: "notification_listener_closed" });
+      closeNotificationListenerClient();
+      scheduleNotificationListenerReconnect("end");
+    };
+
+    client.on("notification", onNotification);
+    client.on("error", onError);
+    client.on("end", onEnd);
+    await client.query(`listen "${notificationChannel}"`);
+    notificationListenerClient = client;
+    notificationListenerReconnectDelayMs = notificationListenerReconnectInitialDelayMs;
+    notificationListenerLogger.info?.({ event: "notification_listener_ready", channel: notificationChannel });
+  } catch (error) {
+    if (client) {
+      client.removeAllListeners("notification");
+      client.removeAllListeners("error");
+      client.removeAllListeners("end");
+      try {
+        client.release(error instanceof Error ? error : new Error("notification listener failed"));
+      } catch {
+        // ignore listener cleanup errors
+      }
+    }
+    notificationListenerLogger.warn?.({
+      event: "notification_listener_start_failed",
+      message: error instanceof Error ? error.message : "unknown notification listener startup error",
+    });
+    scheduleNotificationListenerReconnect("start_failed");
+  }
 }
 
 function publicPreference(row) {
@@ -235,6 +375,11 @@ function cleanExpoPushToken(input) {
 }
 
 export function createNotificationService({ pool, logger = console }) {
+  notificationListenerPool = pool;
+  notificationListenerLogger = logger;
+  notificationListenerStopped = false;
+  void ensureNotificationListener();
+
   async function createPartnerNotification(client, input, current) {
     const coupleId = String(input.coupleId || input.couple_id || "").toLowerCase();
     assertUuid(coupleId, "invalid_couple_id", "A valid couple id is required.");
@@ -274,17 +419,29 @@ export function createNotificationService({ pool, logger = console }) {
       ],
     );
     await maybeEnqueuePushDelivery(client, result.rows[0]);
+    await client.query("select pg_notify($1, $2)", [
+      notificationChannel,
+      JSON.stringify({
+        notificationId: result.rows[0].id,
+        userId: result.rows[0].user_id,
+        coupleId: result.rows[0].couple_id,
+        createdAt: timestampCursor(result.rows[0].created_at),
+      }),
+    ]);
     return publicNotification(result.rows[0]);
   }
 
-  async function tryCreatePartnerNotification(poolOrClient, input, current) {
+  async function tryCreatePartnerNotification(input, current, transactionClient = null) {
     try {
+      if (transactionClient) {
+        return await createPartnerNotification(transactionClient, input, current);
+      }
       return await withTransaction(pool, (client) => createPartnerNotification(client, input, current));
     } catch (error) {
       logger.warn?.({
         event: "notification_create_failed",
-        type: input.type,
-        coupleId: input.coupleId || input.couple_id,
+        type: input?.type,
+        coupleId: input?.coupleId || input?.couple_id,
         message: error instanceof Error ? error.message : "unknown notification error",
       });
       return null;
@@ -567,6 +724,12 @@ export function createNotificationService({ pool, logger = console }) {
     return { notification };
   }
 
+  async function shutdown() {
+    notificationListenerStopped = true;
+    clearNotificationListenerReconnectTimer();
+    closeNotificationListenerClient();
+  }
+
   return {
     createPartnerNotification,
     dismiss,
@@ -579,7 +742,10 @@ export function createNotificationService({ pool, logger = console }) {
     pushDeliverySummary,
     registerExpoPush,
     registerWebPush,
+    emitNotificationCreated,
+    subscribeNotificationCreated,
     tryCreatePartnerNotification,
+    shutdown,
     updatePreferences,
   };
 }

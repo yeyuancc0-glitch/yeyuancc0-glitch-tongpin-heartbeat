@@ -32,6 +32,7 @@ function publicCouple(row) {
   return {
     id: row.id,
     relationshipStartedAt: dateKey(row.relationship_started_at),
+    createdByUserId: row.created_by_user_id,
     createdAt: row.created_at,
     endedAt: row.ended_at,
     status: row.status,
@@ -61,6 +62,61 @@ function publicMember(row) {
 }
 
 const dashboardListLimit = 1000;
+const dashboardInitialMediaImageLimit = 12;
+const dashboardImageHydrationTimeoutMs = 900;
+
+async function resolveWithin(promise, timeoutMs, fallback) {
+  let timer;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((resolve) => {
+        timer = setTimeout(() => resolve(fallback), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
+}
+
+function withProfileImageUrls(profile, imageUrls) {
+  if (!profile) {
+    return profile;
+  }
+  const urls = imageUrls?.avatarsByUserId?.[profile.id];
+  return {
+    ...profile,
+    avatarThumbSignedUrl: urls?.avatarThumbSignedUrl ?? null,
+    avatarThumbDataUrl: urls?.avatarThumbDataUrl ?? null,
+    avatarSignedUrl: null,
+  };
+}
+
+function withCoupleImageUrls(couple, imageUrls) {
+  if (!couple) {
+    return couple;
+  }
+  return {
+    ...couple,
+    members: couple.members.map((member) => ({
+      ...member,
+      profile: withProfileImageUrls(member.profile, imageUrls),
+    })),
+  };
+}
+
+function withMediaImageUrls(media, imageUrls) {
+  return media.map((mediaFile) => {
+    const urls = imageUrls?.mediaById?.[mediaFile.id];
+    return {
+      ...mediaFile,
+      thumbnailSignedUrl: urls?.thumbnailSignedUrl ?? null,
+      signedUrl: null,
+    };
+  });
+}
 
 export function createDashboardService({
   calendarService,
@@ -81,6 +137,7 @@ export function createDashboardService({
         select
           c.id as couple_id,
           c.relationship_started_at,
+          c.created_by_user_id,
           c.created_at as couple_created_at,
           c.ended_at,
           c.status as couple_status,
@@ -116,6 +173,7 @@ export function createDashboardService({
       ...publicCouple({
         id: first.couple_id,
         relationship_started_at: first.relationship_started_at,
+        created_by_user_id: first.created_by_user_id,
         created_at: first.couple_created_at,
         ended_at: first.ended_at,
         status: first.couple_status,
@@ -131,8 +189,15 @@ export function createDashboardService({
     const couple = await activeCoupleWithMembers(current);
     if (!couple) {
       const pendingInvites = relationshipService ? await relationshipService.listPendingInvites(current) : { invites: [] };
+      const imageUrls = storageService.createDashboardImageUrls
+        ? await resolveWithin(
+            Promise.resolve(storageService.createDashboardImageUrls({ profiles: [profile], media: [] }, current)).catch(() => null),
+            dashboardImageHydrationTimeoutMs,
+            null,
+          )
+        : null;
       return {
-        profile,
+        profile: withProfileImageUrls(profile, imageUrls),
         couple: null,
         pendingInvites: pendingInvites.invites,
         checkins: [],
@@ -176,15 +241,36 @@ export function createDashboardService({
       footprintService.listFootprints({ coupleId, limit: dashboardListLimit }, current),
     ]);
 
-    return {
+    const profilesForSigning = [
       profile,
-      couple,
+      ...couple.members.map((member) => member.profile),
+    ].filter(Boolean);
+    const initialMediaForSigning = media.media.slice(0, dashboardInitialMediaImageLimit);
+    const imageUrls = storageService.createDashboardImageUrls
+      ? await resolveWithin(
+          Promise.resolve(
+            storageService.createDashboardImageUrls(
+              {
+                profiles: profilesForSigning,
+                media: initialMediaForSigning,
+              },
+              current,
+            ),
+          ).catch(() => null),
+          dashboardImageHydrationTimeoutMs,
+          null,
+        )
+      : null;
+
+    return {
+      profile: withProfileImageUrls(profile, imageUrls),
+      couple: withCoupleImageUrls(couple, imageUrls),
       pendingInvites: [],
       checkins: checkins.checkins,
       messages: messages.messages,
       events: events.events,
       letters: letters.letters,
-      media: media.media,
+      media: withMediaImageUrls(media.media, imageUrls),
       moodStatuses: moodStatuses.moodStatuses,
       notifications: notifications.notifications,
       creationSpace: creationSpace.creationSpace,

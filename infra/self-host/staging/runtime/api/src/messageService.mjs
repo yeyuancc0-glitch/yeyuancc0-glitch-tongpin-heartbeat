@@ -96,7 +96,7 @@ export function createMessageService({ notificationService, pool }) {
       return publicMessage(result.rows[0]);
     });
 
-    await notificationService?.tryCreatePartnerNotification(pool, {
+    await notificationService?.tryCreatePartnerNotification({
       coupleId,
       type: "message",
       title: "TA 留下了一条留言",

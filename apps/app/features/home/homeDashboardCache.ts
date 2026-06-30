@@ -1,17 +1,19 @@
 import type { CoupleDashboard } from "@/features/home/homeDashboardTypes";
 
-const dashboardCachePrefix = "couple-dashboard:v4:";
+const dashboardCachePrefix = "couple-dashboard:v5:";
 
 function sanitizeDashboardForCache(data: CoupleDashboard): CoupleDashboard {
   return {
     ...data,
-    profile: data.profile ? { ...data.profile, avatar_signed_url: null, avatar_thumb_signed_url: null } : null,
+    profile: data.profile ? { ...data.profile, avatar_signed_url: null, avatar_thumb_signed_url: null, avatar_thumb_data_url: null } : null,
     couple: data.couple
       ? {
           ...data.couple,
           couple_members: data.couple.couple_members.map((member) => ({
             ...member,
-            profile: member.profile ? { ...member.profile, avatar_signed_url: null, avatar_thumb_signed_url: null } : member.profile,
+            profile: member.profile
+              ? { ...member.profile, avatar_signed_url: null, avatar_thumb_signed_url: null, avatar_thumb_data_url: null }
+              : member.profile,
           })),
         }
       : null,

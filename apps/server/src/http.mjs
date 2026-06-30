@@ -2,6 +2,10 @@ import { randomUUID } from "node:crypto";
 import net from "node:net";
 
 import { AuthError } from "./authService.mjs";
+import { registerAuthRoutes } from "./authRoutes.mjs";
+import { registerContentRoutes } from "./contentRoutes.mjs";
+import { registerNotificationRoutes } from "./notificationRoutes.mjs";
+import { registerPrivacyRoutes } from "./privacyRoutes.mjs";
 
 const jsonContentType = "application/json; charset=utf-8";
 
@@ -12,7 +16,10 @@ function nowIso() {
 function requestIdFor(request) {
   const headerValue = request.headers["x-request-id"];
   if (typeof headerValue === "string" && headerValue.trim()) {
-    return headerValue.slice(0, 120);
+    const normalized = headerValue.trim();
+    if (/^[A-Za-z0-9._:-]{1,120}$/.test(normalized)) {
+      return normalized;
+    }
   }
   return randomUUID();
 }
@@ -109,14 +116,14 @@ function methodNotAllowedPayload(requestId) {
   return errorPayload("method_not_allowed", "Method is not allowed for this endpoint.", requestId);
 }
 
-function parseBody(request) {
+function parseBody(request, maxBytes = 64 * 1024) {
   return new Promise((resolve, reject) => {
     const chunks = [];
     let size = 0;
 
     request.on("data", (chunk) => {
       size += chunk.length;
-      if (size > 32 * 1024) {
+      if (size > maxBytes) {
         reject(new AuthError("payload_too_large", 413, "Request body is too large."));
         request.destroy();
         return;
@@ -147,13 +154,6 @@ function bearerToken(request) {
   return match ? match[1].trim() : "";
 }
 
-function requestMeta(request) {
-  return {
-    ip: request.headers["x-forwarded-for"] || request.socket.remoteAddress || "",
-    userAgent: request.headers["user-agent"] || "",
-  };
-}
-
 function logSafeUrl(request) {
   try {
     const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "localhost"}`);
@@ -169,131 +169,6 @@ async function requireMethod(request, response, expectedMethod, requestId) {
     return false;
   }
   return true;
-}
-
-async function sendAuthResult(response, requestId, result, statusCode = 200) {
-  sendJson(response, statusCode, {
-    ...result,
-    requestId,
-  });
-}
-
-function writeSseEvent(response, event, data, id) {
-  if (id) {
-    response.write(`id: ${id}\n`);
-  }
-  response.write(`event: ${event}\n`);
-  response.write(`data: ${JSON.stringify(data)}\n\n`);
-}
-
-async function sendNotificationStream({ logger, notificationService, request, response, requestId, current, url }) {
-  const coupleId = url.searchParams.get("coupleId");
-  let afterCreatedAt = url.searchParams.get("afterCreatedAt") || "";
-  let afterNotificationId = url.searchParams.get("afterNotificationId") || "";
-  const heartbeatMs = 25000;
-  const pollMs = 3000;
-  let closed = false;
-  let polling = false;
-
-  if (!afterCreatedAt) {
-    const cursor = await notificationService.latestNotificationCursor({ coupleId }, current);
-    afterCreatedAt = cursor.createdAt || nowIso();
-    afterNotificationId = cursor.notificationId || "";
-  }
-
-  response.statusCode = 200;
-  response.setHeader("Content-Type", "text/event-stream; charset=utf-8");
-  response.setHeader("Cache-Control", "no-cache, no-transform");
-  response.setHeader("Connection", "keep-alive");
-  response.setHeader("X-Accel-Buffering", "no");
-  response.socket?.setNoDelay?.(true);
-  response.flushHeaders?.();
-  response.write("retry: 5000\n\n");
-  writeSseEvent(response, "ready", {
-    requestId,
-    coupleId,
-    latestCreatedAt: afterCreatedAt || null,
-    latestNotificationId: afterNotificationId || null,
-  });
-  logger.info?.({
-    event: "notification_stream_ready",
-    requestId,
-    coupleId,
-    userId: current.user.id,
-    latestCreatedAt: afterCreatedAt || null,
-    latestNotificationId: afterNotificationId || null,
-  });
-
-  async function poll() {
-    if (closed || polling) {
-      return;
-    }
-    polling = true;
-    try {
-      const result = await notificationService.listNotificationEvents({
-        coupleId,
-        afterCreatedAt,
-        afterNotificationId,
-      }, current);
-      for (const notification of result.notifications) {
-        if (closed) {
-          break;
-        }
-        afterCreatedAt = notification.createdAt;
-        afterNotificationId = notification.id;
-        writeSseEvent(response, "notification", {
-          notificationId: notification.id,
-          createdAt: notification.createdAt,
-        }, notification.id);
-        logger.info?.({
-          event: "notification_stream_event_sent",
-          requestId,
-          coupleId,
-          userId: current.user.id,
-          notificationId: notification.id,
-          createdAt: notification.createdAt,
-        });
-      }
-    } catch (error) {
-      logger.warn?.({
-        event: "notification_stream_failed",
-        requestId,
-        coupleId,
-        userId: current.user.id,
-        message: error instanceof Error ? error.message : "unknown stream error",
-      });
-      if (!closed) {
-        writeSseEvent(response, "error", {
-          requestId,
-          code: error instanceof AuthError ? error.code : "stream_error",
-          message: error instanceof Error ? error.message : "Notification stream failed.",
-        });
-        response.end();
-      }
-    } finally {
-      polling = false;
-    }
-  }
-
-  const pollInterval = setInterval(() => {
-    void poll();
-  }, pollMs);
-  const heartbeatInterval = setInterval(() => {
-    if (!closed) {
-      response.write(`: heartbeat ${nowIso()}\n\n`);
-    }
-  }, heartbeatMs);
-
-  response.on("close", () => {
-    closed = true;
-    clearInterval(pollInterval);
-    clearInterval(heartbeatInterval);
-  });
-
-  await poll();
-  await new Promise((resolve) => {
-    response.on("close", resolve);
-  });
 }
 
 export function createRequestHandler({
@@ -341,810 +216,71 @@ export function createRequestHandler({
         return;
       }
 
-      if (url.pathname === "/api/me") {
-        if (!(await requireMethod(request, response, "GET", requestId))) {
-          return;
-        }
-        const current = await authService.authenticate(bearerToken(request));
-        sendAuthResult(response, requestId, { user: current.user });
-        return;
-      }
-
-      if (url.pathname === "/api/me/dashboard") {
-        if (!(await requireMethod(request, response, "GET", requestId))) {
-          return;
-        }
-        const current = await authService.authenticate(bearerToken(request));
-        const result = await dashboardService.getDashboard(current);
-        sendAuthResult(response, requestId, { dashboard: result });
-        return;
-      }
-
-      if (url.pathname === "/api/auth/register") {
-        if (!(await requireMethod(request, response, "POST", requestId))) {
-          return;
-        }
-        const body = await parseBody(request);
-        const result = await authService.register(body, requestMeta(request));
-        sendAuthResult(response, requestId, result, 201);
-        return;
-      }
-
-      if (url.pathname === "/api/auth/login") {
-        if (!(await requireMethod(request, response, "POST", requestId))) {
-          return;
-        }
-        const body = await parseBody(request);
-        const result = await authService.login(body, requestMeta(request));
-        sendAuthResult(response, requestId, result);
-        return;
-      }
-
-      if (url.pathname === "/api/auth/email/verify/request") {
-        if (!(await requireMethod(request, response, "POST", requestId))) {
-          return;
-        }
-        const body = await parseBody(request);
-        const result = await authService.requestEmailVerification(body, requestMeta(request));
-        sendAuthResult(response, requestId, result);
-        return;
-      }
-
-      if (url.pathname === "/api/auth/email/verify/confirm") {
-        if (!(await requireMethod(request, response, "POST", requestId))) {
-          return;
-        }
-        const body = await parseBody(request);
-        const result = await authService.confirmEmailVerification(body);
-        sendAuthResult(response, requestId, result);
-        return;
-      }
-
-      if (url.pathname === "/api/auth/password/reset/request") {
-        if (!(await requireMethod(request, response, "POST", requestId))) {
-          return;
-        }
-        const body = await parseBody(request);
-        const result = await authService.requestPasswordReset(body, requestMeta(request));
-        sendAuthResult(response, requestId, result);
-        return;
-      }
-
-      if (url.pathname === "/api/auth/password/reset/confirm") {
-        if (!(await requireMethod(request, response, "POST", requestId))) {
-          return;
-        }
-        const body = await parseBody(request);
-        const result = await authService.confirmPasswordReset(body);
-        sendAuthResult(response, requestId, result);
-        return;
-      }
-
-      if (url.pathname === "/api/auth/refresh") {
-        if (!(await requireMethod(request, response, "POST", requestId))) {
-          return;
-        }
-        const body = await parseBody(request);
-        const result = await authService.refresh(body, requestMeta(request));
-        sendAuthResult(response, requestId, result);
-        return;
-      }
-
-      if (url.pathname === "/api/auth/logout") {
-        if (!(await requireMethod(request, response, "POST", requestId))) {
-          return;
-        }
-        const body = await parseBody(request);
-        const result = await authService.logout(body);
-        sendAuthResult(response, requestId, result);
-        return;
-      }
-
-      if (url.pathname === "/api/auth/logout-all") {
-        if (!(await requireMethod(request, response, "POST", requestId))) {
-          return;
-        }
-        const current = await authService.authenticate(bearerToken(request));
-        const result = await authService.logoutAll(current.user.id);
-        sendAuthResult(response, requestId, result);
-        return;
-      }
-
-      if (url.pathname === "/api/auth/sessions") {
-        if (!(await requireMethod(request, response, "GET", requestId))) {
-          return;
-        }
-        const current = await authService.authenticate(bearerToken(request));
-        const result = await authService.listSessions(current);
-        sendAuthResult(response, requestId, result);
-        return;
-      }
-
-      if (url.pathname === "/api/auth/sessions/revoke") {
-        if (!(await requireMethod(request, response, "POST", requestId))) {
-          return;
-        }
-        const current = await authService.authenticate(bearerToken(request));
-        const body = await parseBody(request);
-        const result = await authService.revokeSession(body, current);
-        sendAuthResult(response, requestId, result);
-        return;
-      }
-
-      if (url.pathname === "/api/couples/active") {
-        if (!(await requireMethod(request, response, "GET", requestId))) {
-          return;
-        }
-        const current = await authService.authenticate(bearerToken(request));
-        const result = await relationshipService.activeCouple(current);
-        sendAuthResult(response, requestId, result);
-        return;
-      }
-
-      if (url.pathname === "/api/profile") {
-        const current = await authService.authenticate(bearerToken(request));
-        if (request.method === "GET") {
-          const result = await profileService.getProfile(current);
-          sendAuthResult(response, requestId, result);
-          return;
-        }
-        if (request.method === "POST") {
-          const body = await parseBody(request);
-          const result = await profileService.updateProfile(body, current);
-          sendAuthResult(response, requestId, result);
-          return;
-        }
-        sendJson(response, 405, methodNotAllowedPayload(requestId));
-        return;
-      }
-
-      if (url.pathname === "/api/couples/active/dates") {
-        if (!(await requireMethod(request, response, "POST", requestId))) {
-          return;
-        }
-        const current = await authService.authenticate(bearerToken(request));
-        const body = await parseBody(request);
-        const result = await profileService.updateActiveCoupleDates(body, current);
-        sendAuthResult(response, requestId, result);
-        return;
-      }
-
-      if (url.pathname === "/api/couples/active/end") {
-        if (!(await requireMethod(request, response, "POST", requestId))) {
-          return;
-        }
-        const current = await authService.authenticate(bearerToken(request));
-        const result = await privacyService.endActiveCouple(current);
-        sendAuthResult(response, requestId, result);
-        return;
-      }
-
-      if (url.pathname === "/api/feedback") {
-        if (!(await requireMethod(request, response, "POST", requestId))) {
-          return;
-        }
-        const current = await authService.authenticate(bearerToken(request));
-        const body = await parseBody(request);
-        const result = await privacyService.submitFeedback(body, current);
-        sendAuthResult(response, requestId, result, 201);
-        return;
-      }
-
-      if (url.pathname === "/api/reports") {
-        if (!(await requireMethod(request, response, "POST", requestId))) {
-          return;
-        }
-        const current = await authService.authenticate(bearerToken(request));
-        const body = await parseBody(request);
-        const result = await privacyService.submitReport(body, current);
-        sendAuthResult(response, requestId, result, 201);
-        return;
-      }
-
-      if (url.pathname === "/api/privacy/block-partner") {
-        if (!(await requireMethod(request, response, "POST", requestId))) {
-          return;
-        }
-        const current = await authService.authenticate(bearerToken(request));
-        const body = await parseBody(request);
-        const result = await privacyService.blockPartnerAndEndCouple(body, current);
-        sendAuthResult(response, requestId, result);
-        return;
-      }
-
-      if (url.pathname === "/api/privacy/account-deletion") {
-        if (!(await requireMethod(request, response, "POST", requestId))) {
-          return;
-        }
-        const current = await authService.authenticate(bearerToken(request));
-        const body = await parseBody(request);
-        const result = await privacyService.requestAccountDeletion(body, current);
-        sendAuthResult(response, requestId, result, 202);
-        return;
-      }
-
-      if (url.pathname === "/api/profile/avatar/uploads") {
-        if (!(await requireMethod(request, response, "POST", requestId))) {
-          return;
-        }
-        const current = await authService.authenticate(bearerToken(request));
-        const body = await parseBody(request);
-        const result = await storageService.createAvatarUpload(body, current);
-        sendAuthResult(response, requestId, result, 201);
-        return;
-      }
-
-      if (url.pathname === "/api/profile/avatar/uploads/complete") {
-        if (!(await requireMethod(request, response, "POST", requestId))) {
-          return;
-        }
-        const current = await authService.authenticate(bearerToken(request));
-        const body = await parseBody(request);
-        const result = await storageService.completeAvatarUpload(body, current);
-        sendAuthResult(response, requestId, result);
-        return;
-      }
-
-      if (url.pathname === "/api/profile/avatar/read-url") {
-        if (!(await requireMethod(request, response, "POST", requestId))) {
-          return;
-        }
-        const current = await authService.authenticate(bearerToken(request));
-        const body = await parseBody(request);
-        const result = await storageService.createAvatarReadUrl(body, current);
-        sendAuthResult(response, requestId, result);
-        return;
-      }
-
-      if (url.pathname === "/api/profile/avatar/delete") {
-        if (!(await requireMethod(request, response, "POST", requestId))) {
-          return;
-        }
-        const current = await authService.authenticate(bearerToken(request));
-        const result = await storageService.deleteAvatar({}, current);
-        sendAuthResult(response, requestId, result);
-        return;
-      }
-
-      if (url.pathname === "/api/pair-invites") {
-        if (!(await requireMethod(request, response, "POST", requestId))) {
-          return;
-        }
-        const current = await authService.authenticate(bearerToken(request));
-        const result = await relationshipService.createInvite(current);
-        sendAuthResult(response, requestId, result, 201);
-        return;
-      }
-
-      if (url.pathname === "/api/pair-invites/accept") {
-        if (!(await requireMethod(request, response, "POST", requestId))) {
-          return;
-        }
-        const current = await authService.authenticate(bearerToken(request));
-        const body = await parseBody(request);
-        const result = await relationshipService.acceptInvite(body, current);
-        sendAuthResult(response, requestId, result);
-        return;
-      }
-
-      if (url.pathname === "/api/media/uploads") {
-        if (!(await requireMethod(request, response, "POST", requestId))) {
-          return;
-        }
-        const current = await authService.authenticate(bearerToken(request));
-        const body = await parseBody(request);
-        const result = await storageService.createUpload(body, current);
-        sendAuthResult(response, requestId, result, 201);
-        return;
-      }
-
-      if (url.pathname === "/api/media/uploads/complete") {
-        if (!(await requireMethod(request, response, "POST", requestId))) {
-          return;
-        }
-        const current = await authService.authenticate(bearerToken(request));
-        const body = await parseBody(request);
-        const result = await storageService.completeUpload(body, current);
-        sendAuthResult(response, requestId, result);
-        return;
-      }
-
-      if (url.pathname === "/api/media") {
-        if (!(await requireMethod(request, response, "GET", requestId))) {
-          return;
-        }
-        const current = await authService.authenticate(bearerToken(request));
-        const result = await storageService.listMedia({
-          coupleId: url.searchParams.get("coupleId"),
-          limit: url.searchParams.get("limit"),
-        }, current);
-        sendAuthResult(response, requestId, result);
-        return;
-      }
-
-      if (url.pathname === "/api/media/read-url") {
-        if (!(await requireMethod(request, response, "POST", requestId))) {
-          return;
-        }
-        const current = await authService.authenticate(bearerToken(request));
-        const body = await parseBody(request);
-        const result = await storageService.createReadUrl(body, current);
-        sendAuthResult(response, requestId, result);
-        return;
-      }
-
-      if (url.pathname === "/api/media/delete") {
-        if (!(await requireMethod(request, response, "POST", requestId))) {
-          return;
-        }
-        const current = await authService.authenticate(bearerToken(request));
-        const body = await parseBody(request);
-        const result = await storageService.deleteMedia(body, current);
-        sendAuthResult(response, requestId, result);
-        return;
-      }
-
-      if (url.pathname === "/api/messages") {
-        const current = await authService.authenticate(bearerToken(request));
-        if (request.method === "GET") {
-          const result = await messageService.listMessages({
-            coupleId: url.searchParams.get("coupleId"),
-            limit: url.searchParams.get("limit"),
-          }, current);
-          sendAuthResult(response, requestId, result);
-          return;
-        }
-        if (request.method === "POST") {
-          const body = await parseBody(request);
-          const messageCoupleId = url.searchParams.get("coupleId") || url.searchParams.get("couple_id") || body.coupleId || body.couple_id;
-          const result = await messageService.createMessage({
-            ...body,
-            coupleId: messageCoupleId,
-          }, current);
-          sendAuthResult(response, requestId, result, 201);
-          return;
-        }
-        sendJson(response, 405, methodNotAllowedPayload(requestId));
-        return;
-      }
-
-      if (url.pathname === "/api/messages/delete") {
-        if (!(await requireMethod(request, response, "POST", requestId))) {
-          return;
-        }
-        const current = await authService.authenticate(bearerToken(request));
-        const body = await parseBody(request);
-        const result = await messageService.deleteMessage(body, current);
-        sendAuthResult(response, requestId, result);
-        return;
-      }
-
-      if (url.pathname === "/api/interactions/quick") {
-        if (!(await requireMethod(request, response, "POST", requestId))) {
-          return;
-        }
-        const current = await authService.authenticate(bearerToken(request));
-        const body = await parseBody(request);
-        const result = await interactionService.sendQuickInteraction(body, current);
-        sendAuthResult(response, requestId, result, 201);
-        return;
-      }
-
-      if (url.pathname === "/api/checkins") {
-        const current = await authService.authenticate(bearerToken(request));
-        if (request.method === "GET") {
-          const result = await checkinService.listCheckins({
-            coupleId: url.searchParams.get("coupleId"),
-            limit: url.searchParams.get("limit"),
-          }, current);
-          sendAuthResult(response, requestId, result);
-          return;
-        }
-        if (request.method === "POST") {
-          const body = await parseBody(request);
-          const result = await checkinService.upsertCheckin(body, current);
-          sendAuthResult(response, requestId, result, 201);
-          return;
-        }
-        sendJson(response, 405, methodNotAllowedPayload(requestId));
-        return;
-      }
-
-      if (url.pathname === "/api/checkins/delete") {
-        if (!(await requireMethod(request, response, "POST", requestId))) {
-          return;
-        }
-        const current = await authService.authenticate(bearerToken(request));
-        const body = await parseBody(request);
-        const result = await checkinService.deleteCheckin(body, current);
-        sendAuthResult(response, requestId, result);
-        return;
-      }
-
-      if (url.pathname === "/api/mood-status") {
-        const current = await authService.authenticate(bearerToken(request));
-        if (request.method === "GET") {
-          const result = await checkinService.listMoodStatuses({
-            coupleId: url.searchParams.get("coupleId"),
-          }, current);
-          sendAuthResult(response, requestId, result);
-          return;
-        }
-        if (request.method === "POST") {
-          const body = await parseBody(request);
-          const result = await checkinService.upsertMoodStatus(body, current);
-          sendAuthResult(response, requestId, result);
-          return;
-        }
-        sendJson(response, 405, methodNotAllowedPayload(requestId));
-        return;
-      }
-
-      if (url.pathname === "/api/calendar-events") {
-        const current = await authService.authenticate(bearerToken(request));
-        if (request.method === "GET") {
-          const result = await calendarService.listEvents({
-            coupleId: url.searchParams.get("coupleId"),
-            limit: url.searchParams.get("limit"),
-          }, current);
-          sendAuthResult(response, requestId, result);
-          return;
-        }
-        if (request.method === "POST") {
-          const body = await parseBody(request);
-          const result = await calendarService.createEvent(body, current);
-          sendAuthResult(response, requestId, result, 201);
-          return;
-        }
-        sendJson(response, 405, methodNotAllowedPayload(requestId));
-        return;
-      }
-
-      if (url.pathname === "/api/calendar-events/update") {
-        if (!(await requireMethod(request, response, "POST", requestId))) {
-          return;
-        }
-        const current = await authService.authenticate(bearerToken(request));
-        const body = await parseBody(request);
-        const result = await calendarService.updateEvent(body, current);
-        sendAuthResult(response, requestId, result);
-        return;
-      }
-
-      if (url.pathname === "/api/calendar-events/delete") {
-        if (!(await requireMethod(request, response, "POST", requestId))) {
-          return;
-        }
-        const current = await authService.authenticate(bearerToken(request));
-        const body = await parseBody(request);
-        const result = await calendarService.deleteEvent(body, current);
-        sendAuthResult(response, requestId, result);
-        return;
-      }
-
-      if (url.pathname === "/api/footprints") {
-        const current = await authService.authenticate(bearerToken(request));
-        if (request.method === "GET") {
-          const result = await footprintService.listFootprints({
-            coupleId: url.searchParams.get("coupleId"),
-            limit: url.searchParams.get("limit"),
-          }, current);
-          sendAuthResult(response, requestId, result);
-          return;
-        }
-        if (request.method === "POST") {
-          const body = await parseBody(request);
-          const result = await footprintService.createFootprint(body, current);
-          sendAuthResult(response, requestId, result, 201);
-          return;
-        }
-        sendJson(response, 405, methodNotAllowedPayload(requestId));
-        return;
-      }
-
-      if (url.pathname === "/api/footprints/update") {
-        if (!(await requireMethod(request, response, "POST", requestId))) {
-          return;
-        }
-        const current = await authService.authenticate(bearerToken(request));
-        const body = await parseBody(request);
-        const result = await footprintService.updateFootprint(body, current);
-        sendAuthResult(response, requestId, result);
-        return;
-      }
-
-      if (url.pathname === "/api/footprints/delete") {
-        if (!(await requireMethod(request, response, "POST", requestId))) {
-          return;
-        }
-        const current = await authService.authenticate(bearerToken(request));
-        const body = await parseBody(request);
-        const result = await footprintService.deleteFootprint(body, current);
-        sendAuthResult(response, requestId, result);
-        return;
-      }
-
-      if (url.pathname === "/api/creation/space") {
-        const current = await authService.authenticate(bearerToken(request));
-        if (request.method === "GET") {
-          const coupleId = url.searchParams.get("coupleId");
-          const result = coupleId
-            ? await creationService.ensureCreationSpace({ coupleId }, current)
-            : await creationService.getActiveCreationSpace(current);
-          sendAuthResult(response, requestId, result);
-          return;
-        }
-        if (request.method === "POST") {
-          const body = await parseBody(request);
-          const result = await creationService.ensureCreationSpace(body, current);
-          sendAuthResult(response, requestId, result, 201);
-          return;
-        }
-        sendJson(response, 405, methodNotAllowedPayload(requestId));
-        return;
-      }
-
-      if (url.pathname === "/api/creation/actions") {
-        const current = await authService.authenticate(bearerToken(request));
-        if (request.method === "GET") {
-          const result = await creationService.listCreationActions({
-            coupleId: url.searchParams.get("coupleId"),
-            limit: url.searchParams.get("limit"),
-          }, current);
-          sendAuthResult(response, requestId, result);
-          return;
-        }
-        if (request.method === "POST") {
-          const body = await parseBody(request);
-          const result = await creationService.recordCreationAction(body, current);
-          sendAuthResult(response, requestId, result, 201);
-          return;
-        }
-        sendJson(response, 405, methodNotAllowedPayload(requestId));
-        return;
-      }
-
-      if (url.pathname === "/api/creation/pet-memories") {
-        const current = await authService.authenticate(bearerToken(request));
-        if (request.method === "GET") {
-          const result = await creationService.listPetMemories({
-            coupleId: url.searchParams.get("coupleId"),
-            limit: url.searchParams.get("limit"),
-          }, current);
-          sendAuthResult(response, requestId, result);
-          return;
-        }
-        if (request.method === "POST") {
-          const body = await parseBody(request);
-          const result = await creationService.createPetMemory(body, current);
-          sendAuthResult(response, requestId, result, 201);
-          return;
-        }
-        sendJson(response, 405, methodNotAllowedPayload(requestId));
-        return;
-      }
-
-      if (url.pathname === "/api/creation/pet/feed") {
-        if (!(await requireMethod(request, response, "POST", requestId))) {
-          return;
-        }
-        const current = await authService.authenticate(bearerToken(request));
-        const body = await parseBody(request);
-        const result = await creationService.feedPet(body, current);
-        sendAuthResult(response, requestId, result);
-        return;
-      }
-
-      if (url.pathname === "/api/creation/pet/interact") {
-        if (!(await requireMethod(request, response, "POST", requestId))) {
-          return;
-        }
-        const current = await authService.authenticate(bearerToken(request));
-        const body = await parseBody(request);
-        const result = await creationService.interactPet(body, current);
-        sendAuthResult(response, requestId, result);
-        return;
-      }
-
-      if (url.pathname === "/api/creation/pet/sleep/settle") {
-        if (!(await requireMethod(request, response, "POST", requestId))) {
-          return;
-        }
-        const current = await authService.authenticate(bearerToken(request));
-        const body = await parseBody(request);
-        const result = await creationService.settlePetSleep(body, current);
-        sendAuthResult(response, requestId, result);
-        return;
-      }
-
-      if (url.pathname === "/api/creation/pet/food/buy") {
-        if (!(await requireMethod(request, response, "POST", requestId))) {
-          return;
-        }
-        const current = await authService.authenticate(bearerToken(request));
-        const body = await parseBody(request);
-        const result = await creationService.buyFood(body, current);
-        sendAuthResult(response, requestId, result);
-        return;
-      }
-
-      if (url.pathname === "/api/creation/game/reward") {
-        if (!(await requireMethod(request, response, "POST", requestId))) {
-          return;
-        }
-        const current = await authService.authenticate(bearerToken(request));
-        const body = await parseBody(request);
-        const result = await creationService.claimGameReward(body, current);
-        sendAuthResult(response, requestId, result);
-        return;
-      }
-
-      if (url.pathname === "/api/creation/pet/summon") {
-        if (!(await requireMethod(request, response, "POST", requestId))) {
-          return;
-        }
-        const current = await authService.authenticate(bearerToken(request));
-        const body = await parseBody(request);
-        const result = await creationService.summonPet(body, current);
-        sendAuthResult(response, requestId, result);
-        return;
-      }
-
-      if (url.pathname === "/api/letters") {
-        const current = await authService.authenticate(bearerToken(request));
-        if (request.method === "GET") {
-          const result = await letterService.listLetters({
-            coupleId: url.searchParams.get("coupleId"),
-            limit: url.searchParams.get("limit"),
-          }, current);
-          sendAuthResult(response, requestId, result);
-          return;
-        }
-        if (request.method === "POST") {
-          const body = await parseBody(request);
-          const result = await letterService.createLetter(body, current);
-          sendAuthResult(response, requestId, result, 201);
-          return;
-        }
-        sendJson(response, 405, methodNotAllowedPayload(requestId));
-        return;
-      }
-
-      if (url.pathname === "/api/letters/read") {
-        if (!(await requireMethod(request, response, "POST", requestId))) {
-          return;
-        }
-        const current = await authService.authenticate(bearerToken(request));
-        const body = await parseBody(request);
-        const result = await letterService.markRead(body, current);
-        sendAuthResult(response, requestId, result);
-        return;
-      }
-
-      if (url.pathname === "/api/letters/dismiss") {
-        if (!(await requireMethod(request, response, "POST", requestId))) {
-          return;
-        }
-        const current = await authService.authenticate(bearerToken(request));
-        const body = await parseBody(request);
-        const result = await letterService.dismissLetter(body, current);
-        sendAuthResult(response, requestId, result);
-        return;
-      }
-
-      if (url.pathname === "/api/letters/delete") {
-        if (!(await requireMethod(request, response, "POST", requestId))) {
-          return;
-        }
-        const current = await authService.authenticate(bearerToken(request));
-        const body = await parseBody(request);
-        const result = await letterService.deleteLetter(body, current);
-        sendAuthResult(response, requestId, result);
-        return;
-      }
-
-      if (url.pathname === "/api/notifications") {
-        const current = await authService.authenticate(bearerToken(request));
-        if (request.method === "GET") {
-          const result = await notificationService.listNotifications({
-            coupleId: url.searchParams.get("coupleId"),
-            limit: url.searchParams.get("limit"),
-          }, current);
-          sendAuthResult(response, requestId, result);
-          return;
-        }
-        sendJson(response, 405, methodNotAllowedPayload(requestId));
-        return;
-      }
-
-      if (url.pathname === "/api/notifications/stream") {
-        if (!(await requireMethod(request, response, "GET", requestId))) {
-          return;
-        }
-        const current = await authService.authenticate(bearerToken(request));
-        await sendNotificationStream({ logger, notificationService, request, response, requestId, current, url });
-        return;
-      }
-
-      if (url.pathname === "/api/notifications/read") {
-        if (!(await requireMethod(request, response, "POST", requestId))) {
-          return;
-        }
-        const current = await authService.authenticate(bearerToken(request));
-        const body = await parseBody(request);
-        const result = await notificationService.markRead(body, current);
-        sendAuthResult(response, requestId, result);
-        return;
-      }
-
-      if (url.pathname === "/api/notifications/dismiss") {
-        if (!(await requireMethod(request, response, "POST", requestId))) {
-          return;
-        }
-        const current = await authService.authenticate(bearerToken(request));
-        const body = await parseBody(request);
-        const result = await notificationService.dismiss(body, current);
-        sendAuthResult(response, requestId, result);
-        return;
-      }
-
-      if (url.pathname === "/api/notification-preferences") {
-        const current = await authService.authenticate(bearerToken(request));
-        if (request.method === "GET") {
-          const result = await notificationService.getPreferences(current);
-          sendAuthResult(response, requestId, result);
-          return;
-        }
-        if (request.method === "POST") {
-          const body = await parseBody(request);
-          const result = await notificationService.updatePreferences(body, current);
-          sendAuthResult(response, requestId, result);
-          return;
-        }
-        sendJson(response, 405, methodNotAllowedPayload(requestId));
-        return;
-      }
-
-      if (url.pathname === "/api/push-tokens/web") {
-        if (!(await requireMethod(request, response, "POST", requestId))) {
-          return;
-        }
-        const current = await authService.authenticate(bearerToken(request));
-        const body = await parseBody(request);
-        const result = await notificationService.registerWebPush(body, current);
-        sendAuthResult(response, requestId, result, 201);
-        return;
-      }
-
-      if (url.pathname === "/api/push-tokens/expo") {
-        if (!(await requireMethod(request, response, "POST", requestId))) {
-          return;
-        }
-        const current = await authService.authenticate(bearerToken(request));
-        const body = await parseBody(request);
-        const result = await notificationService.registerExpoPush(body, current);
-        sendAuthResult(response, requestId, result, 201);
-        return;
-      }
-
-      if (url.pathname === "/api/push-tokens/disable") {
-        if (!(await requireMethod(request, response, "POST", requestId))) {
-          return;
-        }
-        const current = await authService.authenticate(bearerToken(request));
-        const body = await parseBody(request);
-        const result = await notificationService.disablePushToken(body, current);
-        sendAuthResult(response, requestId, result);
-        return;
-      }
-
-      if (url.pathname === "/api/push-deliveries/summary") {
-        if (!(await requireMethod(request, response, "GET", requestId))) {
-          return;
-        }
-        const current = await authService.authenticate(bearerToken(request));
-        const result = await notificationService.pushDeliverySummary(current);
-        sendAuthResult(response, requestId, result);
+      const handledByAuthRoutes = await registerAuthRoutes({
+        authService,
+        bearerToken,
+        dashboardService,
+        parseBody,
+        relationshipService,
+        request,
+        requestId,
+        response,
+        url,
+      });
+      if (handledByAuthRoutes) {
+        return;
+      }
+
+      const handledByPrivacyRoutes = await registerPrivacyRoutes({
+        authService,
+        bearerToken,
+        parseBody,
+        privacyService,
+        request,
+        requestId,
+        response,
+        url,
+      });
+      if (handledByPrivacyRoutes) {
+        return;
+      }
+
+      const handledByContentRoutes = await registerContentRoutes({
+        authService,
+        bearerToken,
+        calendarService,
+        checkinService,
+        creationService,
+        footprintService,
+        interactionService,
+        letterService,
+        messageService,
+        parseBody,
+        profileService,
+        relationshipService,
+        request,
+        requestId,
+        response,
+        storageService,
+        url,
+      });
+      if (handledByContentRoutes) {
+        return;
+      }
+
+      const handledByNotificationRoutes = await registerNotificationRoutes({
+        authService,
+        logger,
+        notificationService,
+        parseBody,
+        request,
+        requestId,
+        response,
+        sendAuthResult,
+        url,
+        bearerToken,
+      });
+      if (handledByNotificationRoutes) {
         return;
       }
 

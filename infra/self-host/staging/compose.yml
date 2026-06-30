@@ -28,7 +28,7 @@ services:
     image: node:20-alpine
     restart: unless-stopped
     working_dir: /app
-    command: ["sh", "-c", "if [ ! -d node_modules/argon2 ] || [ ! -d node_modules/pg ] || [ ! -d node_modules/@aws-sdk/client-s3 ]; then npm ci --omit=dev; fi; node src/server.mjs"]
+    command: ["sh", "-c", "if [ ! -d node_modules/argon2 ] || [ ! -d node_modules/pg ] || [ ! -d node_modules/@aws-sdk/client-s3 ] || [ ! -d node_modules/sharp ]; then npm ci --omit=dev; fi; node src/server.mjs"]
     environment:
       NODE_ENV: production
       API_ENV: ${API_ENV}

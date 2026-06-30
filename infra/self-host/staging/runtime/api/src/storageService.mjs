@@ -12,6 +12,7 @@ import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
 import { AuthError } from "./authService.mjs";
 import { withTransaction } from "./db.mjs";
+import { createAndUploadImageThumbnail } from "./mediaThumbnail.mjs";
 
 const extensionByMime = new Map([
   ["image/jpeg", "jpg"],
@@ -21,6 +22,7 @@ const extensionByMime = new Map([
 ]);
 const defaultMediaListLimit = 1000;
 const maxMediaListLimit = 5000;
+const maxDashboardAvatarDataUrlBytes = 360 * 1024;
 
 function publicMedia(row) {
   return {
@@ -132,6 +134,14 @@ async function ensureBucket(client, bucket) {
   } catch (error) {
     await client.send(new CreateBucketCommand({ Bucket: bucket }));
   }
+}
+
+async function streamToBuffer(stream) {
+  const chunks = [];
+  for await (const chunk of stream) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  return Buffer.concat(chunks);
 }
 
 export function createStorageService({ pool, config }) {
@@ -363,15 +373,17 @@ export function createStorageService({ pool, config }) {
       throw new AuthError("avatar_not_found", 404, "Avatar was not found.");
     }
 
-    let key = variant === "thumbnail" && row.avatar_thumbnail_storage_path ? row.avatar_thumbnail_storage_path : row.avatar_storage_path;
+    const key = variant === "thumbnail" ? row.avatar_thumbnail_storage_path : row.avatar_storage_path;
+    if (!key) {
+      throw new AuthError("avatar_not_found", 404, "Avatar was not found.");
+    }
     try {
       await s3.send(new HeadObjectCommand({ Bucket: config.storage.avatarBucket, Key: key }));
     } catch (error) {
-      if (variant !== "thumbnail" || key === row.avatar_storage_path) {
-        throw error;
+      if (variant === "thumbnail") {
+        throw new AuthError("avatar_thumbnail_not_found", 404, "Avatar thumbnail was not found.");
       }
-      key = row.avatar_storage_path;
-      await s3.send(new HeadObjectCommand({ Bucket: config.storage.avatarBucket, Key: key }));
+      throw error;
     }
     const url = await getSignedUrl(
       publicS3,
@@ -560,16 +572,36 @@ export function createStorageService({ pool, config }) {
       const actualSize = Number(head.ContentLength || 0);
       const actualType = String(head.ContentType || "").split(";")[0].toLowerCase();
       let thumbnailOk = true;
+      let generatedThumbnail = null;
       if (row.thumbnail_storage_path) {
         const thumbnailHead = await s3.send(new HeadObjectCommand({ Bucket: config.storage.bucket, Key: row.thumbnail_storage_path }));
         const actualThumbnailSize = Number(thumbnailHead.ContentLength || 0);
         const actualThumbnailType = String(thumbnailHead.ContentType || "").split(";")[0].toLowerCase();
-        thumbnailOk = actualThumbnailSize > 0 && actualThumbnailSize <= config.storage.maxThumbnailUploadBytes && config.storage.allowedMimeTypes.includes(actualThumbnailType);
+        thumbnailOk =
+          actualThumbnailSize === Number(row.thumbnail_size_bytes) &&
+          actualThumbnailType === row.thumbnail_mime_type;
+      } else {
+        generatedThumbnail = await createAndUploadImageThumbnail({
+          bucket: config.storage.bucket,
+          key: row.storage_path,
+          maxBytes: config.storage.maxThumbnailUploadBytes,
+          s3,
+        }).catch((error) => {
+          console.warn("Media thumbnail generation failed:", {
+            mediaId: row.id,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          return null;
+        });
+        thumbnailOk = Boolean(generatedThumbnail?.key);
       }
       if (actualSize !== Number(row.size_bytes) || actualType !== row.mime_type || !thumbnailOk) {
         await s3.send(new DeleteObjectCommand({ Bucket: config.storage.bucket, Key: row.storage_path })).catch(() => {});
         if (row.thumbnail_storage_path) {
           await s3.send(new DeleteObjectCommand({ Bucket: config.storage.bucket, Key: row.thumbnail_storage_path })).catch(() => {});
+        }
+        if (generatedThumbnail?.key) {
+          await s3.send(new DeleteObjectCommand({ Bucket: config.storage.bucket, Key: generatedThumbnail.key })).catch(() => {});
         }
         await client.query(
           `
@@ -586,11 +618,12 @@ export function createStorageService({ pool, config }) {
       const updated = await client.query(
         `
           update public.media_files
-             set upload_status = 'ready'
+             set upload_status = 'ready',
+                 thumbnail_storage_path = coalesce(thumbnail_storage_path, $2)
            where id = $1
           returning *
         `,
-        [row.id],
+        [row.id, generatedThumbnail?.key ?? null],
       );
       return publicMedia(updated.rows[0]);
     });
@@ -639,15 +672,17 @@ export function createStorageService({ pool, config }) {
     await withTransaction(pool, async (client) => {
       await ensureActiveCoupleMember(client, row.couple_id, current.user.id);
     });
-    let key = variant === "thumbnail" && row.thumbnail_storage_path ? row.thumbnail_storage_path : row.storage_path;
+    const key = variant === "thumbnail" ? row.thumbnail_storage_path : row.storage_path;
+    if (!key) {
+      throw new AuthError("media_thumbnail_not_found", 404, "Media thumbnail was not found.");
+    }
     try {
       await s3.send(new HeadObjectCommand({ Bucket: config.storage.bucket, Key: key }));
     } catch (error) {
-      if (variant !== "thumbnail" || key === row.storage_path) {
-        throw error;
+      if (variant === "thumbnail") {
+        throw new AuthError("media_thumbnail_not_found", 404, "Media thumbnail was not found.");
       }
-      key = row.storage_path;
-      await s3.send(new HeadObjectCommand({ Bucket: config.storage.bucket, Key: key }));
+      throw error;
     }
     const url = await getSignedUrl(
       publicS3,
@@ -660,6 +695,101 @@ export function createStorageService({ pool, config }) {
         url,
         expiresInSeconds: config.storage.signedUrlTtlSeconds,
       },
+    };
+  }
+
+  async function createSignedReadUrl(bucket, key) {
+    if (!key) {
+      return null;
+    }
+    await s3.send(new HeadObjectCommand({ Bucket: bucket, Key: key }));
+    return getSignedUrl(
+      publicS3,
+      new GetObjectCommand({ Bucket: bucket, Key: key }),
+      { expiresIn: config.storage.signedUrlTtlSeconds },
+    );
+  }
+
+  async function createAvatarDataUrl(key) {
+    if (!key) {
+      return null;
+    }
+    const head = await s3.send(new HeadObjectCommand({ Bucket: config.storage.avatarBucket, Key: key }));
+    const size = Number(head.ContentLength || 0);
+    const contentType = String(head.ContentType || "").split(";")[0].toLowerCase();
+    if (size <= 0 || size > maxDashboardAvatarDataUrlBytes || !contentType.startsWith("image/")) {
+      return null;
+    }
+    const object = await s3.send(new GetObjectCommand({ Bucket: config.storage.avatarBucket, Key: key }));
+    const body = object.Body ? await streamToBuffer(object.Body) : null;
+    if (!body || body.length <= 0 || body.length > maxDashboardAvatarDataUrlBytes) {
+      return null;
+    }
+    return `data:${contentType};base64,${body.toString("base64")}`;
+  }
+
+  async function createDashboardImageUrls(input, current) {
+    const profiles = Array.isArray(input.profiles) ? input.profiles : [];
+    const media = Array.isArray(input.media) ? input.media : [];
+    const avatarEntries = await Promise.all(
+      profiles.map(async (profile) => {
+        if (!profile?.id || !profile.avatarStoragePath) {
+          return null;
+        }
+        try {
+          const thumbnailKey = profile.avatarThumbnailStoragePath;
+          const [avatarThumbDataUrl, avatarThumbSignedUrl] = await Promise.all([
+            thumbnailKey ? createAvatarDataUrl(thumbnailKey).catch(() => null) : null,
+            thumbnailKey ? createSignedReadUrl(config.storage.avatarBucket, thumbnailKey).catch(() => null) : null,
+          ]);
+          if (!avatarThumbDataUrl && !avatarThumbSignedUrl) {
+            return null;
+          }
+          return [
+            profile.id,
+            {
+              avatarSignedUrl: null,
+              avatarThumbSignedUrl,
+              avatarThumbDataUrl,
+            },
+          ];
+        } catch (error) {
+          console.warn("Dashboard avatar read-url signing failed:", {
+            userId: profile.id,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          return null;
+        }
+      }),
+    );
+    const mediaEntries = await Promise.all(
+      media.map(async (mediaFile) => {
+        if (!mediaFile?.id || !mediaFile.storagePath) {
+          return null;
+        }
+        try {
+          const thumbnailSignedUrl = mediaFile.thumbnailStoragePath
+            ? await createSignedReadUrl(config.storage.bucket, mediaFile.thumbnailStoragePath).catch(() => null)
+            : null;
+          return [
+            mediaFile.id,
+            {
+              signedUrl: null,
+              thumbnailSignedUrl,
+            },
+          ];
+        } catch (error) {
+          console.warn("Dashboard media thumbnail read-url signing failed:", {
+            mediaId: mediaFile.id,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          return null;
+        }
+      }),
+    );
+    return {
+      avatarsByUserId: Object.fromEntries(avatarEntries.filter(Boolean)),
+      mediaById: Object.fromEntries(mediaEntries.filter(Boolean)),
     };
   }
 
@@ -709,6 +839,7 @@ export function createStorageService({ pool, config }) {
     completeUpload,
     createAvatarReadUrl,
     createAvatarUpload,
+    createDashboardImageUrls,
     createReadUrl,
     createUpload,
     deleteAvatar,

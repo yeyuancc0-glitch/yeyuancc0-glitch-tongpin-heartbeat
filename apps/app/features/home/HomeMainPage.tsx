@@ -33,6 +33,7 @@ export function HomeMainPage({
   startedAt,
   loveDays,
   coupleId,
+  coupleReady,
   checkins,
   messages,
   currentUserId,
@@ -56,12 +57,14 @@ export function HomeMainPage({
   quickSending,
   mediaFiles,
   moodStatuses,
+  onOpenPairing,
 }: {
   me: { name: string; initial: string; avatarUrl?: string | null };
   partner: { name: string; initial: string; avatarUrl?: string | null };
   startedAt: string;
   loveDays: number;
   coupleId: string;
+  coupleReady: boolean;
   checkins: Checkin[];
   messages: Message[];
   currentUserId: string;
@@ -85,6 +88,7 @@ export function HomeMainPage({
   quickSending: boolean;
   mediaFiles: MediaFile[];
   moodStatuses: MoodStatus[];
+  onOpenPairing: () => void;
 }) {
   const { playQuickInteractionFlight } = useMotion();
   const [reaction, setReaction] = useState<{ id: number; label: string; icon: string; image?: ImageSourcePropType } | null>(null);
@@ -117,6 +121,8 @@ export function HomeMainPage({
     playQuickInteractionFlight({ label, icon, image, origin, target });
   }
 
+  const isSoloMode = !coupleReady;
+
   return (
     <View style={styles.stack}>
       <Card soft style={styles.heroCard}>
@@ -142,10 +148,10 @@ export function HomeMainPage({
           <View style={styles.heroLoveBody}>
             <Text style={styles.heroLoveTitle}>恋爱第</Text>
             <View style={styles.heroNumberRow}>
-              <Text style={styles.heroLoveNumber}>{loveDays}</Text>
+              <Text style={styles.heroLoveNumber}>{isSoloMode ? "0" : loveDays}</Text>
               <Text style={styles.heroLoveUnit}>天</Text>
             </View>
-            <Text style={styles.startedText}>从 {formatShortDate(startedAt)} 开始</Text>
+            <Text style={styles.startedText}>{isSoloMode ? "先把资料和首页安顿好" : `从 ${formatShortDate(startedAt)} 开始`}</Text>
           </View>
           <Svg pointerEvents="none" width="100%" height="66" viewBox="0 0 280 66" style={styles.heroWave}>
             <Defs>
@@ -164,7 +170,7 @@ export function HomeMainPage({
               fill="none"
             />
           </Svg>
-          <LoveLetterEntryCard partnerName={partner.name} onPress={onWriteLetter} />
+          <LoveLetterEntryCard partnerName={partner.name} onPress={isSoloMode ? onOpenPairing : onWriteLetter} />
         </View>
       </Card>
 
@@ -179,7 +185,7 @@ export function HomeMainPage({
           </View>
           <View style={styles.statusGrid}>
             <BubbleMoodSlot label="我的心情" value={myMood?.mood || todayCapsuleStatus} active tone="warm" />
-            <BubbleMoodSlot label="TA 的心情" value={partnerMood?.mood || "等一封回应"} tone="cool" />
+            <BubbleMoodSlot label="TA 的心情" value={isSoloMode ? "先绑定后可见" : partnerMood?.mood || "等一封回应"} tone="cool" />
           </View>
           <View style={styles.interactionGrid}>
             {quickInteractions.map((item) => (
@@ -189,11 +195,13 @@ export function HomeMainPage({
                 color={item.tone}
                 icon={item.icon ?? interactionIconFor(item.id)}
                 onPress={
-                  item.id === "message"
+                  isSoloMode && item.id !== "message"
                     ? onAddCustomQuickInteraction
-                    : quickSending
-                      ? undefined
-                      : (origin) => void sendQuickInteraction(item.label, floatingIconForInteraction(item.id), item.icon ?? interactionIconFor(item.id), origin)
+                    : item.id === "message"
+                      ? onAddCustomQuickInteraction
+                      : quickSending
+                        ? undefined
+                        : (origin) => void sendQuickInteraction(item.label, floatingIconForInteraction(item.id), item.icon ?? interactionIconFor(item.id), origin)
                 }
               />
             ))}
@@ -213,21 +221,26 @@ export function HomeMainPage({
               </View>
             </View>
           ) : null}
+          {isSoloMode ? (
+            <InlineNotice tone="info">现在可以先浏览首页，绑定另一半后会自动解锁完整互动和情侣空间。</InlineNotice>
+          ) : null}
           {reaction ? <FloatingReaction key={reaction.id} icon={reaction.icon} label={reaction.label} image={reaction.image} /> : null}
           {interactionText ? <InlineNotice tone="success">{interactionText}</InlineNotice> : null}
         </Card>
       </View>
 
-      <HomeMessageBoard
-        coupleId={coupleId}
-        messages={messages}
-        currentUserId={currentUserId}
-        latestMessage={latestMessage}
-        onChanged={onChanged}
-        onOpenAll={onOpenMessages}
-      />
+        <HomeMessageBoard
+          coupleId={coupleId}
+          messages={messages}
+          currentUserId={currentUserId}
+          latestMessage={isSoloMode ? "绑定另一半后，这里会变成你们之间的留言板。" : latestMessage}
+          onChanged={onChanged}
+          onOpenAll={onOpenMessages}
+          soloMode={isSoloMode}
+          onOpenPairing={onOpenPairing}
+        />
 
-      <PhotoAlbumCard mediaFiles={mediaFiles} onUploadPhoto={onUploadPhoto} onPhotoFiles={onPhotoFiles} onPreviewPhoto={onPreviewPhoto} onDeletePhoto={onDeletePhoto} />
+      <PhotoAlbumCard mediaFiles={mediaFiles} onUploadPhoto={onUploadPhoto} onPhotoFiles={onPhotoFiles} onPreviewPhoto={onPreviewPhoto} onDeletePhoto={onDeletePhoto} soloMode={isSoloMode} onOpenPairing={onOpenPairing} />
     </View>
   );
 }

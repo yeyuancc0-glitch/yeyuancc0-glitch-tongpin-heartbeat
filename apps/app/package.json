@@ -13,6 +13,7 @@
     "smoke:self-host-messages": "node scripts/smoke-self-host-messages.mjs",
     "smoke:self-host-interactions": "node scripts/smoke-self-host-interactions.mjs",
     "smoke:self-host-dashboard": "node scripts/smoke-self-host-dashboard.mjs",
+    "smoke:self-host-dashboard-images": "node scripts/smoke-self-host-dashboard-images.mjs",
     "smoke:self-host-checkins": "node scripts/smoke-self-host-checkins.mjs",
     "smoke:self-host-calendar-events": "node scripts/smoke-self-host-calendar-events.mjs",
     "smoke:self-host-footprints": "node scripts/smoke-self-host-footprints.mjs",

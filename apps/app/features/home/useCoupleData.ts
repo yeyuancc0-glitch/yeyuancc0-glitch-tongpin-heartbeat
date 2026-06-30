@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { getSelfHostDashboard } from "@/lib/selfHost/dashboardApi";
+import { prefetchImageUrls } from "@/lib/media/imageStorage";
+import { cacheDashboardAvatarImages, withCachedDashboardAvatarImages } from "@/lib/media/localAvatarCache";
 import { listSelfHostNotifications, subscribeSelfHostNotificationEvents } from "@/lib/selfHost/notificationApi";
 import type {
   Checkin,
@@ -8,13 +10,9 @@ import type {
   MediaFile,
   Profile,
 } from "@/lib/supabase/database.types";
-import {
-  createAvatarUrlMap,
-  withHydratedProfileAvatar,
-} from "@/features/home/homeAvatarHydration";
 import { readCachedDashboard, writeCachedDashboard } from "@/features/home/homeDashboardCache";
 import { createEmptyDashboard, type CoupleDashboard } from "@/features/home/homeDashboardTypes";
-import { hydrateMediaFile } from "@/features/home/homeMediaHydration";
+import { withPreservedMediaUrls } from "@/features/home/homeMediaHydration";
 import { notificationsMatch } from "@/features/home/homeNotificationRefresh";
 
 const emptyDashboard = createEmptyDashboard();
@@ -23,6 +21,9 @@ const dashboardFallbackRefreshMs = 120000;
 const maxDashboardFallbackRefreshMs = 10 * 60 * 1000;
 const notificationRealtimeDebounceMs = 1200;
 const dashboardListLimit = 1000;
+const avatarCacheTimeoutMs = 900;
+const criticalImagePrefetchTimeoutMs = 900;
+const criticalMediaPrefetchLimit = 12;
 
 function isSameCheckinSlot(left: Checkin, right: Checkin) {
   return (
@@ -65,7 +66,7 @@ function mergeProfileAvatarUrls(current: DashboardProfile | null | undefined, ne
     return {
       ...nextProfile,
       avatar_signed_url: nextProfile.avatar_signed_url ?? current.avatar_signed_url ?? null,
-      avatar_thumb_signed_url: nextProfile.avatar_thumb_signed_url ?? current.avatar_thumb_signed_url ?? current.avatar_signed_url ?? null,
+      avatar_thumb_signed_url: nextProfile.avatar_thumb_signed_url ?? current.avatar_thumb_signed_url ?? null,
     };
   }
   return nextProfile;
@@ -74,6 +75,53 @@ function mergeProfileAvatarUrls(current: DashboardProfile | null | undefined, ne
 function mergeDashboardProfile(currentProfile: DashboardProfile | null | undefined, nextProfile: DashboardProfile) {
   const mergedAvatarProfile = mergeProfileAvatarUrls(currentProfile, nextProfile);
   return currentProfile ? { ...currentProfile, ...mergedAvatarProfile } : mergedAvatarProfile;
+}
+
+function mergeDashboardCoupleAvatars(currentCouple: CoupleDashboard["couple"], nextCouple: CoupleDashboard["couple"]) {
+  if (!nextCouple) {
+    return nextCouple;
+  }
+  return {
+    ...nextCouple,
+    couple_members: nextCouple.couple_members.map((member) => {
+      const currentMember = currentCouple?.couple_members.find((item) => item.user_id === member.user_id);
+      return {
+        ...member,
+        profile: member.profile ? mergeDashboardProfile(currentMember?.profile, member.profile) : member.profile,
+      };
+    }),
+  };
+}
+
+function collectCriticalImageUrls(dashboard: CoupleDashboard) {
+  const avatarUrls = [
+    dashboard.profile?.avatar_signed_url,
+    ...(dashboard.couple?.couple_members.flatMap((member) => [
+      member.profile?.avatar_signed_url,
+    ]) ?? []),
+  ].filter((url) => !url?.startsWith("data:image/"));
+  const mediaUrls = dashboard.mediaFiles
+    .slice(0, criticalMediaPrefetchLimit)
+    .map((file) => file.thumbnailSignedUrl);
+  return Array.from(new Set([...avatarUrls, ...mediaUrls].filter((url): url is string => Boolean(url))));
+}
+
+async function prefetchCriticalImages(dashboard: CoupleDashboard) {
+  const urls = collectCriticalImageUrls(dashboard);
+  if (!urls.length) {
+    return;
+  }
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  await Promise.race([
+    prefetchImageUrls(urls, 4),
+    new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, criticalImagePrefetchTimeoutMs);
+    }),
+  ]).finally(() => {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  });
 }
 
 export function useCoupleData(userId?: string, accessToken?: string | null) {
@@ -115,7 +163,7 @@ export function useCoupleData(userId?: string, accessToken?: string | null) {
     if (options.initial) {
       const cachedDashboard = readCachedDashboard(userId);
       if (cachedDashboard) {
-        saveData(cachedDashboard);
+        saveData(withCachedDashboardAvatarImages(cachedDashboard));
         setLoadedUserId(userId);
       } else {
         saveData(createEmptyDashboard());
@@ -139,23 +187,6 @@ export function useCoupleData(userId?: string, accessToken?: string | null) {
       }
 
       const dashboard = await getSelfHostDashboard({ accessToken, currentUserId: userId });
-      const avatarProfiles = [
-        dashboard.profile,
-        ...(dashboard.couple?.couple_members.map((member) => member.profile).filter(Boolean) ?? []),
-      ].filter((avatarProfile): avatarProfile is DashboardProfile => Boolean(avatarProfile));
-      const avatarUrlByPath = avatarProfiles.some((avatarProfile) => Boolean(avatarProfile.avatar_url))
-        ? await createAvatarUrlMap(avatarProfiles, accessToken)
-        : null;
-      const hydratedProfile = dashboard.profile && avatarUrlByPath ? withHydratedProfileAvatar(dashboard.profile, avatarUrlByPath) : dashboard.profile;
-      const hydratedCouple = dashboard.couple && avatarUrlByPath
-        ? {
-            ...dashboard.couple,
-            couple_members: dashboard.couple.couple_members.map((member) => ({
-              ...member,
-              profile: member.profile ? withHydratedProfileAvatar(member.profile, avatarUrlByPath) : member.profile,
-            })),
-          }
-        : dashboard.couple;
       const signedMediaUrlById = new Map(
         dataRef.current.mediaFiles
           .filter((file) => file.storage_path)
@@ -168,13 +199,13 @@ export function useCoupleData(userId?: string, accessToken?: string | null) {
             },
           ] as const)
       );
-      const mediaFiles = await Promise.all(
-        dashboard.mediaFiles.map((file) => hydrateMediaFile(file, signedMediaUrlById, accessToken))
-      );
-      const nextData: CoupleDashboard = {
+      const baseProfile = dashboard.profile ? mergeDashboardProfile(dataRef.current.profile, dashboard.profile) : dashboard.profile;
+      const baseCouple = mergeDashboardCoupleAvatars(dataRef.current.couple, dashboard.couple);
+      const mediaFiles = dashboard.mediaFiles.map((file) => withPreservedMediaUrls(file, signedMediaUrlById));
+      const nextData: CoupleDashboard = withCachedDashboardAvatarImages({
         ...createEmptyDashboard(),
-        profile: hydratedProfile,
-        couple: hydratedCouple,
+        profile: baseProfile,
+        couple: baseCouple,
         pendingInvites: dashboard.pendingInvites,
         checkins: dashboard.checkins,
         events: dashboard.events,
@@ -187,12 +218,24 @@ export function useCoupleData(userId?: string, accessToken?: string | null) {
         creationSpace: dashboard.creationSpace,
         creationActions: dashboard.creationActions,
         petMemories: dashboard.petMemories,
-      };
+      });
       if (requestId !== requestIdRef.current) {
         return;
       }
-      saveData(nextData);
-      writeCachedDashboard(userId, nextData);
+      const avatarCachedData = options.initial
+        ? await cacheDashboardAvatarImages(nextData, avatarCacheTimeoutMs)
+        : withCachedDashboardAvatarImages(nextData);
+      if (requestId !== requestIdRef.current) {
+        return;
+      }
+      if (options.initial) {
+        await prefetchCriticalImages(avatarCachedData);
+      }
+      if (requestId !== requestIdRef.current) {
+        return;
+      }
+      saveData(avatarCachedData);
+      writeCachedDashboard(userId, avatarCachedData);
       setLoadedUserId(userId);
       setLoadError(null);
       setLoading(false);

@@ -90,7 +90,7 @@ export function CheckinCard({
         {checkins.length === 0 ? (
           <EmptyState title="还没有分享记录" description="完成今天的第一次分享后，这里会保留最近记录。" />
         ) : (
-          checkins.slice(0, 4).map((item) => (
+          checkins.map((item) => (
             <View key={item.id} style={styles.historyRow}>
               <Text style={styles.historyDate}>{item.checkin_date}</Text>
               <Text style={styles.historyText}>{item.content || "完成了分享"}</Text>

@@ -80,7 +80,7 @@ export function verifyAccessToken(token, secret, now = new Date(), keyRing = nul
 
   const payload = parseBase64UrlJson(encodedPayload);
   const nowSeconds = Math.floor(now.getTime() / 1000);
-  if (!payload.sub || !payload.sid || !payload.exp || payload.exp <= nowSeconds) {
+  if (payload.iss !== "tongpin-self-host-api" || payload.aud !== "tongpin-app" || !payload.sub || !payload.sid || !payload.exp || payload.exp <= nowSeconds) {
     throw new Error("invalid_token");
   }
 

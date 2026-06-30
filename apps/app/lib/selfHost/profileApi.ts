@@ -6,6 +6,8 @@ type SelfHostProfile = {
   displayName: string | null;
   avatarStoragePath: string | null;
   avatarThumbnailStoragePath: string | null;
+  accountStatus: Profile["account_status"];
+  deletionRequestedAt: string | null;
   birthday: string | null;
   createdAt: string;
   updatedAt: string;
@@ -57,8 +59,8 @@ function mapSelfHostProfile(profile: SelfHostProfile): Profile {
     avatar_signed_url: null,
     avatar_thumb_signed_url: null,
     birthdate: profile.birthday,
-    account_status: "active",
-    deletion_requested_at: null,
+    account_status: profile.accountStatus,
+    deletion_requested_at: profile.deletionRequestedAt,
     created_at: profile.createdAt,
     updated_at: profile.updatedAt,
   };
@@ -131,16 +133,26 @@ export async function uploadSelfHostAvatar(input: {
     ? await createSelfHostAvatarReadUrl({
         accessToken: input.accessToken,
         userId: profile.id,
-        variant: profile.avatar_thumbnail_url ? "thumbnail" : "original",
+        variant: "original",
       }).catch((error) => {
         console.warn("Self-host avatar uploaded read-url failed:", error);
+        return null;
+      })
+    : null;
+  const avatarThumbSignedUrl = profile.avatar_thumbnail_url
+    ? await createSelfHostAvatarReadUrl({
+        accessToken: input.accessToken,
+        userId: profile.id,
+        variant: "thumbnail",
+      }).catch((error) => {
+        console.warn("Self-host avatar uploaded thumbnail read-url failed:", error);
         return null;
       })
     : null;
   return {
     ...profile,
     avatar_signed_url: avatarSignedUrl,
-    avatar_thumb_signed_url: avatarSignedUrl,
+    avatar_thumb_signed_url: avatarThumbSignedUrl,
   };
 }
 

@@ -79,6 +79,7 @@ server.listen(config.port, "0.0.0.0", () => {
 
 function shutdown(signal) {
   console.log({ event: "server_shutdown_started", signal });
+  Promise.resolve(notificationService.shutdown?.()).finally(() => {
   server.close((error) => {
     if (error) {
       console.error({ event: "server_shutdown_failed", message: error.message });
@@ -96,6 +97,7 @@ function shutdown(signal) {
         });
         process.exit(1);
       });
+  });
   });
 }
 

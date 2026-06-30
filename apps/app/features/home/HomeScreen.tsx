@@ -33,6 +33,7 @@ import {
   type BottomTabKey,
   PageContainer,
   PrimaryButton,
+  SecondaryButton,
 } from "@/components/app-ui/AppUI";
 import { useAppPullToRefresh, useToast } from "@/components/ui";
 import { useAuth } from "@/features/auth/AuthProvider";
@@ -158,12 +159,12 @@ export function HomeScreen() {
   const me = {
     name: myDisplayName,
     initial: myDisplayName.slice(0, 1),
-    avatarUrl: data.profile?.avatar_thumb_signed_url ?? data.profile?.avatar_signed_url,
+    avatarUrl: data.profile?.avatar_thumb_signed_url ?? data.profile?.avatar_thumb_data_url ?? null,
   };
   const partnerProfile = {
     name: partnerDisplayName,
     initial: partnerDisplayName.slice(0, 1),
-    avatarUrl: partner?.profile?.avatar_thumb_signed_url ?? partner?.profile?.avatar_signed_url,
+    avatarUrl: partner?.profile?.avatar_thumb_signed_url ?? partner?.profile?.avatar_thumb_data_url ?? null,
   };
   const coupleId = data.couple?.id ?? "";
   const loveDays = data.couple ? daysBetween(data.couple.started_at) : 0;
@@ -449,14 +450,6 @@ export function HomeScreen() {
     );
   }
 
-  if (!data.couple) {
-    return (
-      <PageContainer>
-        <PairingScreen pendingInvites={data.pendingInvites} onChanged={reload} />
-      </PageContainer>
-    );
-  }
-
   async function endCouple() {
     if (Platform.OS !== "web") {
       Alert.alert("解除当前关系", "解绑后双方不能继续写入当前情侣空间。确定解绑吗？", [
@@ -504,6 +497,12 @@ export function HomeScreen() {
     setActiveTab("me");
     setSubPageReturnTab("me");
     setSubPage(page);
+  }
+
+  function openPairingPage() {
+    setActiveTab("me");
+    setSubPageReturnTab("me");
+    setSubPage("pairing");
   }
 
   function openSubPage(page: Exclude<SubPage, "main" | SettingPage>, ownerTab: BottomTabKey = activeTab) {
@@ -606,7 +605,7 @@ export function HomeScreen() {
         me={me}
         partner={partnerProfile}
         loveDays={loveDays}
-        startedAt={data.couple.started_at}
+        startedAt={data.couple?.started_at ?? ""}
         onBack={returnToMePage}
         onEndCouple={endCouple}
         endingCouple={endingCouple}
@@ -628,7 +627,7 @@ export function HomeScreen() {
       <HomeMainPage
         me={me}
         partner={partnerProfile}
-        startedAt={data.couple.started_at}
+        startedAt={data.couple?.started_at ?? ""}
         loveDays={loveDays}
         coupleId={coupleId}
         checkins={data.checkins}
@@ -656,6 +655,19 @@ export function HomeScreen() {
         quickSending={quickSending}
         mediaFiles={data.mediaFiles}
         moodStatuses={data.moodStatuses}
+        coupleReady={Boolean(data.couple)}
+        onOpenPairing={openPairingPage}
+      />
+    );
+  } else if (subPage === "pairing") {
+    content = (
+      <PairingScreen
+        pendingInvites={data.pendingInvites}
+        onChanged={reload}
+        onSkip={() => {
+          setSubPage("main");
+          setActiveTab("home");
+        }}
       />
     );
   } else if (activeTab === "checkins") {
@@ -747,7 +759,7 @@ export function HomeScreen() {
           onClose={() => void closeLetterPopup(pendingLetterPopup)}
         />
       ) : null}
-      {subPage === "main" && activeTab === "home" ? <FloatingCreationEntry onOpen={() => openSubPage("creation", "home")} /> : null}
+      {subPage === "main" && activeTab === "home" && data.couple ? <FloatingCreationEntry onOpen={() => openSubPage("creation", "home")} /> : null}
       {activePhotoPreview ? (
         <PhotoPreviewPopup
           files={data.mediaFiles}

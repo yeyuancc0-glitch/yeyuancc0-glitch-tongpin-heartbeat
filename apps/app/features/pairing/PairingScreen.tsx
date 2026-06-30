@@ -22,9 +22,11 @@ import { colors } from "@/styles/theme";
 export function PairingScreen({
   pendingInvites,
   onChanged,
+  onSkip,
 }: {
   pendingInvites: PairInvite[];
   onChanged: () => void;
+  onSkip?: () => void;
 }) {
   const { session, user } = useAuth();
   const { showToast } = useToast();
@@ -166,6 +168,7 @@ export function PairingScreen({
             onPress={createInvite}
             loading={creating}
           />
+          {onSkip ? <SecondaryButton label="先进入单人模式" onPress={onSkip} /> : null}
         </Card>
         </Reanimated.View>
       ) : (
@@ -189,6 +192,7 @@ export function PairingScreen({
             loading={binding}
             icon={<LinkIcon color="#fff" size={16} />}
           />
+          {onSkip ? <SecondaryButton label="先进入单人模式" onPress={onSkip} /> : null}
         </Card>
         </Reanimated.View>
       )}
