@@ -441,51 +441,6 @@ export function HomeScreen() {
     return <HomeScreenShell />;
   }
 
-  if (guestMode) {
-    return (
-      <PageContainer>
-        <HomeMainPage
-          me={me}
-          partner={partnerProfile}
-          startedAt={data.couple?.started_at ?? ""}
-          loveDays={0}
-          coupleId=""
-          checkins={[]}
-          messages={[]}
-          currentUserId={""}
-          quickInteractions={[]}
-          todayInteractionCount={0}
-          onAddCustomQuickInteraction={() => {}}
-          customQuickComposerOpen={false}
-          customQuickDraft=""
-          onChangeCustomQuickDraft={() => {}}
-          onSaveCustomQuickInteraction={() => {}}
-          onCancelCustomQuickInteraction={() => {}}
-          onQuickInteraction={async () => false}
-          onWriteLetter={() => void requireLogin()}
-          onUploadPhoto={() => void requireLogin()}
-          onPhotoFiles={async () =>
-            ({
-              uploadedCount: 0,
-              uploadedFiles: [],
-              failedFiles: [],
-            }) satisfies PhotoUploadResult}
-          onPreviewPhoto={() => void 0}
-          onDeletePhoto={() => void requireLogin()}
-          onChanged={reload}
-          onOpenMessages={() => void requireLogin()}
-          onRequireLogin={requireLogin}
-          interactionText=""
-          quickSending={false}
-          mediaFiles={[]}
-          moodStatuses={[]}
-          coupleReady={false}
-          onOpenPairing={openPairingPage}
-        />
-      </PageContainer>
-    );
-  }
-
   if (!data.profile && loadError) {
     return (
       <PageContainer>
@@ -564,15 +519,17 @@ export function HomeScreen() {
     setSubPage("pairing");
   }
 
-  async function requireLogin() {
-    await saveSelfHostGuestMode(false);
-    if (session) {
-      await signOut();
+  async function requireDualAccess() {
+    if (!session?.access_token) {
+      await saveSelfHostGuestMode(true);
+      showToast({ title: "需要先登录并绑定另一半", message: "登录后再绑定，才能继续使用这个功能。", tone: "info" });
+      return;
     }
-    setActiveTab("me");
-    setSubPageReturnTab("me");
-    setSubPage("main");
-    showToast({ title: "需要先登录", message: "这个功能要登录后才能使用。", tone: "info" });
+    if (!data.couple) {
+      openPairingPage();
+      showToast({ title: "需要先绑定另一半", message: "绑定后才能继续使用这个功能。", tone: "info" });
+      return;
+    }
   }
 
   function openSubPage(page: Exclude<SubPage, "main" | SettingPage>, ownerTab: BottomTabKey = activeTab) {
@@ -726,8 +683,7 @@ export function HomeScreen() {
         mediaFiles={data.mediaFiles}
         moodStatuses={data.moodStatuses}
         coupleReady={Boolean(data.couple)}
-        onOpenPairing={openPairingPage}
-        onRequireLogin={requireLogin}
+        onRequireAccess={requireDualAccess}
       />
     );
   } else if (subPage === "pairing") {
@@ -795,8 +751,8 @@ export function HomeScreen() {
         me={me}
         partner={partnerProfile}
         loveDays={loveDays}
-        onSignOut={signOut}
-        onEndCouple={endCouple}
+        onSignOut={guestMode ? requireDualAccess : signOut}
+        onEndCouple={guestMode ? requireDualAccess : endCouple}
         endingCouple={endingCouple}
         onOpenSetting={openSettingPage}
       />
