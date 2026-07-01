@@ -22,6 +22,7 @@ import Reanimated, { useAnimatedStyle, useSharedValue, withSpring, withTiming } 
 import { BouncyPressable } from "@/motion/BouncyPressable";
 import { haptics } from "@/motion/haptics";
 import { motionTokens } from "@/motion/tokens";
+import { renderPortal } from "@/lib/platform/portal";
 import { colors, shadows } from "@/styles/theme";
 
 type ViewStyleProps = PropsWithChildren<Omit<ViewProps, "style"> & { style?: StyleProp<ViewStyle> }>;
@@ -126,16 +127,19 @@ export function ToastProvider({ children }: PropsWithChildren) {
   }));
 
   const value = useMemo(() => ({ showToast }), [showToast]);
+  const toastNode = toast ? (
+    <View pointerEvents="none" style={styles.toastOverlay}>
+      <Reanimated.View style={[styles.toast, styles[`toast_${toast.tone}`], toastMotionStyle]}>
+        <Text style={styles.toastTitle}>{toast.title}</Text>
+        {toast.message ? <Text style={styles.toastMessage}>{toast.message}</Text> : null}
+      </Reanimated.View>
+    </View>
+  ) : null;
 
   return (
     <ToastContext.Provider value={value}>
       {children}
-      {toast ? (
-        <Reanimated.View pointerEvents="none" style={[styles.toast, styles[`toast_${toast.tone}`], toastMotionStyle]}>
-          <Text style={styles.toastTitle}>{toast.title}</Text>
-          {toast.message ? <Text style={styles.toastMessage}>{toast.message}</Text> : null}
-        </Reanimated.View>
-      ) : null}
+      {toastNode ? renderPortal(toastNode) : null}
     </ToastContext.Provider>
   );
 }
@@ -156,10 +160,20 @@ export function AppShell({ children }: PropsWithChildren) {
   return <View style={styles.shell}>{children}</View>;
 }
 
+type ScrollControls = {
+  scrollToTop: () => void;
+  scrollTo: (y: number) => void;
+};
+
+const ScrollControlsContext = createContext<ScrollControls | undefined>(undefined);
+
 export function AppScroll({ children }: PropsWithChildren) {
   const [scrollY, setScrollY] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
   const [pullState, setPullState] = useState<"idle" | "pulling" | "ready">("idle");
+  const scrollViewRef = useRef<ScrollView | null>(null);
+  const scrollResetFrameRef = useRef<number | null>(null);
+  const scrollResetTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastScrollY = useRef(0);
   const lastTouchY = useRef(0);
   const refreshRef = useRef<(() => Promise<void> | void) | null>(null);
@@ -223,11 +237,65 @@ export function AppScroll({ children }: PropsWithChildren) {
     setPullStateIfChanged("idle");
   }, [rubberBand, setPullStateIfChanged]);
 
+  const scrollTo = useCallback((y: number) => {
+    const nextY = Math.max(0, y);
+    scrollViewRef.current?.scrollTo({ y: nextY, animated: false });
+    lastScrollY.current = nextY;
+    setScrollY(nextY);
+
+    if (Platform.OS !== "web" || typeof window === "undefined" || typeof document === "undefined") {
+      return;
+    }
+
+    const scrollingElement = document.scrollingElement as HTMLElement | null;
+    const scrollOptions: ScrollToOptions = { top: nextY, left: 0, behavior: "auto" };
+    window.scrollTo(scrollOptions);
+    scrollingElement?.scrollTo?.(scrollOptions);
+    if (scrollingElement) {
+      scrollingElement.scrollTop = nextY;
+    }
+    document.documentElement.scrollTop = nextY;
+    document.body.scrollTop = nextY;
+  }, []);
+
+  const scrollToTop = useCallback(() => {
+    scrollTo(0);
+    if (Platform.OS !== "web" || typeof window === "undefined") {
+      return;
+    }
+
+    if (scrollResetFrameRef.current !== null) {
+      window.cancelAnimationFrame(scrollResetFrameRef.current);
+      scrollResetFrameRef.current = null;
+    }
+    if (scrollResetTimeoutRef.current !== null) {
+      clearTimeout(scrollResetTimeoutRef.current);
+      scrollResetTimeoutRef.current = null;
+    }
+
+    scrollResetFrameRef.current = window.requestAnimationFrame(() => {
+      scrollResetFrameRef.current = null;
+      scrollTo(0);
+      scrollResetTimeoutRef.current = setTimeout(() => {
+        scrollResetTimeoutRef.current = null;
+        scrollTo(0);
+      }, 80);
+    });
+  }, [scrollTo]);
+
   useEffect(() => {
     return () => {
       if (typeof window !== "undefined" && rubberBandFrameRef.current !== null) {
         window.cancelAnimationFrame(rubberBandFrameRef.current);
         rubberBandFrameRef.current = null;
+      }
+      if (typeof window !== "undefined" && scrollResetFrameRef.current !== null) {
+        window.cancelAnimationFrame(scrollResetFrameRef.current);
+        scrollResetFrameRef.current = null;
+      }
+      if (scrollResetTimeoutRef.current !== null) {
+        clearTimeout(scrollResetTimeoutRef.current);
+        scrollResetTimeoutRef.current = null;
       }
     };
   }, []);
@@ -342,49 +410,57 @@ export function AppScroll({ children }: PropsWithChildren) {
 
   return (
     <RefreshContext.Provider value={setRefreshHandler}>
-      <ScrollView
-        style={styles.scroll}
-        contentContainerStyle={styles.scrollContent}
-        showsVerticalScrollIndicator={false}
-        showsHorizontalScrollIndicator={false}
-        scrollEventThrottle={16}
-        bounces
-        alwaysBounceVertical
-        overScrollMode="always"
-        refreshControl={
-          Platform.OS === "web" ? undefined : (
-            <RefreshControl refreshing={refreshing} tintColor={colors.accent} onRefresh={runRefresh} />
-          )
-        }
-        onScroll={(event) => {
-          const nextScrollY = event.nativeEvent.contentOffset.y;
-          if (Math.abs(nextScrollY - lastScrollY.current) < scrollStateStep) {
-            return;
+      <ScrollControlsContext.Provider value={{ scrollToTop, scrollTo }}>
+        <ScrollView
+          ref={scrollViewRef}
+          style={styles.scroll}
+          contentContainerStyle={styles.scrollContent}
+          showsVerticalScrollIndicator={false}
+          showsHorizontalScrollIndicator={false}
+          scrollEventThrottle={16}
+          bounces
+          alwaysBounceVertical
+          overScrollMode="always"
+          refreshControl={
+            Platform.OS === "web" ? undefined : (
+              <RefreshControl refreshing={refreshing} tintColor={colors.accent} onRefresh={runRefresh} />
+            )
           }
-          const snappedScrollY = Math.round(nextScrollY / scrollStateStep) * scrollStateStep;
-          lastScrollY.current = snappedScrollY;
-          setScrollY(snappedScrollY);
-        }}
-        {...webPullHandlers}
-      >
-        {showPullRefreshIndicator ? (
-          <View style={styles.pullRefreshIndicator}>
-            <Text style={styles.pullRefreshText}>{refreshText}</Text>
-          </View>
-        ) : null}
-        <Reanimated.View
-          {...scrollContentWebProps}
-          style={[scrollMotionStyle, styles.scrollMotionContent]}
+          onScroll={(event) => {
+            const nextScrollY = event.nativeEvent.contentOffset.y;
+            if (Math.abs(nextScrollY - lastScrollY.current) < scrollStateStep) {
+              return;
+            }
+            const snappedScrollY = Math.round(nextScrollY / scrollStateStep) * scrollStateStep;
+            lastScrollY.current = snappedScrollY;
+            setScrollY(snappedScrollY);
+          }}
+          {...webPullHandlers}
         >
-          <ScrollContext.Provider value={scrollY}>{children}</ScrollContext.Provider>
-        </Reanimated.View>
-      </ScrollView>
+          {showPullRefreshIndicator ? (
+            <View style={styles.pullRefreshIndicator}>
+              <Text style={styles.pullRefreshText}>{refreshText}</Text>
+            </View>
+          ) : null}
+          <Reanimated.View {...scrollContentWebProps} style={[scrollMotionStyle, styles.scrollMotionContent]}>
+            <ScrollContext.Provider value={scrollY}>{children}</ScrollContext.Provider>
+          </Reanimated.View>
+        </ScrollView>
+      </ScrollControlsContext.Provider>
     </RefreshContext.Provider>
   );
 }
 
 export function useAppScrollY() {
   return useContext(ScrollContext);
+}
+
+export function useAppScrollControls() {
+  const context = useContext(ScrollControlsContext);
+  if (!context) {
+    throw new Error("useAppScrollControls must be used inside AppScroll");
+  }
+  return context;
 }
 
 export function useAppPullToRefresh(refresh: () => Promise<void> | void) {
@@ -538,9 +614,11 @@ export function EmptyState({ title, description }: { title: string; description:
 }
 
 export function InlineNotice({ children, tone = "info" }: PropsWithChildren<{ tone?: ToastTone }>) {
-  return (
-    <View style={[styles.notice, styles[`notice_${tone}`]]}>
-      <Body style={styles.noticeText}>{children}</Body>
+  return renderPortal(
+    <View pointerEvents="none" style={styles.noticeOverlay}>
+      <View style={[styles.notice, styles[`notice_${tone}`]]}>
+        <Body style={styles.noticeText}>{children}</Body>
+      </View>
     </View>
   );
 }
@@ -728,10 +806,17 @@ const styles = StyleSheet.create({
     fontSize: 34,
     lineHeight: 40,
   },
-  toast: {
+  toastOverlay: {
     position: "absolute",
-    top: 18,
-    right: "4%",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    alignItems: "center",
+    justifyContent: "center",
+    zIndex: 20,
+  },
+  toast: {
     width: "92%",
     maxWidth: 360,
     borderWidth: 1,
@@ -766,10 +851,18 @@ const styles = StyleSheet.create({
     marginTop: 3,
   },
   notice: {
+    position: "absolute",
+    top: "50%",
+    left: "50%",
+    transform: [{ translateX: -180 }, { translateY: -30 }],
     borderWidth: 1,
     borderRadius: 16,
     paddingHorizontal: 12,
     paddingVertical: 10,
+    width: 360,
+    maxWidth: "90%",
+    zIndex: 18,
+    ...shadows.panel,
   },
   notice_success: {
     backgroundColor: "#eef8f2",
@@ -784,7 +877,18 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
   },
   noticeText: {
+    textAlign: "center",
     fontSize: 14,
     lineHeight: 20,
+  },
+  noticeOverlay: {
+    position: "fixed" as never,
+    left: 0,
+    right: 0,
+    top: 0,
+    bottom: 0,
+    zIndex: 18,
+    alignItems: "center",
+    justifyContent: "center",
   },
 });

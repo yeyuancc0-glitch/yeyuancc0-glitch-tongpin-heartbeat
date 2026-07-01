@@ -16,9 +16,6 @@ export function visiblePetSurfaceFor(surface: PetWorldSurface): VisiblePetSurfac
 }
 
 export function visibleGlobalPetSurfaceForRealSurface(surface: PetWorldSurface): VisiblePetSurface | null {
-  if (surface === "pet_room" || surface === "creation_hub") {
-    return "home";
-  }
   return visiblePetSurfaceFor(surface);
 }
 

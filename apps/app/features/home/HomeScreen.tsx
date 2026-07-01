@@ -35,7 +35,7 @@ import {
   PrimaryButton,
   SecondaryButton,
 } from "@/components/app-ui/AppUI";
-import { useAppPullToRefresh, useToast } from "@/components/ui";
+import { useAppPullToRefresh, useAppScrollControls, useToast } from "@/components/ui";
 import { useAuth } from "@/features/auth/AuthProvider";
 import { saveSelfHostGuestMode } from "@/lib/selfHost/authSession";
 import { AddEventPage } from "@/features/calendar/AddEventPage";
@@ -109,7 +109,8 @@ export { HomeScreenShell } from "@/features/home/HomeScreenShell";
 export function HomeScreen() {
   const { session, user, signOut, guestMode } = useAuth();
   const { showToast } = useToast();
-  const { data, loading, loadError, reload, mergeCheckin, removeCheckin, mergeMediaFile, mergeProfile } = useCoupleData(user?.id, session?.access_token);
+  const { scrollToTop } = useAppScrollControls();
+  const { data, loading, loadError, reload, mergeCheckin, removeCheckin, mergeMediaFile, removeMediaFile, mergeProfile } = useCoupleData(user?.id, session?.access_token);
   const { settings: petUserSettings, setSettings: setPetUserSettings } = usePetUserSettings(user?.id);
   useAppPullToRefresh(reload);
   const [activeTab, setActiveTab] = useState<BottomTabKey>("home");
@@ -150,6 +151,10 @@ export function HomeScreen() {
   useEffect(() => {
     setSkippedProfileSetup(false);
   }, [user?.id]);
+
+  useEffect(() => {
+    scrollToTop();
+  }, [activeTab, scrollToTop, subPage]);
 
   petEventHandlerRef.current = (event) => {
     setRealtimePetReaction({
@@ -317,6 +322,7 @@ export function HomeScreen() {
     showToast,
     reload,
     mergeMediaFile,
+    removeMediaFile,
     setActivePhotoPreview,
   });
   const saveSelfHostCheckin = isSelfHostAuthEnabled
@@ -743,6 +749,7 @@ export function HomeScreen() {
         onDeleteMedia={deleteSelfHostMemoryMedia}
         onDeleteFootprint={deleteSelfHostMemoryFootprint}
         onDeleteLetter={deleteSelfHostLetterHandler}
+        onRequireAccess={requireDualAccess}
       />
     );
   } else {

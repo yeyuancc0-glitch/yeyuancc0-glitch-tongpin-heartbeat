@@ -123,6 +123,31 @@ function mapDashboardProfiles(
   };
 }
 
+function dashboardAvatarProfiles(dashboard: CoupleDashboard) {
+  return [
+    dashboard.profile,
+    ...(dashboard.couple?.couple_members.map((member) => member.profile) ?? []),
+  ].filter((profile): profile is DashboardProfile => Boolean(profile));
+}
+
+function profileNeedsAvatarImage(profile: DashboardProfile) {
+  return Boolean(profile.avatar_url || profile.avatar_thumbnail_url);
+}
+
+function profileHasReadyAvatarImage(profile: DashboardProfile) {
+  if (!profileNeedsAvatarImage(profile)) {
+    return true;
+  }
+  return Boolean(
+    profile.avatar_thumb_signed_url?.startsWith("data:image/") ||
+      profile.avatar_thumb_data_url?.startsWith("data:image/"),
+  );
+}
+
+export function hasReadyDashboardAvatarImages(dashboard: CoupleDashboard) {
+  return dashboardAvatarProfiles(dashboard).every(profileHasReadyAvatarImage);
+}
+
 export function withCachedDashboardAvatarImages(dashboard: CoupleDashboard): CoupleDashboard {
   return mapDashboardProfiles(dashboard, (profile) => {
     if (profile.avatar_thumb_data_url?.startsWith("data:image/")) {
@@ -143,10 +168,7 @@ export function withCachedDashboardAvatarImages(dashboard: CoupleDashboard): Cou
 }
 
 export async function cacheDashboardAvatarImages(dashboard: CoupleDashboard, timeoutMs: number) {
-  const profiles = [
-    dashboard.profile,
-    ...(dashboard.couple?.couple_members.map((member) => member.profile) ?? []),
-  ].filter((profile): profile is DashboardProfile => Boolean(profile?.avatar_url));
+  const profiles = dashboardAvatarProfiles(dashboard).filter(profileNeedsAvatarImage);
   if (!profiles.length) {
     return dashboard;
   }

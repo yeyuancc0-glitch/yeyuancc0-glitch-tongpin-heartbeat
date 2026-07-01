@@ -107,7 +107,7 @@ export function TodayStoryPage({
   onSaveMoodStatus?: (input: { mood: string; note: string | null }) => Promise<void>;
   onDeleteCheckin?: (checkinId: string) => Promise<void>;
 }) {
-  const { user } = useAuth();
+  const { session, user } = useAuth();
   const { showToast } = useToast();
   const [mood, setMood] = useState(moodOptions[0]);
   const [customMood, setCustomMood] = useState("");
@@ -209,6 +209,10 @@ export function TodayStoryPage({
   ].slice(0, todayCapsulePhotoLimit);
 
   async function handleCapsulePhotoFiles(files: PhotoFileList) {
+    if (!session?.access_token) {
+      showToast({ title: "请先登录并绑定另一半", message: "上传图片属于双人功能。", tone: "info" });
+      return;
+    }
     const selected = Array.from(files)
       .filter((file) => {
         const supported = isSupportedImage(file, 8 * 1024 * 1024);
@@ -246,6 +250,10 @@ export function TodayStoryPage({
   }
 
   async function save() {
+    if (!session?.access_token) {
+      showToast({ title: "请先登录并绑定另一半", message: "封存今天属于双人功能。", tone: "info" });
+      return;
+    }
     if (!user || busy) {
       return;
     }
@@ -454,9 +462,11 @@ export function TodayStoryPage({
             <Text style={styles.capsulePhotoUploadText}>{photoBusy ? "上传中" : "添加图片"}</Text>
             <PhotoUploadInput
               accessibilityLabel="给今日胶囊上传图片"
+              blocked={!session?.access_token}
               disabled={busy || photoBusy || mineTodayPhotos.length + pendingPhotoFiles.length >= todayCapsulePhotoLimit}
               multiple
               onFiles={handleCapsulePhotoFiles}
+              onRequireAccess={() => showToast({ title: "请先登录并绑定另一半", message: "上传图片属于双人功能。", tone: "info" })}
             />
           </BouncyPressable>
           <Text style={styles.capsulePhotoUploadMeta}>

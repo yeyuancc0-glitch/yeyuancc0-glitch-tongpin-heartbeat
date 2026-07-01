@@ -61,6 +61,7 @@ export function PhotoAlbumCard({
   onDeletePhoto: (file: MediaFile) => void;
   onRequireAccess: () => void;
 }) {
+  const { session } = useAuth();
   const previews = mediaFiles.slice(0, 9);
   const hiddenCount = Math.max(0, mediaFiles.length - previews.length);
 
@@ -84,7 +85,7 @@ export function PhotoAlbumCard({
           ) : null}
           <BouncyPressable accessibilityRole="button" accessibilityLabel="上传照片" onPress={onRequireAccess} haptic="selection" style={styles.photoAlbumUploadButton}>
             <ImagePlus color={colors.accentDark} size={17} />
-            <PhotoUploadInput accessibilityLabel="上传照片" multiple onFiles={onPhotoFiles} />
+            <PhotoUploadInput accessibilityLabel="上传照片" blocked={!session?.access_token} multiple onFiles={onPhotoFiles} onRequireAccess={onRequireAccess} />
           </BouncyPressable>
         </View>
       </View>
@@ -125,7 +126,7 @@ export function PhotoAlbumCard({
       </View>
       ) : (
         <BouncyPressable accessibilityRole="button" accessibilityLabel="上传第一张照片" onPress={onRequireAccess} haptic="selection" style={styles.photoAlbumEmpty}>
-          <PhotoUploadInput accessibilityLabel="上传第一张照片" multiple onFiles={onPhotoFiles} />
+          <PhotoUploadInput accessibilityLabel="上传第一张照片" blocked={!session?.access_token} multiple onFiles={onPhotoFiles} onRequireAccess={onRequireAccess} />
           <View style={styles.photoAlbumEmptyCamera}>
             <ImagePlus color="rgba(123,103,108,0.52)" size={28} />
           </View>

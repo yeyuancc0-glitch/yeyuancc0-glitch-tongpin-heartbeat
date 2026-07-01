@@ -41,6 +41,7 @@
 - 启动自建 Push worker：`npm run worker:push -w @tongpin/server`
 - 类型检查：`npm run typecheck`
 - Web 构建：`npm run build:web`
+- 发布自建 Web 静态前端到新域名：先执行 `npm run build:web`，再将 `apps/app/dist/` 内容同步到服务器 `/opt/tongpin/web/current/`；`current` 是 Caddy Docker bind mount，发布时不要替换目录本身，应先备份当前目录，再用同步工具更新目录内容，最后验证 `curl -I https://tongpin.fancah.tech` 和首页入口 JS。
 - 环境变量检查：`npm run check:env`
 - 自建 API 语法检查：`npm run check:server`
 - 自建 Auth 邮件投递自检：`node apps/server/scripts/check-email-service.mjs`
@@ -115,6 +116,8 @@
 
 - 当前 UI 视觉语言为“情绪胶囊风”：奶油白 / 浅粉白背景、纯白卡片、柔和蔷薇粉主色，辅以雾紫、奶黄和浅蓝灰。
 - Web 端整体按 App 式体验设计和取舍：优先沉浸、稳定视口、固定底部导航、安全区适配、系统/类原生反馈和触控手感；不要按普通网页的可缩放、文档流长页或营销页思路处理核心界面。
+- 全局提示（toast / snackbar / 站内轻提示）默认要在屏幕中间浮层展示，不要固定在顶部；这样用户在页面滚动到下方时也能及时看到反馈。
+- 页面内的共用提示块（如 `InlineNotice`）也默认居中展示，避免贴在内容顶部让用户滚动后看不到。
 - “胶囊”是品牌符号，优先使用自定义 `CapsuleMark` 或同风格插画资源，不要用 `💊` emoji 代表品牌胶囊。
 - 破坏性确认类弹窗优先使用平台/手机系统风格，例如原生 `Alert.alert` 或等价系统确认；不要新增自绘确认框，除非用户明确要求。
 - Web 纵向滚动必须保留 App 式边界回弹和顶部下拉刷新；不要把 `html, body` 的 `overscroll-behavior-y` 设为 `none`。
@@ -126,6 +129,7 @@
 - 从设置详情跳到其它业务子页时，也必须同步切到该子页所属的 `activeTab`；设置详情返回必须回到 `activeTab = "me"` + `subPage = "main"`，避免出现设置页/信件页内容和底部导航状态不一致。
 - 触感反馈使用 `expo-haptics` 经 `apps/app/motion/haptics.ts` 封装；Web 或不支持设备必须静默降级。
 - Web portal 统一通过 `apps/app/lib/platform/portal` 调用；跨端组件不要顶层直接导入 `react-dom`。
+- 页面切换或打开二级界面时，默认要回到顶部，不要继承上一页的滚动位置；涉及 `HomeScreen` 的 tab / subPage 切换优先通过路由壳统一滚动复位。Web 端不能只调用 RN `ScrollView.scrollTo`，还要同时复位 `window`、`document.scrollingElement`、`documentElement` 和 `body`，并在内容切换后的下一帧再次复位，避免真实滚动源停留在旧页面高度。
 
 ## Android / 原生端状态
 
@@ -144,6 +148,7 @@
 - 首页 dashboard 数据辅助逻辑已拆到 `homeDashboardTypes.ts`、`homeDashboardSelects.ts`、`homeDashboardCache.ts`、`homeDashboardUtils.ts`、`homeAvatarHydration.ts`、`homeMediaHydration.ts` 和 `homeNotificationRefresh.ts`；云宠路由/仪式 helper 在 `homePetWorldHelpers.ts`。后续维护优先复用这些模块，不要把缓存、水合或云宠仪式逻辑堆回 `useCoupleData.ts` / `HomeScreen.tsx`。
 - 首页 dashboard 加载分阶段：首屏必须带齐 profiles、active couple 基础信息、当前/伴侣头像 signed URL 和首屏可见相册缩略图 signed URL；其它留言、相册完整元数据、心情、信件、通知等仍可按现有聚合/后台刷新策略补齐。
 - 头像和相册首屏关键图不能依赖前端进入主页后再逐个请求 read-url；`/api/me/dashboard` 应只为当前/伴侣头像与首屏相册缩略图预签名，前端可短超时预取后再结束首次无缓存 loading。相册小图预览优先只显示缩略图；首页/预览首屏少量历史照片缺缩略图或缩略图对象缺失时，可有限回退原图 signed URL 避免看起来“照片丢失”，但不能后台全量签历史图片 URL；原图大图预览仍按需签名加载。
+- 首页首屏关键图片预取必须使用实际渲染字段：头像预取 `avatar_thumb_signed_url`，相册预取 `thumbnailSignedUrl`；不要预取当前不返回、不渲染的 `avatar_signed_url`，否则相册会被预热但头像仍慢。
 - 首页 dashboard 当前也驱动完整留言、相册、信件、记忆和家园子页；在没有分页/增量加载前，聚合 limit 不能恢复到很小的首屏预览值，否则迁移后的历史数据会被误认为“丢失”。今日胶囊是日更历史数据，dashboard/checkins 服务上限必须覆盖超过 100 天的历史；如需降首屏 payload，必须先给完整页面补独立分页或全量加载入口。
 - 自建业务列表 API 的默认 limit 也不能保留旧首页预览值；`messages`、`letters`、`media`、`calendar-events`、`footprints`、`creation/actions`、`notifications` 等直接列表在没有独立分页前默认应覆盖完整页面历史需求，显式传小 limit 才能作为预览。
 - 前端 `apps/app/lib/selfHost/*Api.ts` 的直接列表 helper 默认 limit 也必须与后端完整历史默认保持一致；不要在客户端封装层保留 12、30、60、100 这类旧预览默认值，否则未来完整页绕过 dashboard 时会再次看起来“数据丢失”。
@@ -155,7 +160,7 @@
 - 首页/设置页通知列表当前也依赖 dashboard 与后台通知刷新结果；通知刷新 limit 必须与 dashboard 聚合保持一致，不能用很小的预览值覆盖已有通知列表，否则刷新/SSE 后历史提醒会被误认为“丢失”。
 - 首页后台刷新应静默运行；兜底刷新保持温和频率，通知轮询 90 秒，全量 dashboard 兜底刷新 120 秒且仅页面可见时运行。
 - 首页本地缓存只保存低敏骨架数据；不要持久化留言、通知、胶囊、信件、足迹、宠物记忆、caption、signed URL、AI 气泡或 world decision 正文。头像图片体积小，允许按 `userId + avatar path` 持久化到头像专用本地 data URL 缓存，换头像时通过服务器返回的新 path 自动失效；为避免浏览器跨域读取 signed URL 导致缓存落盘失败，dashboard 可直接返回头像缩略图 data URL 供前端写入头像专用缓存。主 dashboard 骨架缓存仍应保持轻量，不要把头像 data URL 混入主 dashboard 缓存。相册只缓存 Storage path，不持久化 signed URL。
-- 用户二次打开首页时，如果已有本地 dashboard 骨架，不能因为头像 data URL / signed URL 或相册 signed URL 尚未补齐而继续显示首页骨架；应先进入主页，头像缺本地 data URL 时短暂显示昵称首字母兜底，相册缩略图后台刷新补齐，避免“退出再进仍像首次加载”。
+- 用户二次打开首页时，如果已有本地 dashboard 骨架且头像专用 data URL 缓存命中，可以直接进入主页；如果当前/伴侣有头像但头像 data URL 缓存未命中，首次首页展示必须继续停留在无个人信息骨架，等待头像缩略图 data URL 获取或图片 decode 预取完成后再显示主页，避免用户进入首页后看到头像慢慢加载。相册缩略图可继续按后台刷新补齐，不要因此阻塞主页。
 - 首页 dashboard 的头像/相册 signed URL 水合必须逐资源容错；单个历史 Storage 对象缺失、签名失败或缩略图异常只能让该图片降级为空/占位，不能让整个 dashboard 刷新失败或清空其它业务数据。
 - self-host 路径下头像使用 MinIO `profile-avatars`，相册使用 MinIO `couple-media`。数据库只保存 Storage path，前端展示时通过自建 API 生成 signed URL，不能把 signed URL 写回数据库。
 - 头像与相册缩略图使用独立 Storage path：`profiles.avatar_thumbnail_url`、`media_files.thumbnail_storage_path`；列表/九宫格/记忆流优先展示缩略图，首屏少量历史照片缺缩略图时可有限回退原图 signed URL 避免看起来“照片丢失”，点开预览再按需读取当前/相邻原图。
@@ -163,6 +168,7 @@
 - 相册大图预览应保留缩略图托底，并对当前与相邻照片的原图 signed URL 做预签名和图片预取；已加载图片 URL 需要跨组件实例记忆，避免切图后立即重复闪加载。
 - self-host 头像上传、移除或资料保存成功后，前端必须把返回的 profile 合并回当前 dashboard 状态，并保留路径未变时已有的头像 signed URL；不要只依赖返回上一页后的全量 reload，否则会表现成“上传后消失”。
 - self-host 相册上传完成并拿到 ready `media_files` 记录后，前端必须先把新媒体合并进当前 dashboard / 相册状态；后台 reload 只做校准，不能把上传成功后的显示完全依赖一次全量刷新，否则刷新被跳过、失败或列表上限不一致时会表现成“上传后消失”。
+- self-host 相册删除成功后，前端必须先从当前 dashboard / 相册状态本地移除该媒体，不要立即全量 `reload()`；dashboard 后续刷新遇到同一 `media_files.id` 且 `storage_path` 未变时，应优先保留当前 `signedUrl` / `thumbnailSignedUrl`，避免剩余照片因新签 URL 覆盖而全部重新加载。
 - 旧头像缺少 `avatar_thumbnail_url` 时，小尺寸头像只能使用 Storage transform / 本地缩略图 blob 兜底，不要回退到原图 signed URL。
 - 用户只需选择一次图片，不要求用户自己提供缩略图；前端负责自动生成并上传原图和缩略图，服务端也必须在相册上传完成时从原图生成缩略图作为兜底。缩略图生成/校验失败时不要把新相册记录标记为 ready；数据库保存失败要清理本次上传对象。
 - 已有历史相册缺缩略图时，用 `npm run backfill:media-thumbnails -w @tongpin/server -- --apply --limit=<N>` 分批生成 WebP 缩略图并写回 `media_files.thumbnail_storage_path`；脚本输出只能包含计数和脱敏 id，不输出 Storage path。
@@ -334,7 +340,7 @@
 - 旧 Supabase 数据重复 apply 时，迁移脚本会在目标事务内临时关闭目标表的 `set_updated_at` trigger 并在写完后恢复，用于保留历史 `updated_at` 并保证哈希对账；不要在业务 API 路径复用这种 trigger 绕过逻辑。
 - 旧 Supabase 数据最终 verify 通过后，应从服务器当前 `/opt/tongpin/.env` 和 API 容器环境移除 `SUPABASE_DB_URL` 与 `SUPABASE_STORAGE_S3_*` 源凭证并重建 API 容器；迁移报告、备份和自建 Postgres/MinIO 数据保留，运行态不应继续携带旧 Supabase 源连接。
 - Web Push 和 PWA 安装是按 origin 隔离的；旧域名安装的桌面图标/通知订阅不能自动迁到新域名，用户需要从 `https://tongpin.fancah.tech` 重新授权通知或重新添加 PWA。
-- 用户明确说“推送更新 / 发布 / 部署 / 上线”时，按生产发布处理：`npx vercel --prod -y`；否则不要部署。
+- 用户明确说“推送更新 / 发布 / 部署 / 上线”时，默认更新到 `https://tongpin.fancah.tech` 这条自建域名，不再默认走 Vercel；只有明确提到 Vercel 或生成域名兜底时，才使用 `npx vercel --prod -y`。
 
 ## 依赖与维护
 

@@ -47,6 +47,7 @@ export function MemoryPage({
   onDeleteMedia,
   onDeleteFootprint,
   onDeleteLetter,
+  onRequireAccess,
 }: {
   checkins: Checkin[];
   messages: Message[];
@@ -68,6 +69,7 @@ export function MemoryPage({
   onDeleteMedia?: (file: MediaFile) => Promise<void>;
   onDeleteFootprint?: (footprintId: string) => Promise<void>;
   onDeleteLetter?: (letterId: string) => Promise<void>;
+  onRequireAccess?: () => void;
 }) {
   const memories = buildMemoryTimeline(checkins, messages, events, mediaFiles, letters, footprints, currentUserId);
   const [filter, setFilter] = useState<MemoryFilter>("全部");
@@ -188,6 +190,7 @@ function MemoryTimelineCard({
   onDeleteMedia,
   onDeleteFootprint,
   onDeleteLetter,
+  onRequireAccess,
 }: {
   memory: MemoryTimelineItem;
   index: number;
@@ -201,6 +204,7 @@ function MemoryTimelineCard({
   onDeleteMedia?: (file: MediaFile) => Promise<void>;
   onDeleteFootprint?: (footprintId: string) => Promise<void>;
   onDeleteLetter?: (letterId: string) => Promise<void>;
+  onRequireAccess?: () => void;
 }) {
   const scrollY = useAppScrollY();
   const { showToast } = useToast();
@@ -301,7 +305,7 @@ function MemoryTimelineCard({
             </Pressable>
           ) : null}
         </View>
-        <MemoryPhotoGrid memory={memory} onUploadPhoto={onUploadPhoto} onPreviewPhoto={onPreviewPhoto} />
+        <MemoryPhotoGrid memory={memory} onUploadPhoto={onUploadPhoto} onPreviewPhoto={onPreviewPhoto} onRequireAccess={onRequireAccess} />
       </Container>
     </View>
   );
@@ -311,10 +315,12 @@ function MemoryPhotoGrid({
   memory,
   onUploadPhoto,
   onPreviewPhoto,
+  onRequireAccess,
 }: {
   memory: MemoryTimelineItem;
   onUploadPhoto: () => void;
   onPreviewPhoto: (file: MediaFile, index: number) => void;
+  onRequireAccess?: () => void;
 }) {
   const previews = memory.photos.slice(0, 9);
   const canUpload = memory.photos.length < maxMemoryPhotos;
@@ -324,7 +330,7 @@ function MemoryPhotoGrid({
         {...petSafeActionProps()}
         accessibilityRole="button"
         accessibilityLabel="给这条记忆上传图片"
-        onPress={canUpload && previews.length === 0 && Platform.OS !== "web" ? () => onUploadPhoto() : undefined}
+        onPress={canUpload && previews.length === 0 && Platform.OS !== "web" ? () => onUploadPhoto() : onRequireAccess}
         style={[styles.memoryPhotoPanel, !previews.length ? { backgroundColor: memory.imageTone } : null]}
       >
         {previews.length ? (
@@ -361,17 +367,17 @@ function MemoryPhotoGrid({
               {...petSafeActionProps()}
               accessibilityRole="button"
               accessibilityLabel="给这条记忆继续上传图片"
-              onPress={Platform.OS === "web" ? undefined : () => onUploadPhoto()}
+              onPress={Platform.OS === "web" ? onRequireAccess : () => onUploadPhoto()}
               haptic="selection"
               style={styles.memoryPhotoAddButton}
             >
               <ImagePlus color={colors.accentDark} size={12} />
-              <PhotoUploadInput accessibilityLabel="给这条记忆继续上传图片" multiple onFiles={onUploadPhoto} />
+              <PhotoUploadInput accessibilityLabel="给这条记忆继续上传图片" blocked={!onRequireAccess} multiple onFiles={onUploadPhoto} onRequireAccess={onRequireAccess} />
             </BouncyPressable>
           ) : null}
           <Text style={styles.memoryPhotoCountText}>{memory.photos.length}/{maxMemoryPhotos}</Text>
         </View>
-        {canUpload && previews.length === 0 ? <PhotoUploadInput accessibilityLabel="给这条记忆上传图片" multiple onFiles={onUploadPhoto} /> : null}
+        {canUpload && previews.length === 0 ? <PhotoUploadInput accessibilityLabel="给这条记忆上传图片" blocked={!onRequireAccess} multiple onFiles={onUploadPhoto} onRequireAccess={onRequireAccess} /> : null}
       </Pressable>
     </View>
   );

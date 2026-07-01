@@ -148,10 +148,16 @@ export function SettingsDetailPage({
       ) : null}
       {page === "couple" ? (
         <Card>
-          <CoupleAvatarGroup me={me} partner={partner} />
-          <InfoRow label="恋爱开始日期" value={formatShortDate(startedAt)} />
-          <InfoRow label="当前关系" value="恋爱中" />
-          <InfoRow label="同频天数" value={`${loveDays} 天`} />
+          {startedAt ? (
+            <>
+              <CoupleAvatarGroup me={me} partner={partner} />
+              <InfoRow label="恋爱开始日期" value={formatShortDate(startedAt)} />
+              <InfoRow label="当前关系" value="恋爱中" />
+              <InfoRow label="同频天数" value={`${loveDays} 天`} />
+            </>
+          ) : (
+            <EmptyState title="还没有绑定另一半" description="绑定后这里会显示情侣资料、开始日期和同频天数。" />
+          )}
         </Card>
       ) : null}
       {page === "pet" ? (

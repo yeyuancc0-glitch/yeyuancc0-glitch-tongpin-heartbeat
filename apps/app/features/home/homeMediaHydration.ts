@@ -10,8 +10,8 @@ export function withPreservedMediaUrls(file: MediaFile, signedMediaUrlById: Map<
   const existingThumbnailSignedUrl = shouldPreserve ? existingMediaUrl.thumbnailSignedUrl : null;
   return {
     ...file,
-    signedUrl: file.signedUrl ?? existingSignedUrl,
-    thumbnailSignedUrl: file.thumbnailSignedUrl ?? existingThumbnailSignedUrl,
+    signedUrl: existingSignedUrl ?? file.signedUrl ?? null,
+    thumbnailSignedUrl: existingThumbnailSignedUrl ?? file.thumbnailSignedUrl ?? null,
   };
 }
 

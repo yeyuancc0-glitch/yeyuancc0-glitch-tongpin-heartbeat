@@ -38,15 +38,15 @@ export function AddEventPage({
   const [busy, setBusy] = useState(false);
 
   async function save() {
+    if (!session?.access_token) {
+      showToast({ title: "请先登录并绑定另一半", message: "添加事件属于双人功能。", tone: "info" });
+      return;
+    }
     if (!user || !title.trim() || !date) {
       return;
     }
     setBusy(true);
     try {
-      if (!session?.access_token) {
-        showToast({ title: "请先登录", tone: "error" });
-        return;
-      }
       await createSelfHostCalendarEvent({
         accessToken: session.access_token,
         coupleId,

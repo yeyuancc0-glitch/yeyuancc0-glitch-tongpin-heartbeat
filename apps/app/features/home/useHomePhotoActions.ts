@@ -30,6 +30,7 @@ export function useHomePhotoActions({
   showToast,
   reload,
   mergeMediaFile,
+  removeMediaFile,
   setActivePhotoPreview,
 }: {
   userId?: string;
@@ -39,6 +40,7 @@ export function useHomePhotoActions({
   showToast: (toast: ToastValue) => void;
   reload: () => void;
   mergeMediaFile: (mediaFile: MediaFile) => void;
+  removeMediaFile: (mediaId: string) => void;
   setActivePhotoPreview: (updater: (current: PhotoPreviewState | null) => PhotoPreviewState | null) => void;
 }) {
   const handlePhotoFiles = useCallback(async (files: PhotoFileList, options: PhotoUploadOptions = {}): Promise<PhotoUploadResult> => {
@@ -156,8 +158,8 @@ export function useHomePhotoActions({
       const remaining = mediaFiles.filter((item) => item.id !== file.id);
       return remaining[0] ? { id: remaining[0].id, index: 0 } : null;
     });
-    reload();
-  }, [accessToken, mediaFiles, reload, setActivePhotoPreview, showToast]);
+    removeMediaFile(file.id);
+  }, [accessToken, mediaFiles, removeMediaFile, setActivePhotoPreview, showToast]);
 
   return { handlePhotoFiles, uploadPhoto, deletePhoto };
 }

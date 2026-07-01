@@ -97,7 +97,6 @@ const pageTopPadding = 72;
 const pageBottomPadding = 92;
 const walkLanePadding = 8;
 const walkWigglePx = 8;
-const hiddenKeepAliveMs = 12_000;
 const anchorAdvanceMs = 38_000;
 const reducedMotionAnchorAdvanceMs = 65_000;
 
@@ -116,7 +115,6 @@ export function GlobalPetLayer({ visible, surface = "home", creationSpace, realt
   const dragOffsetRef = useRef({ x: 0, y: 0 });
   const walkAnimationRef = useRef<number | null>(null);
   const bubbleTimerRef = useRef<number | null>(null);
-  const unmountTimerRef = useRef<number | null>(null);
   const lastBubbleKeyRef = useRef<string | null>(null);
   const surfaceAnchors = anchorsBySurface[renderSurface] ?? anchorsBySurface.home;
   const activeAnchor = surfaceAnchors[anchorIndex % surfaceAnchors.length];
@@ -231,27 +229,13 @@ export function GlobalPetLayer({ visible, surface = "home", creationSpace, realt
   useEffect(() => {
     if (visible) {
       setShouldMount(true);
-      if (unmountTimerRef.current !== null) {
-        window.clearTimeout(unmountTimerRef.current);
-        unmountTimerRef.current = null;
-      }
       return undefined;
     }
     cancelWalkAnimation();
     setMoving(false);
-    if (unmountTimerRef.current !== null) {
-      window.clearTimeout(unmountTimerRef.current);
-    }
-    unmountTimerRef.current = window.setTimeout(() => {
-      setShouldMount(false);
-      unmountTimerRef.current = null;
-    }, hiddenKeepAliveMs);
-    return () => {
-      if (unmountTimerRef.current !== null) {
-        window.clearTimeout(unmountTimerRef.current);
-        unmountTimerRef.current = null;
-      }
-    };
+    setBubbleVisible(false);
+    setShouldMount(false);
+    return undefined;
   }, [cancelWalkAnimation, visible]);
 
   useEffect(() => {
@@ -378,9 +362,6 @@ export function GlobalPetLayer({ visible, surface = "home", creationSpace, realt
       cancelWalkAnimation();
       if (bubbleTimerRef.current !== null) {
         window.clearTimeout(bubbleTimerRef.current);
-      }
-      if (unmountTimerRef.current !== null) {
-        window.clearTimeout(unmountTimerRef.current);
       }
     };
   }, [cancelWalkAnimation]);
