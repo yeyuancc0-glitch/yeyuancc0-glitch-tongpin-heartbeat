@@ -236,6 +236,7 @@ export function createRequestHandler({
         bearerToken,
         parseBody,
         privacyService,
+        profileService,
         request,
         requestId,
         response,

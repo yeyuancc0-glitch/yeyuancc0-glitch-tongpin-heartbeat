@@ -1130,7 +1130,7 @@ const baseStyles = StyleSheet.create({
     position: "relative",
     zIndex: 1,
     gap: 6,
-    paddingRight: 38,
+    alignItems: "center",
   },
   capsuleComposerTitleRow: {
     flexDirection: "row",
@@ -1736,8 +1736,16 @@ const baseStyles = StyleSheet.create({
   calendarMonthRow: {
     minHeight: 30,
     flexDirection: "row",
-    alignItems: "flex-end",
+    alignItems: "center",
     justifyContent: "space-between",
+    gap: 10,
+  },
+  calendarMonthCopy: {
+    flexDirection: "row",
+    alignItems: "flex-end",
+    gap: 7,
+    minWidth: 0,
+    flexShrink: 1,
   },
   calendarMonthText: {
     color: colors.ink,
@@ -1750,6 +1758,48 @@ const baseStyles = StyleSheet.create({
     fontSize: 13,
     lineHeight: 19,
     fontWeight: "800",
+  },
+  calendarMonthControls: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    flexShrink: 0,
+  },
+  calendarMonthButton: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: "rgba(255,255,255,0.84)",
+    borderWidth: 1,
+    borderColor: "rgba(184,95,123,0.12)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  calendarTodayButton: {
+    height: 30,
+    minWidth: 58,
+    borderRadius: 15,
+    paddingHorizontal: 9,
+    backgroundColor: "rgba(255,255,255,0.84)",
+    borderWidth: 1,
+    borderColor: "rgba(184,95,123,0.12)",
+    alignItems: "center",
+    justifyContent: "center",
+    flexDirection: "row",
+    gap: 4,
+  },
+  calendarTodayButtonDisabled: {
+    backgroundColor: "rgba(255,255,255,0.54)",
+    borderColor: "rgba(129,111,116,0.08)",
+  },
+  calendarTodayButtonText: {
+    color: colors.accentDark,
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: "900",
+  },
+  calendarTodayButtonTextDisabled: {
+    color: colors.faint,
   },
   weekdayGrid: {
     flexDirection: "row",
@@ -1793,6 +1843,11 @@ const baseStyles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "rgba(184,95,123,0.14)",
   },
+  dayCellSpecial: {
+    backgroundColor: "#fff1c9",
+    borderWidth: 1,
+    borderColor: "rgba(184,95,123,0.12)",
+  },
   dayText: {
     color: colors.muted,
     fontSize: 13,
@@ -1825,6 +1880,12 @@ const baseStyles = StyleSheet.create({
     backgroundColor: colors.accentSoft,
     borderWidth: 1,
     borderColor: "rgba(184,95,123,0.14)",
+  },
+  daySpecialMark: {
+    borderRadius: 999,
+    backgroundColor: "#fff1c9",
+    borderWidth: 1,
+    borderColor: "rgba(184,95,123,0.13)",
   },
   dayImageIcon: {
     width: 18,

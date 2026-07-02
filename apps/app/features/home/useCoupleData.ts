@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { getSelfHostDashboard } from "@/lib/selfHost/dashboardApi";
+import { getSelfHostAvatars, getSelfHostDashboard, type SelfHostAvatarResult } from "@/lib/selfHost/dashboardApi";
 import { prefetchImageUrls } from "@/lib/media/imageStorage";
 import { cacheDashboardAvatarImages, hasReadyDashboardAvatarImages, withCachedDashboardAvatarImages } from "@/lib/media/localAvatarCache";
 import { listSelfHostNotifications, subscribeSelfHostNotificationEvents } from "@/lib/selfHost/notificationApi";
@@ -21,8 +21,7 @@ const dashboardFallbackRefreshMs = 120000;
 const maxDashboardFallbackRefreshMs = 10 * 60 * 1000;
 const notificationRealtimeDebounceMs = 1200;
 const dashboardListLimit = 1000;
-const avatarCacheTimeoutMs = 4500;
-const avatarImagePrefetchTimeoutMs = 4500;
+const avatarImagePrefetchTimeoutMs = 1200;
 const criticalImagePrefetchTimeoutMs = 900;
 const criticalMediaPrefetchLimit = 12;
 
@@ -92,6 +91,28 @@ function mergeDashboardCoupleAvatars(currentCouple: CoupleDashboard["couple"], n
       };
     }),
   };
+}
+
+/**
+ * Merge avatar data from the lightweight /api/me/avatars response into the
+ * current dashboard state (which may be cached data or an empty skeleton).
+ * This allows avatars to render before the full dashboard API returns.
+ */
+function applyEarlyAvatars(current: CoupleDashboard, avatarResult: SelfHostAvatarResult): CoupleDashboard {
+  const nextProfile = avatarResult.profile
+    ? mergeDashboardProfile(current.profile, avatarResult.profile)
+    : current.profile;
+  const nextCouple = avatarResult.couple
+    ? mergeDashboardCoupleAvatars(current.couple, avatarResult.couple)
+    : current.couple;
+  if (nextProfile === current.profile && nextCouple === current.couple) {
+    return current;
+  }
+  return withCachedDashboardAvatarImages({
+    ...current,
+    profile: nextProfile,
+    couple: nextCouple,
+  });
 }
 
 function collectCriticalAvatarImageUrls(dashboard: CoupleDashboard) {
@@ -203,7 +224,32 @@ export function useCoupleData(userId?: string, accessToken?: string | null) {
         return;
       }
 
-      const dashboard = await getSelfHostDashboard({ accessToken, currentUserId: userId });
+      // On initial load, fire the lightweight avatars API in parallel with the
+      // heavy dashboard API.  When avatars arrive first (~200-400ms vs
+      // ~1500-3000ms), apply them to the cached/empty skeleton immediately so
+      // avatars render before the full dashboard data is ready.
+      let earlyAvatarApplied = false;
+      const dashboardPromise = getSelfHostDashboard({ accessToken, currentUserId: userId });
+      if (options.initial) {
+        const avatarPromise = getSelfHostAvatars({ accessToken }).catch(() => null as SelfHostAvatarResult | null);
+        // Race: whoever finishes first, avatars or dashboard
+        avatarPromise.then((avatarResult) => {
+          if (!avatarResult || requestId !== requestIdRef.current || earlyAvatarApplied) {
+            return;
+          }
+          // Apply avatar data to current state (cached or empty skeleton)
+          const current = dataRef.current;
+          const withAvatars = applyEarlyAvatars(current, avatarResult);
+          if (withAvatars !== current) {
+            earlyAvatarApplied = true;
+            saveData(withAvatars);
+            setLoadedUserId(userId);
+            void cacheDashboardAvatarImages(withAvatars, avatarImagePrefetchTimeoutMs);
+          }
+        });
+      }
+
+      const dashboard = await dashboardPromise;
       const signedMediaUrlById = new Map(
         dataRef.current.mediaFiles
           .filter((file) => file.storage_path)
@@ -239,15 +285,14 @@ export function useCoupleData(userId?: string, accessToken?: string | null) {
       if (requestId !== requestIdRef.current) {
         return;
       }
-      const avatarCachedData = options.initial
-        ? await cacheDashboardAvatarImages(nextData, avatarCacheTimeoutMs)
-        : withCachedDashboardAvatarImages(nextData);
+      const avatarCachedData = withCachedDashboardAvatarImages(nextData);
       if (requestId !== requestIdRef.current) {
         return;
       }
       if (options.initial) {
-        await prefetchCriticalAvatarImages(avatarCachedData);
-        await prefetchCriticalMediaImages(avatarCachedData);
+        void prefetchCriticalAvatarImages(avatarCachedData);
+        void prefetchCriticalMediaImages(avatarCachedData);
+        void cacheDashboardAvatarImages(avatarCachedData, avatarImagePrefetchTimeoutMs);
       }
       if (requestId !== requestIdRef.current) {
         return;

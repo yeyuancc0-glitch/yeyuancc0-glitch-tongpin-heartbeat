@@ -93,6 +93,7 @@
 - 自建 `/api/pair-invites/accept` 必须兼容 `relationshipStartedAt` 与 `relationship_started_at`，并在接受邀请时保留恋爱开始日期，避免旧脚本或迁移调用方传 snake_case 时日期丢失。
 - 自建 `/api/pair-invites/accept` 调用 Postgres `accept_pair_invite(...)` 后，必须在同一事务里用第二条 SQL 按返回的 `couple_id` 读取 `couples`；不要把函数调用和 `join couples` 写进同一条 SQL，否则 Postgres 语句快照可能看不到函数刚插入的情侣行，导致接受邀请 500。
 - 自建关系/Profile/Dashboard API 返回给前端的日期型字段应统一为 `YYYY-MM-DD` date key，不要直接把 Postgres `date` 对象或 ISO 时间串透出给日期输入控件。
+- `/api/couples/active/dates` 的实现属于 `profileService.updateActiveCoupleDates`；路由层不要误调用 `privacyService`，否则未绑定用户暂存/空返回语义会线上 500。
 - 邀请码创建走 `create_pair_invite(invite_expires_at)` RPC；查询 `pair_invites` 时只取当前用户创建或接受的记录。
 - 所有情侣业务数据必须带 `couple_id`，权限边界以 active couple member 为准；不要只靠前端隐藏按钮做数据权限。
 - 信件产品文案统一叫“信件 / 胶囊信”，底层复用 `future_letters`；创建走 `create_future_letter(...)`，删除走 `delete_letter(letter_id)`。
@@ -153,6 +154,7 @@
 - 自建业务列表 API 的默认 limit 也不能保留旧首页预览值；`messages`、`letters`、`media`、`calendar-events`、`footprints`、`creation/actions`、`notifications` 等直接列表在没有独立分页前默认应覆盖完整页面历史需求，显式传小 limit 才能作为预览。
 - 前端 `apps/app/lib/selfHost/*Api.ts` 的直接列表 helper 默认 limit 也必须与后端完整历史默认保持一致；不要在客户端封装层保留 12、30、60、100 这类旧预览默认值，否则未来完整页绕过 dashboard 时会再次看起来“数据丢失”。
 - 记忆页历史胶囊、留言、信件、足迹和相册独立记忆必须使用 dashboard 返回的完整列表参与时间线，不要用 `slice(0, 4)`、`slice(0, 6)` 这类首页预览截断；单张记忆卡内部图片预览可限制数量，但时间线入口不能截断，否则迁移后的旧数据会被误认为“丢失”。
+- 记忆页系统纪念日提醒规则集中在 `apps/app/features/memory/anniversaryReminders.ts`：自动生成恋爱 100/200/300/520/999/1000/1314/2000/3000 天、半年、周年，以及情人节、520、七夕等情侣节日；日历页必须支持查看过去和未来月份，并按当前查看月份消费这些虚拟提醒做近期提示和日历标识，不应把系统提醒批量写入 `calendar_events` 污染用户手动事件。
 - 今日胶囊页的“历史胶囊”入口也必须展示 dashboard 返回的完整胶囊列表；不要用 `slice(0, 4)` 截断，也不要显示没有真实点击行为的“查看全部”，否则用户会把界面预览限制误认为迁移数据丢失。
 - 今日胶囊页历史胶囊左滑删除时，未滑开的卡片本体必须保持纯白不透出删除层底色；删除粉色底只在滑开露出的操作区可见。
 - 来信、足迹、今日胶囊、记忆等完整业务页不能沿用首页预览式 `slice(0, N)` 截断历史；如需性能优化，必须先补真实分页、加载更多或完整入口。首页小预览可以保留有限数量，但要避免让用户误以为迁移数据丢失。
@@ -173,6 +175,7 @@
 - 用户只需选择一次图片，不要求用户自己提供缩略图；前端负责自动生成并上传原图和缩略图，服务端也必须在相册上传完成时从原图生成缩略图作为兜底。缩略图生成/校验失败时不要把新相册记录标记为 ready；数据库保存失败要清理本次上传对象。
 - 已有历史相册缺缩略图时，用 `npm run backfill:media-thumbnails -w @tongpin/server -- --apply --limit=<N>` 分批生成 WebP 缩略图并写回 `media_files.thumbnail_storage_path`；脚本输出只能包含计数和脱敏 id，不输出 Storage path。
 - self-host 相册上传创建记录时只有收到并成功校验缩略图对象，才允许写入 `media_files.thumbnail_storage_path`；如果历史记录有缩略图 path 但 MinIO 对象不存在，普通列表小图读缩略图 signed URL 应失败并显示占位；首页/预览首屏可有限回退原图 signed URL，不能后台全量回退原图拖慢九宫格/记忆流。
+- `media_files` 当前只保存缩略图 Storage path，不保存缩略图 MIME/大小；相册上传完成校验客户端缩略图时应按 MinIO HEAD 的实际 MIME 白名单与 `maxThumbnailUploadBytes` 校验，不能引用不存在的 `media_files.thumbnail_mime_type` / `thumbnail_size_bytes` 当作严格相等条件。
 - self-host 头像和相册签名 PUT 上传返回给浏览器的 `requiredHeaders` 不能包含 `content-length`；浏览器禁止手动设置该 header。服务端仍用创建上传时记录的 size 和完成阶段 S3 HEAD 校验文件大小，前端上传 helper 也要过滤旧响应中的 `content-length`。
 - 图片 MIME、缩略图和预取工具位于 `apps/app/lib/media/imageStorage.ts`；不要把纯媒体工具重新挂到 Supabase client 上。
 - 相册和记忆卡片图片上传当前最多 10 张；首页九宫格预览前 9 张，超过 9 张显示 `+N`。

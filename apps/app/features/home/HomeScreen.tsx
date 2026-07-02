@@ -731,6 +731,7 @@ export function HomeScreen() {
         creationSpace={data.creationSpace}
         petWorldProp={petWorldPropFromDecision(data.creationSpace?.last_world_decision)}
         currentUserId={user?.id ?? ""}
+        relationshipStartedAt={data.couple?.started_at}
         onAddEvent={() => openSubPage("addEvent", "calendar")}
         onOpenLetter={() => openSubPage("letterInbox", "calendar")}
         onChanged={reload}

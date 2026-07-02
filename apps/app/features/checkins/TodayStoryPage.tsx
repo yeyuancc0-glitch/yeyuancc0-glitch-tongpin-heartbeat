@@ -122,32 +122,11 @@ export function TodayStoryPage({
   const [openSwipeCheckinId, setOpenSwipeCheckinId] = useState<string | null>(null);
   const [deletingCheckinId, setDeletingCheckinId] = useState<string | null>(null);
   const saveCardScale = useRef(new Animated.Value(1)).current;
-  const washOpacity = useRef(new Animated.Value(0.72)).current;
-  const washBreath = useRef(new Animated.Value(0)).current;
+
   const shakeAnim = useRef(new Animated.Value(0)).current;
   const { triggerShake: triggerSaveErrorShake, shakeStyle: saveErrorShakeStyle } = useErrorShake();
 
-  useEffect(() => {
-    const animation = Animated.loop(
-      Animated.sequence([
-        Animated.timing(washOpacity, { toValue: 0.88, duration: 2500, useNativeDriver: false }),
-        Animated.timing(washOpacity, { toValue: 0.72, duration: 2500, useNativeDriver: false }),
-      ])
-    );
-    animation.start();
-    return () => animation.stop();
-  }, [washOpacity]);
 
-  useEffect(() => {
-    const animation = Animated.loop(
-      Animated.sequence([
-        Animated.timing(washBreath, { toValue: 1, duration: 2000, useNativeDriver: false }),
-        Animated.timing(washBreath, { toValue: 0, duration: 2000, useNativeDriver: false }),
-      ])
-    );
-    animation.start();
-    return () => animation.stop();
-  }, [washBreath]);
 
   useEffect(() => {
     if (Platform.OS !== "web" || typeof URL === "undefined") {
@@ -192,7 +171,7 @@ export function TodayStoryPage({
   const petDeliveringLetter = creationSpace?.pet_world_surface === "share" && petWorldProp === "letter";
   const selectedStoryImage = storyIconImageFromText(trimmedContent);
   const selectedMoodTone = emotionCandyTone(activeMood);
-  const washScale = washBreath.interpolate({ inputRange: [0, 1], outputRange: [1, 1.22] });
+
   const capsulePhotoPreviews = [
     ...mineTodayPhotos.map((file) => ({
       id: file.id,
@@ -370,31 +349,6 @@ export function TodayStoryPage({
 
   return (
     <View style={styles.todayStoryScreen}>
-      <Card soft style={styles.capsulePreviewCard}>
-        <View style={[styles.capsulePreviewGlow, { backgroundColor: selectedMoodTone.glow }]} />
-        <Animated.View style={[styles.capsulePreviewMoodWash, { backgroundColor: selectedMoodTone.wash, opacity: washOpacity, transform: [{ scale: washScale }] }]} />
-        <View pointerEvents="none" style={styles.capsulePreviewStageRing} />
-        <View pointerEvents="none" style={styles.capsulePreviewSparkOne} />
-        <View pointerEvents="none" style={styles.capsulePreviewSparkTwo} />
-        <View style={styles.capsulePreviewStage}>
-          <View pointerEvents="none" style={styles.capsulePreviewPedestal} />
-          <Animated.View style={{ transform: [{ translateX: shakeAnim }, { rotate: shakeAnim.interpolate({ inputRange: [-2, 2], outputRange: ["-3deg", "3deg"] }) }] }}>
-            <CapsuleMark
-              size={70}
-              complete={capsuleComplete}
-              icon={<Image source={selectedStoryImage} style={styles.capsulePreviewImage} resizeMode="contain" />}
-            />
-          </Animated.View>
-        </View>
-        <View style={styles.capsulePreviewMetaPill}>
-          <Sparkles color={selectedMoodTone.deep} size={13} strokeWidth={2.6} />
-          <Text style={[styles.capsulePreviewMetaText, { color: selectedMoodTone.ink }]}>把今天存起来吧</Text>
-        </View>
-        {capsuleComplete ? <Text style={styles.capsulePreviewTitle}>这颗胶囊准备好了</Text> : null}
-        {capsuleComplete ? (
-          <Text style={styles.capsulePreviewText}>这句话会被安静封存到今天。</Text>
-        ) : null}
-      </Card>
       {petDeliveringLetter ? <PetLetterDeliveryCard /> : null}
       <Reanimated.View style={saveErrorShakeStyle}>
       <Animated.View style={{ transform: [{ scale: saveCardScale }] }}>
@@ -403,12 +357,27 @@ export function TodayStoryPage({
         <View pointerEvents="none" style={styles.createCapsulePaperFold} />
         <View {...petAnchorProps("share-capsule-composer", "capsule-composer")} style={styles.capsuleComposerHeader}>
           <View style={styles.capsuleComposerTitleRow}>
-            <Text style={styles.centerTitle}>今日胶囊</Text>
-            <View style={styles.capsuleComposerSeal}>
-              <Heart color="#fff" fill="#fff" size={12} strokeWidth={2.6} />
+            <Animated.View style={{ transform: [{ translateX: shakeAnim }, { rotate: shakeAnim.interpolate({ inputRange: [-2, 2], outputRange: ["-3deg", "3deg"] }) }] }}>
+              <CapsuleMark
+                size={46}
+                complete={capsuleComplete}
+                icon={<Image source={selectedStoryImage} style={styles.capsulePreviewImage} resizeMode="contain" />}
+              />
+            </Animated.View>
+            <View style={{ marginLeft: 10, flex: 1 }}>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                <Text style={styles.centerTitle}>今日胶囊</Text>
+                <View style={styles.capsuleComposerSeal}>
+                  <Heart color="#fff" fill="#fff" size={12} strokeWidth={2.6} />
+                </View>
+              </View>
+              <Text style={styles.capsuleComposerHint}>挑一颗情绪糖，写下今天想封存的一句话。</Text>
             </View>
           </View>
-          <Text style={styles.capsuleComposerHint}>挑一颗情绪糖，写下今天想封存的一句话。</Text>
+          {capsuleComplete ? <Text style={styles.capsulePreviewTitle}>这颗胶囊准备好了</Text> : null}
+          {capsuleComplete ? (
+            <Text style={styles.capsulePreviewText}>这句话会被安静封存到今天。</Text>
+          ) : null}
         </View>
         <View style={styles.moodOptionalBlock}>
           <View style={styles.moodTrayHeader}>

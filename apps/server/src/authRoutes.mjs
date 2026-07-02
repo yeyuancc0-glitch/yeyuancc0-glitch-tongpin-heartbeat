@@ -66,6 +66,16 @@ export async function registerAuthRoutes({
     return true;
   }
 
+  if (url.pathname === "/api/me/avatars") {
+    if (!(await requireMethod(request, response, "GET", requestId))) {
+      return true;
+    }
+    const current = await authService.authenticate(bearerToken(request));
+    const result = await dashboardService.getAvatars(current);
+    sendAuthResult(response, requestId, { avatars: result });
+    return true;
+  }
+
   if (url.pathname === "/api/auth/register") {
     if (!(await requireMethod(request, response, "POST", requestId))) {
       return true;

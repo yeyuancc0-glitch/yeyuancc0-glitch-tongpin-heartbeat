@@ -1,3 +1,5 @@
+import { rememberLoadedImageSourceKey } from "@/motion/CrossFadeImage";
+
 export const imageMimeTypes = ["image/jpeg", "image/png", "image/webp", "image/gif"];
 
 export type ImageTransformOptions = {
@@ -110,9 +112,13 @@ export async function prefetchImageUrl(url?: string | null) {
     image.decoding = "async";
     image.onload = () => {
       if (typeof image.decode === "function") {
-        void image.decode().catch(() => undefined).finally(resolve);
+        void image.decode().catch(() => undefined).finally(() => {
+          rememberLoadedImageSourceKey(url);
+          resolve();
+        });
         return;
       }
+      rememberLoadedImageSourceKey(url);
       resolve();
     };
     image.onerror = () => resolve();

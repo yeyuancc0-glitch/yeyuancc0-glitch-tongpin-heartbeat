@@ -280,7 +280,34 @@ export function createDashboardService({
     };
   }
 
+  /**
+   * Lightweight avatar-only endpoint.  Queries a single DB statement
+   * (active couple + profiles) and presigns only the avatar thumbnail URLs.
+   * Unlike createDashboardImageUrls, this never fetches image bytes from MinIO
+   * — presigning is a local crypto operation (~1ms) — so it cannot time out
+   * or compete with the full dashboard request for MinIO bandwidth.
+   */
+  async function getAvatars(current) {
+    const profile = profileService
+      ? await profileService.ensureProfile(current)
+      : publicProfile((await pool.query("select * from public.profiles where id = $1", [current.user.id])).rows[0]);
+    const couple = await activeCoupleWithMembers(current);
+    const profilesForSigning = couple
+      ? [profile, ...couple.members.map((member) => member.profile)].filter(Boolean)
+      : [profile].filter(Boolean);
+
+    const imageUrls = storageService.createAvatarPresignedUrls
+      ? await storageService.createAvatarPresignedUrls(profilesForSigning).catch(() => null)
+      : null;
+
+    return {
+      profile: withProfileImageUrls(profile, imageUrls),
+      couple: couple ? withCoupleImageUrls(couple, imageUrls) : null,
+    };
+  }
+
   return {
+    getAvatars,
     getDashboard,
   };
 }

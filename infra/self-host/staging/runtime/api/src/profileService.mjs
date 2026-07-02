@@ -54,6 +54,7 @@ function publicProfile(row) {
     accountStatus: row.account_status,
     deletionRequestedAt: row.deletion_requested_at,
     birthday: dateKey(row.birthday),
+    isLunarBirthdate: row.is_lunar_birthdate ?? false,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -144,6 +145,8 @@ export function createProfileService({ pool }) {
     const displayName = trimmedNullable(input.displayName ?? input.display_name, 80, "invalid_display_name", "Display name must be at most 80 characters.");
     const birthdayProvided = Object.hasOwn(input, "birthday") || Object.hasOwn(input, "birthdate");
     const birthday = birthdayProvided ? input.birthday ?? input.birthdate ?? null : undefined;
+    const isLunarBirthdateProvided = Object.hasOwn(input, "isLunarBirthdate") || Object.hasOwn(input, "is_lunar_birthdate");
+    const isLunarBirthdate = isLunarBirthdateProvided ? input.isLunarBirthdate ?? input.is_lunar_birthdate ?? false : undefined;
     const avatarStoragePath = Object.hasOwn(input, "avatarStoragePath") || Object.hasOwn(input, "avatar_storage_path")
       ? trimmedNullable(input.avatarStoragePath ?? input.avatar_storage_path, 512, "invalid_avatar_path", "Avatar path is too long.")
       : undefined;
@@ -161,6 +164,7 @@ export function createProfileService({ pool }) {
             id,
             display_name,
             birthday,
+            is_lunar_birthdate,
             avatar_storage_path,
             avatar_thumbnail_storage_path
           )
@@ -168,16 +172,18 @@ export function createProfileService({ pool }) {
             id,
             $2,
             case when $3 then $4::date else null end,
-            case when $5 then $6 else null end,
-            case when $7 then $8 else null end
+            case when $5 then $6::boolean else false end,
+            case when $7 then $8 else null end,
+            case when $9 then $10 else null end
           from app_auth.accounts
           where id = $1
             and disabled_at is null
           on conflict (id) do update set
             display_name = coalesce(excluded.display_name, public.profiles.display_name),
             birthday = case when $3 then excluded.birthday else public.profiles.birthday end,
-            avatar_storage_path = case when $5 then excluded.avatar_storage_path else public.profiles.avatar_storage_path end,
-            avatar_thumbnail_storage_path = case when $7 then excluded.avatar_thumbnail_storage_path else public.profiles.avatar_thumbnail_storage_path end,
+            is_lunar_birthdate = case when $5 then excluded.is_lunar_birthdate else public.profiles.is_lunar_birthdate end,
+            avatar_storage_path = case when $7 then excluded.avatar_storage_path else public.profiles.avatar_storage_path end,
+            avatar_thumbnail_storage_path = case when $9 then excluded.avatar_thumbnail_storage_path else public.profiles.avatar_thumbnail_storage_path end,
             updated_at = now()
           returning *
         `,
@@ -186,6 +192,8 @@ export function createProfileService({ pool }) {
           displayName,
           birthdayProvided,
           birthday ? String(birthday) : null,
+          isLunarBirthdateProvided,
+          isLunarBirthdate,
           avatarStoragePath !== undefined,
           avatarStoragePath ?? null,
           avatarThumbnailStoragePath !== undefined,

@@ -543,3 +543,25 @@ export async function getSelfHostDashboard(input: {
     footprints: dashboard.footprints.map(mapFootprint),
   };
 }
+
+type SelfHostAvatarsResponse = {
+  profile: SelfHostDashboardProfile | null;
+  couple: SelfHostDashboardCouple | null;
+};
+
+export type SelfHostAvatarResult = {
+  profile: DashboardProfile | null;
+  couple: ActiveCouple | null;
+};
+
+export async function getSelfHostAvatars(input: {
+  accessToken: string;
+}): Promise<SelfHostAvatarResult> {
+  const response = await selfHostRequest<{ avatars: SelfHostAvatarsResponse }>("/api/me/avatars", {
+    accessToken: input.accessToken,
+  });
+  return {
+    profile: mapProfile(response.avatars.profile),
+    couple: mapCouple(response.avatars.couple),
+  };
+}

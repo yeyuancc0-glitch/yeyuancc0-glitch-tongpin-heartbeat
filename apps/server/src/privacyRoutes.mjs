@@ -33,6 +33,7 @@ export async function registerPrivacyRoutes({
   bearerToken,
   parseBody,
   privacyService,
+  profileService,
   request,
   requestId,
   response,
@@ -44,7 +45,7 @@ export async function registerPrivacyRoutes({
     }
     const current = await authService.authenticate(bearerToken(request));
     const body = await parseBody(request, 64 * 1024);
-    const result = await privacyService.updateActiveCoupleDates(body, current);
+    const result = await profileService.updateActiveCoupleDates(body, current);
     sendAuthResult(response, requestId, result);
     return true;
   }

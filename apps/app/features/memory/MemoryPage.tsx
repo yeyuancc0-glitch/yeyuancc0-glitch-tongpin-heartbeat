@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Image, Platform, Pressable, Text, View, type ImageSourcePropType } from "react-native";
-import { CalendarPlus, Heart, ImagePlus, Mail, MessageCircle, Sparkles, Trash2 } from "lucide-react-native";
+import { CalendarPlus, ChevronLeft, ChevronRight, Heart, ImagePlus, Mail, MessageCircle, RotateCcw, Sparkles, Trash2 } from "lucide-react-native";
 
 import { Card, CapsuleMark, EmptyState } from "@/components/app-ui/AppUI";
 import { useAppScrollY, useToast } from "@/components/ui";
@@ -9,6 +9,7 @@ import { cartoonIcons, capsuleIcons } from "@/features/home/homeAssets";
 import { styles } from "@/features/home/homeStyles";
 import { petAnchorProps, petSafeActionProps } from "@/features/home/petDomProps";
 import type { PhotoFileList, PhotoUploadResult } from "@/features/home/homeShared";
+import { generateAnniversaryReminders, upcomingAnniversaryReminders, type AnniversaryReminder } from "@/features/memory/anniversaryReminders";
 import { formatMemoryDate, maxMemoryPhotos, type MemoryFilter, type MemoryTimelineItem } from "@/features/memory/memoryUtils";
 import { PhotoUploadInput } from "@/features/media/PhotoUploadInput";
 import { imagePreviewUrl, isCheckinPhotoCaption } from "@/features/media/mediaUtils";
@@ -36,6 +37,7 @@ export function MemoryPage({
   creationSpace,
   petWorldProp,
   currentUserId,
+  relationshipStartedAt,
   onAddEvent,
   onOpenLetter,
   onChanged,
@@ -58,6 +60,7 @@ export function MemoryPage({
   creationSpace: CreationSpace | null;
   petWorldProp: PetWorldDecisionProp;
   currentUserId: string;
+  relationshipStartedAt?: string | null;
   onAddEvent: () => void;
   onOpenLetter: (letter: LetterPreview) => void;
   onChanged: () => void;
@@ -71,6 +74,8 @@ export function MemoryPage({
   onDeleteLetter?: (letterId: string) => Promise<void>;
   onRequireAccess?: () => void;
 }) {
+  const anniversaryReminders = generateAnniversaryReminders(relationshipStartedAt);
+  const upcomingReminders = upcomingAnniversaryReminders(anniversaryReminders);
   const memories = buildMemoryTimeline(checkins, messages, events, mediaFiles, letters, footprints, currentUserId);
   const [filter, setFilter] = useState<MemoryFilter>("全部");
   const visibleMemories = filter === "全部" ? memories : memories.filter((memory) => memory.filter === filter);
@@ -78,23 +83,6 @@ export function MemoryPage({
   const petInspectingMemory = creationSpace?.pet_world_surface === "memory" && (petWorldProp === "photo" || petWorldProp === "memory");
   return (
     <View style={styles.memoryScreen}>
-      <View {...petAnchorProps("memory-hero", "memory-hero")} style={styles.memoryHero}>
-        <View pointerEvents="none" style={styles.memoryHeroGlow} />
-        <View style={styles.memoryHeroTitleRow}>
-          <View style={styles.memoryHeroMark}>
-            <CapsuleMark size={34} complete />
-          </View>
-          <View style={styles.memoryHeroCopy}>
-            <Text style={styles.memoryHeroTitle}>记忆风铃</Text>
-            <Text style={styles.memorySubtitle}>把那些小小的瞬间，慢慢存起来。</Text>
-          </View>
-        </View>
-        <View style={styles.memoryHeroChimes}>
-          <View style={[styles.memoryHeroChime, styles.memoryHeroChimeRose]} />
-          <View style={[styles.memoryHeroChime, styles.memoryHeroChimeCream]} />
-          <View style={[styles.memoryHeroChime, styles.memoryHeroChimeViolet]} />
-        </View>
-      </View>
       <View {...petAnchorProps("memory-calendar", "memory-calendar")}>
       <Card style={styles.memoryCalendarCard}>
         <View pointerEvents="none" style={styles.memoryCalendarWash} />
@@ -102,7 +90,8 @@ export function MemoryPage({
           <Text style={styles.sectionTitle}>我们的日历</Text>
           <Image source={cartoonIcons.calendar} style={styles.headerIcon} resizeMode="contain" />
         </View>
-        <MiniCalendar checkins={checkins} messages={messages} events={events} letters={letters} />
+        <AnniversaryReminderPanel reminders={upcomingReminders} />
+        <MiniCalendar checkins={checkins} messages={messages} events={events} letters={letters} anniversaryReminders={anniversaryReminders} />
       </Card>
       </View>
       <View style={styles.memoryFilterRow}>
@@ -139,6 +128,29 @@ export function MemoryPage({
         )}
       </View>
       <FloatingMemoryAction onAddEvent={onAddEvent} />
+    </View>
+  );
+}
+
+function AnniversaryReminderPanel({ reminders }: { reminders: AnniversaryReminder[] }) {
+  if (!reminders.length) {
+    return null;
+  }
+  return (
+    <View style={styles.anniversaryReminderPanel}>
+      {reminders.map((reminder) => (
+        <View key={reminder.id} style={styles.anniversaryReminderItem}>
+          <View style={[styles.anniversaryReminderBadge, reminder.kind === "festival" ? styles.anniversaryReminderBadgeFestival : null]}>
+            <Text style={styles.anniversaryReminderBadgeText}>{reminder.daysUntil === 0 ? "今天" : reminder.badge}</Text>
+          </View>
+          <View style={styles.anniversaryReminderCopy}>
+            <Text style={styles.anniversaryReminderTitle}>{reminder.title}</Text>
+            <Text style={styles.anniversaryReminderMeta}>
+              {reminder.daysUntil === 0 ? "就是今天" : `还有 ${reminder.daysUntil} 天`} · {formatMemoryDate(reminder.date)}
+            </Text>
+          </View>
+        </View>
+      ))}
     </View>
   );
 }
@@ -612,15 +624,18 @@ function MiniCalendar({
   messages,
   events,
   letters = [],
+  anniversaryReminders = [],
 }: {
   checkins: Array<{ checkin_date: string; content: string | null }>;
   messages: Message[];
   events: CalendarEvent[];
   letters?: LetterPreview[];
+  anniversaryReminders?: AnniversaryReminder[];
   }) {
   const today = new Date();
-  const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
-  const monthEnd = new Date(today.getFullYear(), today.getMonth() + 1, 0);
+  const [visibleMonth, setVisibleMonth] = useState(() => new Date(today.getFullYear(), today.getMonth(), 1));
+  const monthStart = visibleMonth;
+  const monthEnd = new Date(visibleMonth.getFullYear(), visibleMonth.getMonth() + 1, 0);
   const firstWeekday = (monthStart.getDay() + 6) % 7;
   const gridSize = Math.ceil((firstWeekday + monthEnd.getDate()) / 7) * 7;
   const days = Array.from({ length: gridSize }, (_, index) => {
@@ -629,7 +644,7 @@ function MiniCalendar({
   });
   const isCurrentMonthDate = (value: string) => {
     const date = parseCalendarDate(value);
-    return date.getFullYear() === today.getFullYear() && date.getMonth() === today.getMonth();
+    return date.getFullYear() === visibleMonth.getFullYear() && date.getMonth() === visibleMonth.getMonth();
   };
   const eventDays = new Set(
     events.filter((event) => event.type !== "anniversary" && isCurrentMonthDate(event.event_date)).map((event) => Number(event.event_date.slice(-2)))
@@ -637,10 +652,18 @@ function MiniCalendar({
   const anniversaryDays = new Set(
     events.filter((event) => event.type === "anniversary" && isCurrentMonthDate(event.event_date)).map((event) => Number(event.event_date.slice(-2)))
   );
+  const specialReminderDays = new Map<number, AnniversaryReminder[]>();
+  anniversaryReminders.forEach((reminder) => {
+    if (!isCurrentMonthDate(reminder.date)) {
+      return;
+    }
+    const day = Number(reminder.date.slice(-2));
+    specialReminderDays.set(day, [...(specialReminderDays.get(day) ?? []), reminder]);
+  });
   const letterDays = new Set(
     letters
       .map((letter) => new Date(letter.deliver_at))
-      .filter((date) => date.getFullYear() === today.getFullYear() && date.getMonth() === today.getMonth())
+      .filter((date) => date.getFullYear() === visibleMonth.getFullYear() && date.getMonth() === visibleMonth.getMonth())
       .map((date) => date.getDate())
   );
   const storyByDay = new Map<number, ImageSourcePropType>();
@@ -651,7 +674,7 @@ function MiniCalendar({
   });
   messages.forEach((message) => {
     const date = new Date(message.created_at);
-    if (date.getFullYear() !== today.getFullYear() || date.getMonth() !== today.getMonth()) {
+    if (date.getFullYear() !== visibleMonth.getFullYear() || date.getMonth() !== visibleMonth.getMonth()) {
       return;
     }
     const day = date.getDate();
@@ -660,12 +683,35 @@ function MiniCalendar({
     }
   });
   const weekdayLabels = ["一", "二", "三", "四", "五", "六", "日"];
+  const isViewingCurrentMonth = visibleMonth.getFullYear() === today.getFullYear() && visibleMonth.getMonth() === today.getMonth();
+
+  function shiftVisibleMonth(delta: number) {
+    setVisibleMonth((current) => new Date(current.getFullYear(), current.getMonth() + delta, 1));
+  }
+
+  function resetVisibleMonth() {
+    setVisibleMonth(new Date(today.getFullYear(), today.getMonth(), 1));
+  }
 
   return (
     <View style={styles.calendarSurface}>
       <View style={styles.calendarMonthRow}>
-        <Text style={styles.calendarMonthText}>{today.getMonth() + 1}月</Text>
-        <Text style={styles.calendarMonthMeta}>{today.getFullYear()}</Text>
+        <View style={styles.calendarMonthCopy}>
+          <Text style={styles.calendarMonthText}>{visibleMonth.getMonth() + 1}月</Text>
+          <Text style={styles.calendarMonthMeta}>{visibleMonth.getFullYear()}</Text>
+        </View>
+        <View style={styles.calendarMonthControls}>
+          <Pressable {...petSafeActionProps()} accessibilityRole="button" accessibilityLabel="查看上个月" onPress={() => shiftVisibleMonth(-1)} style={styles.calendarMonthButton}>
+            <ChevronLeft color={colors.accentDark} size={16} strokeWidth={2.8} />
+          </Pressable>
+          <Pressable {...petSafeActionProps()} accessibilityRole="button" accessibilityLabel="回到本月" onPress={resetVisibleMonth} style={[styles.calendarTodayButton, isViewingCurrentMonth ? styles.calendarTodayButtonDisabled : null]}>
+            <RotateCcw color={isViewingCurrentMonth ? colors.faint : colors.accentDark} size={13} strokeWidth={2.7} />
+            <Text style={[styles.calendarTodayButtonText, isViewingCurrentMonth ? styles.calendarTodayButtonTextDisabled : null]}>今天</Text>
+          </Pressable>
+          <Pressable {...petSafeActionProps()} accessibilityRole="button" accessibilityLabel="查看下个月" onPress={() => shiftVisibleMonth(1)} style={styles.calendarMonthButton}>
+            <ChevronRight color={colors.accentDark} size={16} strokeWidth={2.8} />
+          </Pressable>
+        </View>
       </View>
       <View style={styles.weekdayGrid}>
         {weekdayLabels.map((label) => (
@@ -677,14 +723,16 @@ function MiniCalendar({
           const storyIcon = dayNumber ? storyByDay.get(dayNumber) : undefined;
           const hasEvent = dayNumber ? eventDays.has(dayNumber) : false;
           const hasAnniversary = dayNumber ? anniversaryDays.has(dayNumber) : false;
+          const specialReminders = dayNumber ? specialReminderDays.get(dayNumber) ?? [] : [];
+          const hasSpecialReminder = specialReminders.length > 0;
           const hasLetter = dayNumber ? letterDays.has(dayNumber) : false;
-          const isToday = dayNumber === today.getDate();
+          const isToday = isViewingCurrentMonth && dayNumber === today.getDate();
           return (
             <View key={`${index}-${dayNumber ?? "empty"}`} style={[styles.dayCell, !dayNumber ? styles.dayCellEmpty : null]}>
               {dayNumber ? (
-                <View style={[styles.dayNumberBubble, storyIcon || hasEvent || hasLetter || hasAnniversary ? styles.dayCellMarked : null, isToday ? styles.dayCellToday : null]}>
+                <View style={[styles.dayNumberBubble, storyIcon || hasEvent || hasLetter || hasAnniversary || hasSpecialReminder ? styles.dayCellMarked : null, hasSpecialReminder ? styles.dayCellSpecial : null, isToday ? styles.dayCellToday : null]}>
                   <Text style={[styles.dayText, isToday ? styles.dayTextToday : null]}>{dayNumber}</Text>
-                  {hasAnniversary ? (
+                  {hasAnniversary || hasSpecialReminder ? (
                     <View style={styles.dayHeartMark}>
                       <Heart color={colors.accentDark} fill={colors.accentDark} size={9} strokeWidth={2.6} />
                     </View>
@@ -702,6 +750,10 @@ function MiniCalendar({
               ) : hasEvent ? (
                 <View style={[styles.dayIconSlot, styles.dayCapsuleMark]}>
                   <Image source={cartoonIcons.calendar} style={styles.dayImageIcon} resizeMode="contain" />
+                </View>
+              ) : hasSpecialReminder ? (
+                <View style={[styles.dayIconSlot, styles.daySpecialMark]}>
+                  <Sparkles color={colors.accentDark} size={14} strokeWidth={2.7} />
                 </View>
               ) : null}
             </View>

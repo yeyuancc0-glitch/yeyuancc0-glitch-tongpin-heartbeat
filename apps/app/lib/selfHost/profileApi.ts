@@ -190,14 +190,18 @@ export async function updateSelfHostProfile(input: {
   accessToken: string;
   displayName: string;
   birthday?: string | null;
+  isLunarBirthdate?: boolean;
   avatarStoragePath?: string | null;
   avatarThumbnailStoragePath?: string | null;
 }) {
-  const body: Record<string, string | null> = {
+  const body: Record<string, string | boolean | null> = {
     displayName: input.displayName,
   };
   if (Object.hasOwn(input, "birthday")) {
     body.birthday = input.birthday ?? null;
+  }
+  if (Object.hasOwn(input, "isLunarBirthdate")) {
+    body.isLunarBirthdate = input.isLunarBirthdate ?? false;
   }
   if (Object.hasOwn(input, "avatarStoragePath")) {
     body.avatarStoragePath = input.avatarStoragePath ?? null;

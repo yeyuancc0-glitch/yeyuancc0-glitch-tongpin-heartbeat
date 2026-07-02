@@ -10,7 +10,6 @@ import {
   createSelfHostAvatarReadUrl,
   deleteSelfHostAvatar,
   getSelfHostProfile,
-  updateSelfHostActiveCoupleDates,
   updateSelfHostProfile,
   uploadSelfHostAvatar,
 } from "@/lib/selfHost/profileApi";
@@ -37,11 +36,12 @@ export function ProfileScreen({
   const [profile, setProfile] = useState<Profile | null>(null);
   const [displayName, setDisplayName] = useState("");
   const [birthdate, setBirthdate] = useState("");
-  const [loveStartDate, setLoveStartDate] = useState("");
+  const [isLunarBirthdate, setIsLunarBirthdate] = useState(false);
   const [avatarPath, setAvatarPath] = useState<string | null>(null);
   const [avatarPreviewUrl, setAvatarPreviewUrl] = useState<string | null>(null);
   const [uploadingAvatar, setUploadingAvatar] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [hasCouple, setHasCouple] = useState(false);
 
   useEffect(() => {
     return () => {
@@ -62,9 +62,15 @@ export function ProfileScreen({
     void getSelfHostProfile(session.access_token)
       .then(({ activeCouple, profile: nextProfile }) => {
         setProfile(nextProfile);
-        setDisplayName(nextProfile.display_name ?? user.user_metadata.display_name ?? "");
-        setBirthdate(nextProfile.birthdate ?? "");
-        setAvatarPath(nextProfile.avatar_url ?? null);
+        setHasCouple(activeCouple?.status === "active");
+        if (nextProfile.display_name) setDisplayName(nextProfile.display_name);
+        if (nextProfile.birthdate) {
+          setBirthdate(nextProfile.birthdate);
+        }
+        if (nextProfile.is_lunar_birthdate) {
+          setIsLunarBirthdate(nextProfile.is_lunar_birthdate);
+        }
+        if (nextProfile.avatar_url) setAvatarPath(nextProfile.avatar_url);
         setAvatarPreviewUrl(null);
         if (nextProfile.avatar_url) {
           void createSelfHostAvatarReadUrl({
@@ -76,14 +82,6 @@ export function ProfileScreen({
             .catch((error) => {
               console.warn("Self-host avatar preview failed:", error);
             });
-        }
-        if (activeCouple?.relationshipStartedAt) {
-          setLoveStartDate(activeCouple.relationshipStartedAt);
-        } else if (Platform.OS === "web" && typeof window !== "undefined" && window.localStorage) {
-          const temp = window.localStorage.getItem("temp_love_start_date");
-          if (temp) {
-            setLoveStartDate(temp);
-          }
         }
       })
       .catch((error) => {
@@ -179,33 +177,16 @@ export function ProfileScreen({
       }
       const nextProfile = await updateSelfHostProfile({
         accessToken: session.access_token,
-        displayName: displayName.trim() || user.email?.split("@")[0] || "未命名",
-        birthday: birthdate.trim() || null,
+        displayName: displayName.trim(),
+        birthday: birthdate || null,
+        isLunarBirthdate: isLunarBirthdate,
       });
       setProfile(nextProfile);
       onProfileChanged?.(nextProfile);
 
-      let dateMessage = "";
-      if (loveStartDate) {
-        if (Platform.OS === "web" && typeof window !== "undefined" && window.localStorage) {
-          window.localStorage.setItem("temp_love_start_date", loveStartDate);
-        }
-        const { couple } = await updateSelfHostActiveCoupleDates({
-          accessToken: session.access_token,
-          relationshipStartedAt: loveStartDate,
-        });
-        dateMessage = couple ? "恋爱开始日期已同步更新。" : "恋爱开始日期已暂存，绑定后将自动同步。";
-      } else if (Platform.OS === "web" && typeof window !== "undefined" && window.localStorage) {
-        window.localStorage.removeItem("temp_love_start_date");
-        await updateSelfHostActiveCoupleDates({
-          accessToken: session.access_token,
-          relationshipStartedAt: null,
-        });
-      }
-
       showToast({
         title: "资料已保存",
-        message: dateMessage || "下一步可以绑定另一半。",
+        message: hasCouple ? undefined : "下一步可以绑定另一半。",
         tone: "success",
       });
       onSaved?.();
@@ -240,12 +221,22 @@ export function ProfileScreen({
           <AppTextInput value={displayName} onChangeText={setDisplayName} placeholder="你的昵称" style={styles.creamInput} />
         </View>
         <View style={styles.fieldGroup}>
-          <Text style={styles.label}>生日（可选）</Text>
+          <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+            <Text style={styles.label}>生日（可选）</Text>
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => setIsLunarBirthdate(!isLunarBirthdate)}
+              style={styles.lunarToggle}
+            >
+              <Text style={[styles.lunarToggleText, isLunarBirthdate && styles.lunarToggleTextActive]}>
+                {isLunarBirthdate ? "农历" : "公历"}
+              </Text>
+            </Pressable>
+          </View>
           <DateField value={birthdate} onChangeText={setBirthdate} placeholder="选择生日" style={styles.creamInput} />
-        </View>
-        <View style={styles.fieldGroup}>
-          <Text style={styles.label}>恋爱开始日期（可选）</Text>
-          <DateField value={loveStartDate} onChangeText={setLoveStartDate} placeholder="选择日期" style={styles.creamInput} />
+          {isLunarBirthdate ? (
+            <Text style={styles.lunarHint}>请选择对应的公历日期，我们将按农历为您记录并提醒。</Text>
+          ) : null}
         </View>
         <View style={{ height: 6 }} />
         <PrimaryButton label={busy ? "保存中" : "完成"} onPress={saveProfile} disabled={!displayName.trim()} loading={busy} />
@@ -326,5 +317,25 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 1,
     shadowRadius: 6,
+  },
+  lunarToggle: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
+    backgroundColor: "rgba(243, 95, 137, 0.1)",
+  },
+  lunarToggleText: {
+    fontSize: 12,
+    color: colors.muted,
+    fontWeight: "700",
+  },
+  lunarToggleTextActive: {
+    color: colors.accentDark,
+  },
+  lunarHint: {
+    fontSize: 11,
+    color: colors.accentDark,
+    marginTop: 2,
+    paddingHorizontal: 4,
   },
 });

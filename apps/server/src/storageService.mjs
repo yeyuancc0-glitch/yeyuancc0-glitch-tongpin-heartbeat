@@ -373,17 +373,21 @@ export function createStorageService({ pool, config }) {
       throw new AuthError("avatar_not_found", 404, "Avatar was not found.");
     }
 
-    const key = variant === "thumbnail" ? row.avatar_thumbnail_storage_path : row.avatar_storage_path;
+    let key = variant === "thumbnail" ? row.avatar_thumbnail_storage_path : row.avatar_storage_path;
+    if (!key) {
+      key = variant === "thumbnail" ? row.avatar_storage_path : null;
+    }
     if (!key) {
       throw new AuthError("avatar_not_found", 404, "Avatar was not found.");
     }
     try {
       await s3.send(new HeadObjectCommand({ Bucket: config.storage.avatarBucket, Key: key }));
     } catch (error) {
-      if (variant === "thumbnail") {
-        throw new AuthError("avatar_thumbnail_not_found", 404, "Avatar thumbnail was not found.");
+      if (variant !== "thumbnail" || key === row.avatar_storage_path) {
+        throw error;
       }
-      throw error;
+      key = row.avatar_storage_path;
+      await s3.send(new HeadObjectCommand({ Bucket: config.storage.avatarBucket, Key: key }));
     }
     const url = await getSignedUrl(
       publicS3,
@@ -578,8 +582,9 @@ export function createStorageService({ pool, config }) {
         const actualThumbnailSize = Number(thumbnailHead.ContentLength || 0);
         const actualThumbnailType = String(thumbnailHead.ContentType || "").split(";")[0].toLowerCase();
         thumbnailOk =
-          actualThumbnailSize === Number(row.thumbnail_size_bytes) &&
-          actualThumbnailType === row.thumbnail_mime_type;
+          actualThumbnailSize > 0 &&
+          actualThumbnailSize <= config.storage.maxThumbnailUploadBytes &&
+          config.storage.allowedMimeTypes.includes(actualThumbnailType);
       } else {
         generatedThumbnail = await createAndUploadImageThumbnail({
           bucket: config.storage.bucket,
@@ -702,7 +707,7 @@ export function createStorageService({ pool, config }) {
     if (!key) {
       return null;
     }
-    await s3.send(new HeadObjectCommand({ Bucket: bucket, Key: key }));
+    // Presigning is a client-side operation; skip HEAD check to save an S3 RTT.
     return getSignedUrl(
       publicS3,
       new GetObjectCommand({ Bucket: bucket, Key: key }),
@@ -728,6 +733,46 @@ export function createStorageService({ pool, config }) {
     return `data:${contentType};base64,${body.toString("base64")}`;
   }
 
+  /**
+   * Lightweight avatar-only presigning.  Only creates presigned URLs (a local
+   * crypto operation on `publicS3`) — never fetches image bytes from MinIO.
+   * Returns the same `{ avatarsByUserId, mediaById }` shape as
+   * `createDashboardImageUrls` so callers can use them interchangeably.
+   */
+  async function createAvatarPresignedUrls(profiles) {
+    const entries = await Promise.all(
+      (Array.isArray(profiles) ? profiles : []).map(async (profile) => {
+        if (!profile?.id) {
+          return null;
+        }
+        const thumbnailKey = profile.avatarThumbnailStoragePath;
+        if (!thumbnailKey) {
+          return null;
+        }
+        try {
+          const avatarThumbSignedUrl = await createSignedReadUrl(config.storage.avatarBucket, thumbnailKey);
+          if (!avatarThumbSignedUrl) {
+            return null;
+          }
+          return [
+            profile.id,
+            {
+              avatarSignedUrl: null,
+              avatarThumbSignedUrl,
+              avatarThumbDataUrl: null,
+            },
+          ];
+        } catch {
+          return null;
+        }
+      }),
+    );
+    return {
+      avatarsByUserId: Object.fromEntries(entries.filter(Boolean)),
+      mediaById: {},
+    };
+  }
+
   async function createDashboardImageUrls(input, current) {
     const profiles = Array.isArray(input.profiles) ? input.profiles : [];
     const media = Array.isArray(input.media) ? input.media : [];
@@ -738,10 +783,17 @@ export function createStorageService({ pool, config }) {
         }
         try {
           const thumbnailKey = profile.avatarThumbnailStoragePath;
-          const [avatarThumbDataUrl, avatarThumbSignedUrl] = await Promise.all([
-            thumbnailKey ? createAvatarDataUrl(thumbnailKey).catch(() => null) : null,
-            thumbnailKey ? createSignedReadUrl(config.storage.avatarBucket, thumbnailKey).catch(() => null) : null,
-          ]);
+          if (!thumbnailKey) {
+            return null;
+          }
+          // Try inline data URL first (HeadObject + GetObject = 2 S3 calls).
+          // Only fall back to a presigned URL when data URL fails (e.g. image
+          // too large), saving an extra presign round-trip in the common case.
+          const avatarThumbDataUrl = await createAvatarDataUrl(thumbnailKey).catch(() => null);
+          let avatarThumbSignedUrl = null;
+          if (!avatarThumbDataUrl) {
+            avatarThumbSignedUrl = await createSignedReadUrl(config.storage.avatarBucket, thumbnailKey).catch(() => null);
+          }
           if (!avatarThumbDataUrl && !avatarThumbSignedUrl) {
             return null;
           }
@@ -837,6 +889,7 @@ export function createStorageService({ pool, config }) {
   return {
     completeAvatarUpload,
     completeUpload,
+    createAvatarPresignedUrls,
     createAvatarReadUrl,
     createAvatarUpload,
     createDashboardImageUrls,

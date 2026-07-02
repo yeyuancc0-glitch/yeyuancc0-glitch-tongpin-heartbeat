@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
-import { ImagePlus, ChevronLeft, Trash2 } from "lucide-react-native";
+import { ImagePlus, ChevronLeft, Download, Trash2 } from "lucide-react-native";
 import { Platform, Text, View } from "react-native";
 import Reanimated, { Easing, interpolate, runOnJS, useAnimatedStyle, useSharedValue, withSpring, withTiming } from "react-native-reanimated";
 
@@ -11,6 +11,7 @@ import { petAnchorProps } from "@/features/home/petDomProps";
 import { PhotoUploadInput } from "@/features/media/PhotoUploadInput";
 import { imagePreviewUrl, mediaCaptionLabel } from "@/features/media/mediaUtils";
 import { useAuth } from "@/features/auth/AuthProvider";
+import { useToast } from "@/components/ui";
 import { prefetchImageUrls } from "@/lib/media/imageStorage";
 import { createSelfHostMediaReadUrl } from "@/lib/selfHost/mediaApi";
 import type { MediaFile } from "@/lib/supabase/database.types";
@@ -139,6 +140,19 @@ export function PhotoAlbumCard({
   );
 }
 
+async function downloadImageWeb(url: string, filename: string) {
+  const response = await fetch(url, { cache: "force-cache" });
+  const blob = await response.blob();
+  const objectUrl = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = objectUrl;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  document.body.removeChild(anchor);
+  URL.revokeObjectURL(objectUrl);
+}
+
 export function PhotoPreviewPopup({
   files,
   activeId,
@@ -155,6 +169,8 @@ export function PhotoPreviewPopup({
   onSelect: (file: MediaFile, index: number) => void;
 }) {
   const { session } = useAuth();
+  const { showToast } = useToast();
+  const [downloading, setDownloading] = useState(false);
   const { reducedMotion } = useMotion();
   const intro = useSharedValue(reducedMotion ? 1 : 0);
   const dragY = useSharedValue(0);
@@ -329,8 +345,31 @@ export function PhotoPreviewPopup({
             <Trash2 color={colors.accentDark} size={16} strokeWidth={2.5} />
             <Text style={styles.photoPreviewDeleteText}>删除</Text>
           </BouncyPressable>
-          <BouncyPressable accessibilityRole="button" onPress={onClose} haptic="selection" style={styles.photoPreviewClose}>
-            <Text style={styles.photoPreviewCloseText}>关闭</Text>
+          <BouncyPressable
+            accessibilityRole="button"
+            accessibilityLabel="保存照片"
+            disabled={downloading || !previewUrl}
+            onPress={async () => {
+              if (!previewUrl || downloading) return;
+              setDownloading(true);
+              try {
+                if (Platform.OS === "web") {
+                  const ext = file.mime_type?.split("/")[1] ?? "jpg";
+                  await downloadImageWeb(previewUrl, `photo_${file.id.slice(0, 8)}.${ext}`);
+                }
+                haptics.success();
+                showToast({ title: "照片已保存", tone: "success" });
+              } catch {
+                showToast({ title: "保存失败", message: "请稍后重试。", tone: "error" });
+              } finally {
+                setDownloading(false);
+              }
+            }}
+            haptic="selection"
+            style={styles.photoPreviewClose}
+          >
+            <Download color={colors.accentDark} size={16} strokeWidth={2.5} />
+            <Text style={styles.photoPreviewCloseText}>{downloading ? "保存中" : "保存"}</Text>
           </BouncyPressable>
         </View>
         {files.length > 1 ? (

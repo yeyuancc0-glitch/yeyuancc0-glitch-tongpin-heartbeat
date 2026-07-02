@@ -151,7 +151,33 @@ export function SettingsDetailPage({
           {startedAt ? (
             <>
               <CoupleAvatarGroup me={me} partner={partner} />
-              <InfoRow label="恋爱开始日期" value={formatShortDate(startedAt)} />
+              <View style={{ gap: 8 }}>
+                <Text style={styles.settingLabel}>恋爱开始日期</Text>
+                <DateField value={startDate} onChangeText={setStartDate} placeholder="选择日期" />
+                <SecondaryButton
+                  label={savingStartDate ? "保存中" : "保存开始日期"}
+                  loading={savingStartDate}
+                  disabled={!startDate || startDate === startedAt}
+                  onPress={async () => {
+                    setSavingStartDate(true);
+                    try {
+                      if (!session?.access_token) {
+                        throw new Error("自建登录会话已失效，请重新登录。");
+                      }
+                      await updateSelfHostActiveCoupleDates({
+                        accessToken: session.access_token,
+                        relationshipStartedAt: startDate,
+                      });
+                      showToast({ title: "开始日期已更新", tone: "success" });
+                      onChanged();
+                    } catch (error) {
+                      showToast({ title: "保存失败", message: error instanceof Error ? error.message : "请稍后重试。", tone: "error" });
+                    } finally {
+                      setSavingStartDate(false);
+                    }
+                  }}
+                />
+              </View>
               <InfoRow label="当前关系" value="恋爱中" />
               <InfoRow label="同频天数" value={`${loveDays} 天`} />
             </>

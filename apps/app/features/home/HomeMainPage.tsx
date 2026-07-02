@@ -6,7 +6,6 @@ import { Heart, Sparkles } from "lucide-react-native";
 import {
   AppTextInput,
   Card,
-  CapsuleMark,
   CoupleAvatarGroup,
   InteractionButton,
   PrimaryButton,
@@ -124,15 +123,6 @@ export function HomeMainPage({
   return (
     <View style={styles.stack}>
       <Card soft style={styles.heroCard}>
-        <View style={styles.heroTopRow}>
-          <View style={styles.brandRow}>
-            <CapsuleMark size={44} icon={<Sparkles color={colors.accentDark} size={14} />} />
-            <View>
-              <Text style={styles.heroBrand}>同频跳动</Text>
-              <Text style={styles.heroBrandSub}>一段只属于两个人的日常</Text>
-            </View>
-          </View>
-        </View>
         <View
           ref={quickTargetRef}
           collapsable={false}

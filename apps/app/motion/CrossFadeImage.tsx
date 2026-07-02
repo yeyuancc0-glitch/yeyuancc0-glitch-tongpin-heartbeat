@@ -15,7 +15,7 @@ type CrossFadeImageProps = ImageProps & {
 const maxLoadedImageSourceKeys = 400;
 const loadedImageSourceKeys = new Set<string>();
 
-function rememberLoadedImageSourceKey(sourceKey: string) {
+export function rememberLoadedImageSourceKey(sourceKey: string) {
   loadedImageSourceKeys.add(sourceKey);
   if (loadedImageSourceKeys.size <= maxLoadedImageSourceKeys) {
     return;

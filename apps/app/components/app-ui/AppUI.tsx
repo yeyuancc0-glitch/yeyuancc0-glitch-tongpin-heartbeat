@@ -220,6 +220,7 @@ export function Avatar({
   const borderWidth = Math.max(3, Math.round(size * 0.07));
   const innerRadius = Math.max(16, size / 2 - borderWidth);
   const shouldLoadImage = Boolean(imageUrl && imageUrl !== failedImageUrl);
+  const isInlineImage = Boolean(imageUrl?.startsWith("data:image/"));
 
   useEffect(() => {
     if (!imageUrl) {
@@ -243,7 +244,7 @@ export function Avatar({
             containerStyle={StyleSheet.absoluteFill}
             resizeMode="cover"
             fadeIn={false}
-            prefetched
+            prefetched={isInlineImage}
             onError={() => {
               setFailedImageUrl(imageUrl!);
             }}

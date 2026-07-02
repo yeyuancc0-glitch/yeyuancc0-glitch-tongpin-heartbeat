@@ -183,11 +183,6 @@ export function HomeMessageBoard({
           {messages.length > 0 ? <Text style={styles.sectionMetaText}>共 {messages.length} 条</Text> : null}
         </View>
         <View style={styles.homeMessageHeaderActions}>
-          {messages.length > 4 ? (
-            <BouncyPressable accessibilityRole="button" accessibilityLabel="查看全部留言" onPress={onOpenAll} haptic="selection" style={styles.homeMessageViewAllButton}>
-              <Text style={styles.homeMessageViewAllText}>查看全部</Text>
-            </BouncyPressable>
-          ) : null}
           <MessageCircle color={colors.accentDark} size={18} strokeWidth={2.4} />
         </View>
       </View>
@@ -213,7 +208,7 @@ export function HomeMessageBoard({
       </View>
       {messages.length > 0 ? (
         <View style={styles.homeMessageList}>
-          {messages.map((message) => (
+          {messages.slice(0, 2).map((message) => (
             <StickyMemoCard
               key={message.id}
               author={message.sender?.display_name || "匿名用户"}
@@ -223,6 +218,11 @@ export function HomeMessageBoard({
               onDelete={() => remove(message)}
             />
           ))}
+          {messages.length > 2 ? (
+            <BouncyPressable accessibilityRole="button" accessibilityLabel="查看更多留言" onPress={onOpenAll} haptic="selection" style={styles.homeMessageViewAllButton}>
+              <Text style={styles.homeMessageViewAllText}>查看全部 ({messages.length - 2})</Text>
+            </BouncyPressable>
+          ) : null}
         </View>
       ) : null}
       </View>
