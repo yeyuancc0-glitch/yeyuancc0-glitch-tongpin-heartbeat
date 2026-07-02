@@ -18,13 +18,6 @@ export type CreationPetKey = CreationSpace["pet_key"];
 export type CreationFoodType = "basic" | "premium";
 export type CreationTownView = "hub" | "pet" | "footprints" | "playground";
 export type VisiblePetSurface = Extract<PetWorldSurface, "home" | "share" | "memory">;
-export type CreationRewardKind = "footprint" | "puzzle" | "feed" | "food";
-export type CreationRewardFlash = {
-  id: number;
-  kind: CreationRewardKind;
-  title: string;
-  message: string;
-};
 export type CreationPuzzle = {
   id: string;
   type: "解谜" | "脑筋急转弯";

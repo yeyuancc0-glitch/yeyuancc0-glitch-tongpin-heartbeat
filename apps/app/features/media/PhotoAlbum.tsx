@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import { ImagePlus, ChevronLeft, Download, Trash2 } from "lucide-react-native";
 import { Platform, Text, View } from "react-native";
@@ -49,14 +49,12 @@ function photoPreviewOriginalCandidates(files: MediaFile[], currentIndex: number
 
 export function PhotoAlbumCard({
   mediaFiles,
-  onUploadPhoto,
   onPhotoFiles,
   onPreviewPhoto,
   onDeletePhoto,
   onRequireAccess,
 }: {
   mediaFiles: MediaFile[];
-  onUploadPhoto: (options?: PhotoUploadOptions) => void;
   onPhotoFiles: (files: PhotoFileList, options?: PhotoUploadOptions) => Promise<PhotoUploadResult>;
   onPreviewPhoto: (file: MediaFile, index?: number) => void;
   onDeletePhoto: (file: MediaFile) => void;

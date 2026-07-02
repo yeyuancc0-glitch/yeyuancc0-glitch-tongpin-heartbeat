@@ -8,7 +8,6 @@ import { useAuth } from "@/features/auth/AuthProvider";
 import { styles } from "@/features/home/homeStyles";
 import type { NotificationPreferenceToggleKey, SettingPage } from "@/features/home/homeShared";
 import { ProfileScreen } from "@/features/profile/ProfileScreen";
-import { formatShortDate } from "@/lib/dates/date";
 import { getWebPushEnvironment, getWebPushPermission, isWebPushSupported, registerForWebPushNotifications } from "@/lib/notifications/webPush";
 import { dismissSelfHostNotification, markSelfHostNotificationRead } from "@/lib/selfHost/notificationApi";
 import {

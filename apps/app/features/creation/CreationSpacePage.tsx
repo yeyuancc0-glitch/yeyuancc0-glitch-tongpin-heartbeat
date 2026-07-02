@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Animated, Image, Platform, Pressable, Text, View } from "react-native";
 import { Easing } from "react-native-reanimated";
-import { Brain, ChevronLeft, Compass, Gamepad2, Gift, Home, ImagePlus, Heart, MapPin, Moon, ShoppingBag, Sparkles, Star, Trash2, Utensils } from "lucide-react-native";
+import { Brain, ChevronLeft, Compass, Gamepad2, Home, ImagePlus, Heart, MapPin, Moon, ShoppingBag, Sparkles, Star, Trash2, Utensils } from "lucide-react-native";
 
 import { Card, EmptyState, PrimaryButton, SecondaryButton, TopBar } from "@/components/app-ui/AppUI";
 import { InlineNotice, useToast } from "@/components/ui";
@@ -21,7 +21,7 @@ import {
   townViewToPetSurface,
 } from "@/features/creation/creationSpaceLogic";
 import { creationTownAssets } from "@/features/home/homeAssets";
-import type { CreationFoodType, CreationRewardFlash, CreationTownView } from "@/features/home/homeShared";
+import type { CreationFoodType, CreationTownView } from "@/features/home/homeShared";
 import { styles } from "@/features/home/homeStyles";
 import { petAnchorProps, petSafeActionProps, petSafeContentProps } from "@/features/home/petDomProps";
 import { formatMemoryDate } from "@/features/memory/memoryUtils";
@@ -105,9 +105,7 @@ export function CreationSpacePage({
   const [footprintBusy, setFootprintBusy] = useState(false);
   const [footprintFormOpen, setFootprintFormOpen] = useState(false);
   const [granaryOpen, setGranaryOpen] = useState(false);
-  const [rewardFlash, setRewardFlash] = useState<CreationRewardFlash | null>(null);
   const islandFloat = useRef(new Animated.Value(0)).current;
-  const rewardFloat = useRef(new Animated.Value(0)).current;
   const featuresDisabled = disabled;
   const roamingDisabled = disabled || selfHostMode;
   const currentTownSurface = townViewToPetSurface(townView);
@@ -248,32 +246,6 @@ export function CreationSpacePage({
     return () => animation.stop();
   }, [islandFloat]);
 
-  useEffect(() => {
-    if (!rewardFlash) {
-      return;
-    }
-    rewardFloat.setValue(0);
-    Animated.sequence([
-      Animated.timing(rewardFloat, {
-        toValue: 1,
-        duration: 680,
-        easing: Easing.out(Easing.cubic),
-        useNativeDriver: false,
-      }),
-      Animated.delay(1700),
-      Animated.timing(rewardFloat, {
-        toValue: 0,
-        duration: 260,
-        easing: Easing.in(Easing.cubic),
-        useNativeDriver: false,
-      }),
-    ]).start(({ finished }) => {
-      if (finished) {
-        setRewardFlash(null);
-      }
-    });
-  }, [rewardFlash, rewardFloat]);
-
   async function ensureSpace(showSuccess = true) {
     const token = requireSelfHostAccessToken();
     if (!token) {
@@ -315,7 +287,6 @@ export function CreationSpacePage({
       const data = await feedSelfHostCreationPet({ accessToken: token, coupleId, foodType });
       setSpace(data ?? null);
       triggerLocalPetReaction("eat", petHumanLine("feed"));
-      showRewardFlash("feed", "投喂仪式完成", `${creationFoodLabel(foodType)}轻轻落进饭碗，${petDisplayName} 吃到啦。`);
       showToast({
         title: `已喂${creationFoodLabel(foodType)}`,
         message: activeSpace?.pet_sleep_started_at ? "刚才的睡眠已按时长结算，再加上这份口粮。" : "等它抬头回应你。",
@@ -437,10 +408,6 @@ export function CreationSpacePage({
     }
   }
 
-  function showRewardFlash(kind: CreationRewardFlash["kind"], title: string, message: string) {
-    setRewardFlash({ id: Date.now(), kind, title, message });
-  }
-
   async function buyFood(foodType: CreationFoodType) {
     if (featuresDisabled) {
       showDisabledNotice();
@@ -457,7 +424,6 @@ export function CreationSpacePage({
       }
       const data = await buySelfHostCreationFood({ accessToken: token, coupleId, foodType, quantity: 1 });
       setSpace(data ?? null);
-      showRewardFlash("food", "粮仓已补充", `已用心愿星糖换入 1 份${creationFoodLabel(foodType)}。`);
       showToast({ title: "粮仓已补充", message: `已买入 1 份${creationFoodLabel(foodType)}。`, tone: "success" });
       onChanged();
     } catch (error) {
@@ -500,7 +466,6 @@ export function CreationSpacePage({
       }
       const data = await claimSelfHostCreationGameReward({ accessToken: token, coupleId, puzzleId: currentPuzzle.id });
       setSpace(data ?? null);
-      showRewardFlash("puzzle", "解谜通关，赏金入仓", `获得鲜食粮 +1 份、心愿星糖 +15 点，快去投喂 ${petDisplayName}。`);
       triggerLocalPetReaction("happy", "通关啦");
       showToast({ title: "赏金入仓", message: "鲜食粮和心愿星糖已放进共享粮仓。", tone: "success" });
       onChanged();
@@ -555,7 +520,6 @@ export function CreationSpacePage({
           longitude: null,
         });
         await writeCreationAction("footprint_add", `记录了足迹「${footprintTitle.trim()}」`);
-        showRewardFlash("footprint", "足迹已点亮", "这段日常已经留进你们的家园。");
         triggerLocalPetReaction("happy", "喵");
         showToast({ title: "足迹已点亮", message: "它也会沉淀到记忆页的日常里。", tone: "success" });
       }
@@ -620,8 +584,6 @@ export function CreationSpacePage({
   const petOnCurrentTownSurface = petStageVisible && realPetSurface === currentTownSurface;
   const petSleeping = Boolean(activeSpace?.pet_sleep_started_at);
   const sleepButtonLabel = petBusy === "sleep" ? "休息中" : petSleeping ? "结算休息" : "哄睡";
-  const rewardLift = rewardFloat.interpolate({ inputRange: [0, 1], outputRange: [18, 0] });
-  const rewardOpacity = rewardFloat.interpolate({ inputRange: [0, 0.12, 0.85, 1], outputRange: [0, 1, 1, 0] });
   const petIslandLift = islandFloat.interpolate({ inputRange: [0, 1], outputRange: [0, -4] });
   const footprintIslandLift = islandFloat.interpolate({ inputRange: [0, 1], outputRange: [-2, 3] });
   const playgroundIslandLift = islandFloat.interpolate({ inputRange: [0, 1], outputRange: [3, -1] });
@@ -651,27 +613,6 @@ export function CreationSpacePage({
         : {})}
     >
       {townView === "hub" ? null : <TopBar title={titleByView[townView]} left={<BackButton onPress={backAction} />} />}
-
-      {rewardFlash ? (
-        <Animated.View
-          pointerEvents="none"
-          style={[
-            styles.creationRewardToast,
-            {
-              opacity: rewardOpacity,
-              transform: [{ translateY: rewardLift }],
-            },
-          ]}
-        >
-          <View style={styles.creationRewardIcon}>
-            {rewardFlash.kind === "puzzle" ? <Gamepad2 color={colors.accentDark} size={18} /> : rewardFlash.kind === "footprint" ? <Gift color={colors.accentDark} size={18} /> : <Utensils color={colors.accentDark} size={18} />}
-          </View>
-          <View style={styles.creationRewardCopy}>
-            <Text style={styles.creationRewardTitle}>{rewardFlash.title}</Text>
-            <Text style={styles.creationRewardText}>{rewardFlash.message}</Text>
-          </View>
-        </Animated.View>
-      ) : null}
 
       {townView === "hub" ? (
         <View style={styles.creationHub}>

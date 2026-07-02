@@ -170,7 +170,6 @@ export function TodayStoryPage({
   const capsuleComplete = Boolean(trimmedContent);
   const petDeliveringLetter = creationSpace?.pet_world_surface === "share" && petWorldProp === "letter";
   const selectedStoryImage = storyIconImageFromText(trimmedContent);
-  const selectedMoodTone = emotionCandyTone(activeMood);
 
   const capsulePhotoPreviews = [
     ...mineTodayPhotos.map((file) => ({

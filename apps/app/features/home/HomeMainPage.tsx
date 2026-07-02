@@ -11,7 +11,6 @@ import {
   PrimaryButton,
   SecondaryButton,
 } from "@/components/app-ui/AppUI";
-import { InlineNotice } from "@/components/ui";
 import { splitStory } from "@/features/checkins/checkinUtils";
 import type { PhotoFileList, PhotoUploadOptions, PhotoUploadResult, QuickInteractionItem } from "@/features/home/homeShared";
 import { styles } from "@/features/home/homeStyles";
@@ -46,14 +45,12 @@ export function HomeMainPage({
   onCancelCustomQuickInteraction,
   onQuickInteraction,
   onWriteLetter,
-  onUploadPhoto,
   onPhotoFiles,
   onPreviewPhoto,
   onDeletePhoto,
   onChanged,
   onOpenMessages,
   onRequireAccess,
-  interactionText,
   quickSending,
   mediaFiles,
   moodStatuses,
@@ -77,14 +74,12 @@ export function HomeMainPage({
   onCancelCustomQuickInteraction: () => void;
   onQuickInteraction: (label: string) => Promise<boolean> | boolean;
   onWriteLetter: () => void;
-  onUploadPhoto: (options?: PhotoUploadOptions) => void;
   onPhotoFiles: (files: PhotoFileList, options?: PhotoUploadOptions) => Promise<PhotoUploadResult>;
   onPreviewPhoto: (file: MediaFile, index?: number) => void;
   onDeletePhoto: (file: MediaFile) => void;
   onChanged: () => void;
   onOpenMessages: () => void;
   onRequireAccess: () => void;
-  interactionText: string;
   quickSending: boolean;
   mediaFiles: MediaFile[];
   moodStatuses: MoodStatus[];
@@ -202,7 +197,6 @@ export function HomeMainPage({
             </View>
           ) : null}
           {reaction ? <FloatingReaction key={reaction.id} icon={reaction.icon} label={reaction.label} image={reaction.image} /> : null}
-          {interactionText ? <InlineNotice tone="success">{interactionText}</InlineNotice> : null}
         </Card>
       </View>
 
@@ -216,7 +210,7 @@ export function HomeMainPage({
         onRequireAccess={onRequireAccess}
       />
 
-      <PhotoAlbumCard mediaFiles={mediaFiles} onUploadPhoto={onUploadPhoto} onPhotoFiles={onPhotoFiles} onPreviewPhoto={onPreviewPhoto} onDeletePhoto={onDeletePhoto} onRequireAccess={onRequireAccess} />
+      <PhotoAlbumCard mediaFiles={mediaFiles} onPhotoFiles={onPhotoFiles} onPreviewPhoto={onPreviewPhoto} onDeletePhoto={onDeletePhoto} onRequireAccess={onRequireAccess} />
     </View>
   );
 }

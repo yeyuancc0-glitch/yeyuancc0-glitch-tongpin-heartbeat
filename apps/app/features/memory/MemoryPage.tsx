@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Image, Platform, Pressable, Text, View, type ImageSourcePropType } from "react-native";
 import { CalendarPlus, ChevronLeft, ChevronRight, Heart, ImagePlus, Mail, MessageCircle, RotateCcw, Sparkles, Trash2 } from "lucide-react-native";
 
-import { Card, CapsuleMark, EmptyState } from "@/components/app-ui/AppUI";
+import { Card, EmptyState } from "@/components/app-ui/AppUI";
 import { useAppScrollY, useToast } from "@/components/ui";
 import { checkinPhotoCaption, splitStory, storyIconImageFromText } from "@/features/checkins/checkinUtils";
 import { cartoonIcons, capsuleIcons } from "@/features/home/homeAssets";
@@ -119,6 +119,7 @@ export function MemoryPage({
               onDeleteMedia={onDeleteMedia}
               onDeleteFootprint={onDeleteFootprint}
               onDeleteLetter={onDeleteLetter}
+              onRequireAccess={onRequireAccess}
             />
           ))
         ) : (

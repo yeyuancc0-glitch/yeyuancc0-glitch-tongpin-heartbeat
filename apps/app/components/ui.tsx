@@ -128,7 +128,7 @@ export function ToastProvider({ children }: PropsWithChildren) {
 
   const value = useMemo(() => ({ showToast }), [showToast]);
   const toastNode = toast ? (
-    <View pointerEvents="none" style={styles.toastOverlay}>
+    <View pointerEvents="none" style={[styles.toastOverlay, Platform.OS === "web" ? styles.toastOverlayWeb : styles.toastOverlayNative]}>
       <Reanimated.View style={[styles.toast, styles[`toast_${toast.tone}`], toastMotionStyle]}>
         <Text style={styles.toastTitle}>{toast.title}</Text>
         {toast.message ? <Text style={styles.toastMessage}>{toast.message}</Text> : null}
@@ -614,11 +614,9 @@ export function EmptyState({ title, description }: { title: string; description:
 }
 
 export function InlineNotice({ children, tone = "info" }: PropsWithChildren<{ tone?: ToastTone }>) {
-  return renderPortal(
-    <View pointerEvents="none" style={styles.noticeOverlay}>
-      <View style={[styles.notice, styles[`notice_${tone}`]]}>
-        <Body style={styles.noticeText}>{children}</Body>
-      </View>
+  return (
+    <View style={[styles.notice, styles[`notice_${tone}`]]}>
+      <Body style={styles.noticeText}>{children}</Body>
     </View>
   );
 }
@@ -807,23 +805,29 @@ const styles = StyleSheet.create({
     lineHeight: 40,
   },
   toastOverlay: {
-    position: "absolute",
-    top: 0,
     left: 0,
     right: 0,
-    bottom: 0,
     alignItems: "center",
-    justifyContent: "center",
-    zIndex: 20,
+    zIndex: 1000,
+    paddingHorizontal: 16,
+  },
+  toastOverlayWeb: {
+    position: "fixed" as never,
+    top: 0,
+    paddingTop: "calc(env(safe-area-inset-top, 0px) + 12px)" as never,
+  },
+  toastOverlayNative: {
+    position: "absolute",
+    top: 12,
   },
   toast: {
-    width: "92%",
+    width: "100%",
     maxWidth: 360,
     borderWidth: 1,
-    borderRadius: 18,
+    borderRadius: 16,
     paddingHorizontal: 14,
     paddingVertical: 12,
-    zIndex: 20,
+    zIndex: 1000,
     ...shadows.panel,
   },
   toast_success: {
@@ -851,18 +855,11 @@ const styles = StyleSheet.create({
     marginTop: 3,
   },
   notice: {
-    position: "absolute",
-    top: "50%",
-    left: "50%",
-    transform: [{ translateX: -180 }, { translateY: -30 }],
     borderWidth: 1,
     borderRadius: 16,
     paddingHorizontal: 12,
     paddingVertical: 10,
-    width: 360,
-    maxWidth: "90%",
-    zIndex: 18,
-    ...shadows.panel,
+    width: "100%",
   },
   notice_success: {
     backgroundColor: "#eef8f2",
@@ -880,15 +877,5 @@ const styles = StyleSheet.create({
     textAlign: "center",
     fontSize: 14,
     lineHeight: 20,
-  },
-  noticeOverlay: {
-    position: "fixed" as never,
-    left: 0,
-    right: 0,
-    top: 0,
-    bottom: 0,
-    zIndex: 18,
-    alignItems: "center",
-    justifyContent: "center",
   },
 });

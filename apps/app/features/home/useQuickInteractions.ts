@@ -40,7 +40,6 @@ export function useQuickInteractions({
   showToast: (toast: ToastValue) => void;
   reload: () => void;
 }) {
-  const [interactionText, setInteractionText] = useState("");
   const [quickSending, setQuickSending] = useState(false);
   const [customQuickInteractions, setCustomQuickInteractions] = useState<QuickInteractionItem[]>([]);
   const [customQuickComposerOpen, setCustomQuickComposerOpen] = useState(false);
@@ -184,9 +183,7 @@ export function useQuickInteractions({
       const notificationId = notification.notification_id;
       setDismissedPopupIds((ids) => (ids.includes(notificationId) ? ids : [...ids, notificationId]));
       setLocalTodayInteractionCount((count) => count + 1);
-      setInteractionText(`“${label}”已经投递给对方。`);
       showToast({ title: `已投递 ${label}`, message: "对方会在首页收到一个小提醒。", tone: "success" });
-      setTimeout(() => setInteractionText(""), 1600);
       reload();
       return true;
     } catch (error) {
@@ -204,7 +201,6 @@ export function useQuickInteractions({
     customQuickComposerOpen,
     customQuickDraft,
     dismissedPopupIds,
-    interactionText,
     quickInteractionItems,
     quickSending,
     saveCustomQuickInteraction,

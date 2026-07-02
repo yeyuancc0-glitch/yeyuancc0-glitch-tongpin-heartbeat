@@ -33,7 +33,6 @@ import {
   type BottomTabKey,
   PageContainer,
   PrimaryButton,
-  SecondaryButton,
 } from "@/components/app-ui/AppUI";
 import { useAppPullToRefresh, useAppScrollControls, useToast } from "@/components/ui";
 import { useAuth } from "@/features/auth/AuthProvider";
@@ -86,7 +85,6 @@ import type { MediaFile, Notification } from "@/lib/supabase/database.types";
 import { BouncyPressable } from "@/motion/BouncyPressable";
 import { motionTokens } from "@/motion/tokens";
 import { colors } from "@/styles/theme";
-import type { PhotoUploadResult } from "@/features/home/homeShared";
 
 const petNightSleepWakeCheckMs = 60_000;
 const settingPages: readonly SettingPage[] = [
@@ -187,7 +185,6 @@ export function HomeScreen() {
     customQuickComposerOpen,
     customQuickDraft,
     dismissedPopupIds,
-    interactionText,
     quickInteractionItems,
     quickSending,
     saveCustomQuickInteraction,
@@ -677,14 +674,12 @@ export function HomeScreen() {
           cancelCustomQuickInteraction();
         }}
         onWriteLetter={() => openSubPage("writeLetter", "home")}
-        onUploadPhoto={(options) => uploadPhoto({ maxFiles: maxMemoryPhotos, currentCount: data.mediaFiles.length, ...options })}
         onPhotoFiles={(files, options) => handlePhotoFiles(files, { maxFiles: maxMemoryPhotos, currentCount: data.mediaFiles.length, ...options })}
         onPreviewPhoto={(file, index) => setActivePhotoPreview({ id: file.id, index: index ?? 0 })}
         onDeletePhoto={deletePhoto}
         onChanged={reload}
         onOpenMessages={() => openSubPage("messages", "home")}
         onQuickInteraction={sendQuickInteraction}
-        interactionText={interactionText}
         quickSending={quickSending}
         mediaFiles={data.mediaFiles}
         moodStatuses={data.moodStatuses}
